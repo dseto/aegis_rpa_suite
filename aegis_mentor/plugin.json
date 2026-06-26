@@ -1,0 +1,9 @@
+{
+  "name": "rpa-copilot-plugin",
+  "version": "1.0.0",
+  "description": "Expert RPA Copilot Assistant for robust, resilient, and static Web/Desktop automation.",
+  "author": {
+    "name": "Daniel & Antigravity V2"
+  },
+  "license": "Apache-2.0"
+}

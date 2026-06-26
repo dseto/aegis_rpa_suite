@@ -1,0 +1,63 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments and Local Settings
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+aegis_config.json
+
+# IDEs
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Aegis RPA Suite specific files
+sandbox/
+scratch/
+projects/*
+!projects/.gitkeep
+telemetry_data/*
+!telemetry_data/.gitkeep
+
+# Exclude tests and temporary/backlog documentation
+aegis_runner/test_cognitive_fallback.py
+aegis_runner/test_runner_integration.py
+docs/dataset_generation_backlog.md
