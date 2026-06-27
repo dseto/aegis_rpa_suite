@@ -44,16 +44,21 @@ class TransactionRunner:
         - Validação Ativa: Se validate_navigation=True, verifica se o clique causou navegação.
           Caso contrário, tenta clicar em outros elementos correspondentes de forma sequencial.
         """
-        # 1. Se o seletor for composto (encadeado com >>), faz hover no pai para expandir submenus
+        # 1. Se o seletor for composto (encadeado com >>), faz hover sequencial nos pais para expandir menus multinível
         if " >> " in selector:
             parts = selector.split(" >> ")
-            parent_selector = " >> ".join(parts[:-1])
             try:
-                # Verifica rápido se o próprio filho já está visível; se não estiver, faz hover no pai
+                # Verifica rápido se o próprio filho já está visível; se não estiver, faz hover nos níveis intermediários
                 if not page.locator(selector).first.is_visible(timeout=500):
-                    print(f"[AEGIS RUNNER] Elemento filho oculto. Fazendo hover no pai para expandir: '{parent_selector}'...")
-                    page.locator(parent_selector).first.hover(timeout=1500)
-                    time.sleep(0.4) # Aguarda transição da animação
+                    for i in range(1, len(parts)):
+                        sub_parent = " >> ".join(parts[:i])
+                        try:
+                            if page.locator(sub_parent).first.is_visible(timeout=500):
+                                print(f"[AEGIS RUNNER] Expandindo nível de menu intermediário: '{sub_parent}'...")
+                                page.locator(sub_parent).first.hover(timeout=1000)
+                                time.sleep(0.3) # Aguarda transição/animação da revelação
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
