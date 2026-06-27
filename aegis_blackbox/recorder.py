@@ -861,6 +861,13 @@ def run_recorder(url, auto_simulate=False, control_port=None):
             // Seletores resilientes Aegis V4
             function getAegisSelector(element) {
                 if (!element || element === document.body || element === document.documentElement) return "";
+                
+                // Redireciona para o elemento interativo mais próximo se o clique foi em um elemento interno (ex: mat-icon ou span)
+                let interactive = element.closest('button, a, [role="button"], [role="menuitem"], mat-option, .mat-option, .mat-menu-item, [role="tab"], [role="option"]');
+                if (interactive) {
+                    element = interactive;
+                }
+
                 let shadowPath = "";
                 let current = element;
                 while (current) {
@@ -891,8 +898,8 @@ def run_recorder(url, auto_simulate=False, control_port=None):
                 if (!hasTestId) {
                     baseSelector = el.tagName.toLowerCase();
                     
-                    if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.classList.contains('mat-option')) && el.innerText.trim().length > 0 && el.innerText.trim().length < 40) {
-                        let cleanText = el.innerText.trim().replace(/'/g, "\\\\'");
+                    if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.classList.contains('mat-option') || el.classList.contains('mat-menu-item')) && el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
+                        let cleanText = el.innerText.replace(/\\\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
                         baseSelector = `${el.tagName.toLowerCase()}:has-text('${cleanText}')`;
                     } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
                         if (el.getAttribute('placeholder')) {

@@ -36,11 +36,33 @@ class TransactionRunner:
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False) -> bool:
         """
         Executa um clique resiliente e inteligente.
+        - Expansão de Submenu (Hover-to-Reveal): Se o seletor for composto (>>), tenta fazer hover no pai.
+        - Tolerância Temporal: Aguarda o elemento ficar visível antes de listar candidatos.
+        - Tratamento de Desprendimento: Retenta o clique caso o nó se desprenda durante o ciclo Angular.
         - Heurística Estática: Se houver múltiplos elementos correspondendo ao seletor,
           prioriza elementos que NÃO são âncoras locais (href='#...').
         - Validação Ativa: Se validate_navigation=True, verifica se o clique causou navegação.
           Caso contrário, tenta clicar em outros elementos correspondentes de forma sequencial.
         """
+        # 1. Se o seletor for composto (encadeado com >>), faz hover no pai para expandir submenus
+        if " >> " in selector:
+            parts = selector.split(" >> ")
+            parent_selector = " >> ".join(parts[:-1])
+            try:
+                # Verifica rápido se o próprio filho já está visível; se não estiver, faz hover no pai
+                if not page.locator(selector).first.is_visible(timeout=500):
+                    print(f"[AEGIS RUNNER] Elemento filho oculto. Fazendo hover no pai para expandir: '{parent_selector}'...")
+                    page.locator(parent_selector).first.hover(timeout=1500)
+                    time.sleep(0.4) # Aguarda transição da animação
+            except Exception:
+                pass
+
+        # 2. Aguarda visibilidade por até 2 segundos antes de listar os candidatos
+        try:
+            page.wait_for_selector(selector, state="visible", timeout=2000)
+        except Exception:
+            pass
+
         try:
             # Tenta listar todos os elementos que combinam com o seletor
             locators = page.locator(selector).all()
@@ -111,6 +133,16 @@ class TransactionRunner:
                             continue
                 break
             except Exception as e:
+                # Se for erro de desprendimento (Angular Change Detection / Stale Element), retenta clique direto
+                if "attached" in str(e) or "stale" in str(e).lower() or "detached" in str(e).lower():
+                    print(f"[AEGIS RUNNER] Elemento desprendido do DOM (Angular Change Detection). Retentando clique direto no primeiro correspondente...")
+                    try:
+                        page.locator(selector).first.click(timeout=3000)
+                        clicked = True
+                        break
+                    except Exception as retry_ex:
+                        e = retry_ex
+
                 if idx == len(candidate_locators) - 1:
                     # Se falhar no último candidato, aciona o manipulador de falha
                     return self._handle_click_failure(page, selector, target_description, timeout, e)
