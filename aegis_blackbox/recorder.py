@@ -1040,12 +1040,17 @@ def run_recorder(url, auto_simulate=False, control_port=None):
                 if (window.__aegis_recording_paused__) return;
                 if (e.target.closest('#aegis-indicator-host')) return;
                 
+                let x_percent = e.clientX / window.innerWidth;
+                let y_percent = e.clientY / window.innerHeight;
+
                 let selector = getAegisSelector(e.target);
                 window.pythonRecordAction(JSON.stringify({
                     type: 'click',
                     tag: e.target.tagName,
                     selector: selector,
-                    text: e.target.innerText ? e.target.innerText.trim().substring(0, 50) : ""
+                    text: e.target.innerText ? e.target.innerText.trim().substring(0, 50) : "",
+                    x_percent: x_percent,
+                    y_percent: y_percent
                 }));
             }, true);
 

@@ -130,7 +130,10 @@ def sanitize_telemetry():
                 val_text = ""
                 
                 if ev_type == "CLICK":
-                    val_text = f"Clique em: '{ev.get('text', '')}'"
+                    x = ev.get("x_percent")
+                    y = ev.get("y_percent")
+                    coords_str = f" [coords: ({x:.4f}, {y:.4f})]" if (x is not None and y is not None) else ""
+                    val_text = f"Clique em: '{ev.get('text', '')}'{coords_str}"
                 elif ev_type == "FILL":
                     if ev.get("is_date"):
                         val_text = f"Preencheu data: '{ev.get('value', '')}'"

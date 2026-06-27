@@ -133,13 +133,25 @@ class CognitiveGateway:
 
         return json.loads(text_clean)
 
-    def self_healing_click(self, page: Page, selector: str, target_description: str) -> bool:
+    def self_healing_click(self, page: Page, selector: str, target_description: str, original_coords: tuple = None) -> bool:
         """
         Tenta localizar visualmente um elemento na tela após falha de seletor estático.
         Salva uma captura temporária, envia à LLM e executa o clique se encontrado.
+        Se a IA falhar ou não encontrar, e houver original_coords, executa o clique de fallback na coordenada física.
         """
         if not self.is_active():
             print(f"[COGNITIVE] Ignorando Self-Healing para '{selector}' (módulo desativado).")
+            # Se o módulo cognitivo estiver desativado mas temos coordenadas originais, aplica o fallback físico direto
+            if original_coords and len(original_coords) == 2:
+                try:
+                    viewport = page.viewport_size or {"width": 1280, "height": 720}
+                    x = int(viewport["width"] * original_coords[0])
+                    y = int(viewport["height"] * original_coords[1])
+                    print(f"[COGNITIVE WARNING] Módulo cognitivo inativo. Aplicando clique direto de fallback nas coordenadas gravadas: ({x}, {y})")
+                    page.mouse.click(x, y)
+                    return True
+                except Exception as coords_err:
+                    print(f"[COGNITIVE ERRO] Falha no clique de fallback por coordenadas: {coords_err}")
             return False
 
         print(f"[COGNITIVE] Iniciando Self-Healing para seletor falho: '{selector}'")
@@ -149,11 +161,15 @@ class CognitiveGateway:
             # Captura a tela atual da automação
             page.screenshot(path=temp_img)
             
+            coords_hint = ""
+            if original_coords and len(original_coords) == 2:
+                coords_hint = f"\nDica de Posição Original: Durante a gravação manual, o elemento foi clicado nas coordenadas relativas: X = {original_coords[0]:.2%}, Y = {original_coords[1]:.2%}. Use isso como ponto de partida principal para localizar o elemento na screenshot!"
+
             prompt = f"""
             Você é um motor cognitivo de resiliência de RPA.
             Análise a screenshot da página web e identifique as coordenadas exatas para interagir com o elemento descrito como: '{target_description}'.
             
-            O seletor CSS que falhou foi: '{selector}'.
+            O seletor CSS que falhou foi: '{selector}'.{coords_hint}
             Use o contexto visual para achar onde este elemento se encontra na tela atual.
             
             Retorne OBRIGATORIAMENTE um objeto JSON válido contendo:
@@ -185,10 +201,31 @@ class CognitiveGateway:
                 return True
             else:
                 print(f"[COGNITIVE FALHA] IA não encontrou o elemento. Justificativa: {result.get('reason')}")
+                
+                # Fallback de segurança definitivo: clique direto nas coordenadas gravadas originais
+                if original_coords and len(original_coords) == 2:
+                    viewport = page.viewport_size or {"width": 1280, "height": 720}
+                    x = int(viewport["width"] * original_coords[0])
+                    y = int(viewport["height"] * original_coords[1])
+                    print(f"[COGNITIVE WARNING] IA falhou no reconhecimento visual. Clicando nas coordenadas gravadas originais: ({x}, {y})")
+                    page.mouse.click(x, y)
+                    return True
                 return False
 
         except Exception as e:
             print(f"[COGNITIVE ERRO] Falha no processo de Self-Healing: {e}")
+            
+            # Fallback de segurança definitivo se ocorrer erro/timeout na chamada de IA
+            if original_coords and len(original_coords) == 2:
+                try:
+                    viewport = page.viewport_size or {"width": 1280, "height": 720}
+                    x = int(viewport["width"] * original_coords[0])
+                    y = int(viewport["height"] * original_coords[1])
+                    print(f"[COGNITIVE WARNING] Erro no Self-Healing. Aplicando clique direto de fallback nas coordenadas gravadas: ({x}, {y})")
+                    page.mouse.click(x, y)
+                    return True
+                except Exception as coords_err:
+                    print(f"[COGNITIVE ERRO] Falha no clique de fallback por coordenadas pós-exceção: {coords_err}")
             return False
         finally:
             if os.path.exists(temp_img):

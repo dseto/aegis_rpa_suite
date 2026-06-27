@@ -33,7 +33,7 @@ class TransactionRunner:
         self.scenarios[scenario_name] = callback
         print(f"[AEGIS RUNNER] Cenário '{scenario_name}' registrado com sucesso.")
 
-    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False) -> bool:
+    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None) -> bool:
         """
         Executa um clique resiliente e inteligente.
         - Expansão de Submenu (Hover-to-Reveal): Se o seletor for composto (>>), tenta fazer hover no pai.
@@ -76,7 +76,7 @@ class TransactionRunner:
                 page.locator(selector).click(timeout=timeout)
                 return True
             except Exception as e:
-                return self._handle_click_failure(page, selector, target_description, timeout, e)
+                return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
 
         # Sugestão A: Heurística Estática (Separar âncoras locais de links externos reais)
         prioritized_locators = []
@@ -145,13 +145,20 @@ class TransactionRunner:
 
                 if idx == len(candidate_locators) - 1:
                     # Se falhar no último candidato, aciona o manipulador de falha
-                    return self._handle_click_failure(page, selector, target_description, timeout, e)
+                    return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
                 print(f"[AEGIS RUNNER] Falha ao clicar no candidato {idx+1}: {e}. Retentando próximo...")
                 continue
                 
+        if not clicked:
+            # Se não conseguimos clicar em nenhum candidato, aciona o autotratamento cognitivo
+            return self._handle_click_failure(
+                page, selector, target_description, timeout, 
+                RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM."),
+                original_coords
+            )
         return clicked
 
-    def _handle_click_failure(self, page, selector, target_description, timeout, e) -> bool:
+    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None) -> bool:
         if "strict mode violation" in str(e) or "resolved to" in str(e):
             try:
                 print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
@@ -162,7 +169,7 @@ class TransactionRunner:
 
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
-            return self.cognitive.self_healing_click(page, selector, target_description)
+            return self.cognitive.self_healing_click(page, selector, target_description, original_coords)
         else:
             print(f"[AEGIS RUNNER] Falha ao clicar em '{selector}' e módulo cognitivo inativo.")
             raise e
@@ -365,7 +372,12 @@ class TransactionRunner:
                         print(f"[AEGIS WARNING] Limite de tempo de carregamento da página excedido no runner: {goto_err}. Prosseguindo com execução...")
                     
                     # Chama o callback do robô de negócio
-                    self.scenarios[scenario](page, row)
+                    import inspect
+                    sig = inspect.signature(self.scenarios[scenario])
+                    if len(sig.parameters) >= 3:
+                        self.scenarios[scenario](page, row, self)
+                    else:
+                        self.scenarios[scenario](page, row)
                     
                     # Aguarda 1.5s após a conclusão para certificar estabilidade
                     time.sleep(1.5)

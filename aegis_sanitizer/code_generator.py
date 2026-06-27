@@ -116,14 +116,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
 
 ---
 
-### 📊 4. DATASET TEMPLATE INICIAL
-```json
-{dataset_content}
-```
-
----
-
-### ⚠️ REGRAS OBRIGATÓRIAS PARA GERAÇÃO DO CÓDIGO:
+#### ⚠️ REGRAS OBRIGATÓRIAS PARA GERAÇÃO DO CÓDIGO:
 1. **Estrutura SDK Aegis (`TransactionRunner`):**
    O robô deve ser gerado utilizando o SDK do Aegis. O arquivo gerado deve seguir a seguinte estrutura exata:
    ```python
@@ -139,7 +132,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        
    from aegis_runner.runner import TransactionRunner
    
-   def execute_scenario_default(page: Page, row):
+   def execute_scenario_default(page: Page, row, runner):
        print("\\n[BOT] Iniciando automação do fluxo...")
        # [Implemente aqui o preenchimento passo a passo do cenário 'default']
        
@@ -152,25 +145,32 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        runner.register_scenario("default", execute_scenario_default)
        runner.run(headless=False)
    ```
-2. **Utilização do Dataset (`row`):**
+2. **Uso Obrigatório de `runner.click_resilient`:**
+   Você é **PROIBIDO** de usar `.click()` diretamente do objeto `page` ou `locator`. Todos os cliques em botões, links ou abas devem ser executados através da função:
+   `runner.click_resilient(page, selector="<seletor>", target_description="<descrição_curta_do_campo>", original_coords=...)`
+   - **Extração de Coordenadas (Crucial)**: Verifique se o passo no relatório de telemetria possui marcação de coordenadas, como `[coords: (0.2452, 0.4563)]`. Se houver, passe a tupla exata em `original_coords`, exemplo: `original_coords=(0.2452, 0.4563)`. Se não houver coordenadas descritas para aquele passo no relatório, omita o argumento `original_coords`.
+3. **Uso Obrigatório de `runner.fill_resilient`:**
+   Você é **PROIBIDO** de usar `.fill()` diretamente do objeto `page` ou `locator`. Todos os preenchimentos comuns devem ser executados através de:
+   `runner.fill_resilient(page, selector="<seletor>", text_val=row["<chave_semantica>"], target_description="<descrição>", strategy="DIRECT")`
+4. **Padrão M (Detecção Anti-Bot Comportamental / HUMAN_LIKE):**
+   Verifique o campo `fill_strategy` no `dicionario.json`. Se o campo tiver `"fill_strategy": "HUMAN_LIKE"`, você é **PROIBIDO** de usar preenchimento direto. Você deve usar **obrigatoriamente**:
+   `runner.fill_resilient(page, selector="<seletor>", text_val=row["<chave_semantica>"], target_description="<descrição>", strategy="HUMAN_LIKE")`
+5. **Utilização do Dataset (`row`):**
    Todos os campos do formulário preenchidos dinamicamente devem ler seus valores do dicionário `row` usando as chaves semânticas exatas do dicionário de dados (ex: `row["cpf_do_cliente"]` ou `row["modelo"]`).
-3. **Padrão M (Detecção Anti-Bot Comportamental / HUMAN_LIKE):**
-   Verifique o campo `fill_strategy` no `dicionario.json`. Se o campo tiver `"fill_strategy": "HUMAN_LIKE"`, você é **PROIBIDO** de usar `.fill()`, `keyboard.type()` sem delay ou `evaluate()` direta. Você deve usar **obrigatoriamente** a função:
-   `runner.fill_human_like(page=page, selector="<seletor>", text_val=row["<chave_semantica>"], delay_ms=60)`
-4. **Padrão K (Campos de Data):**
+6. **Padrão K (Campos de Data):**
    Para preenchimento de datas, utilize seleção completa com `Control+A` e digitação, ou injeção DOM de propriedades removendo a flag `readonly` e despachando os eventos `input` e `change` se necessário.
-5. **Padrão L (Diálogo de Arquivos / Upload):**
+7. **Padrão L (Diálogo de Arquivos / Upload):**
    Para upload de arquivos, use `with page.expect_file_chooser()` ou `page.set_input_files()`.
-6. **Espera de transições (Padrão J):**
+8. **Espera de transições (Padrão J):**
    Sempre use esperas explícitas (`page.locator(...).wait_for(...)`) ao transicionar entre etapas. Evite `time.sleep` estático cego, a não ser que seja para aguardar a conclusão de animações ou requisições AJAX assíncronas específicas descritas nas notas.
-7. **Proibição de Hardcode (Segurança):**
+9. **Proibição de Hardcode (Segurança):**
    Não coloque credenciais ou tokens em texto fixo. Use as variáveis do `.env` carregadas pelo `TransactionRunner` ou passadas no dataset.
-8. **Saída:**
-   Retorne **EXCLUSIVAMENTE** o código Python estruturado, embalado em um bloco de código markdown:
-   ```python
-   # código aqui
-   ```
-   Não forneça explicações, observações ou introduções. Apenas o código.
+10. **Saída:**
+    Retorne **EXCLUSIVAMENTE** o código Python estruturado, embalado em um bloco de código markdown:
+    ```python
+    # código aqui
+    ```
+    Não forneça explicações, observações ou introduções. Apenas o código.
 """
 
     # 5. Envia prompt para a LLM e acompanha progresso
