@@ -54,7 +54,7 @@ class CognitiveGateway:
         with open(file_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
 
-    def _call_llm_api(self, prompt: str, image_path = None) -> str:
+    def _call_llm_api(self, prompt: str, image_path = None, force_json = True) -> str:
         """Efetua a chamada HTTP para o provedor configurado (OpenRouter/LiteLLM/OpenAI-compatible)"""
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -66,9 +66,9 @@ class CognitiveGateway:
         if self.provider == "openrouter":
             headers["HTTP-Referer"] = "https://github.com/aegis-rpa/aegis-suite"
             headers["X-Title"] = "Aegis RPA Suite"
-
+ 
         content_payload = [{"type": "text", "text": prompt}]
-
+ 
         if image_path:
             # Normaliza para lista se for uma única string
             image_paths = [image_path] if isinstance(image_path, str) else image_path
@@ -81,7 +81,7 @@ class CognitiveGateway:
                             "url": f"data:image/png;base64,{base64_image}"
                         }
                     })
-
+ 
         data = {
             "model": self.model,
             "messages": [
@@ -92,20 +92,23 @@ class CognitiveGateway:
             ],
             "temperature": 0.1
         }
-
-        # Tenta forçar retorno JSON estruturado se suportado
-        # Em alguns modelos/provedores simplificados, response_format pode falhar, por isso tratamos em bloco try
-        try:
-            data["response_format"] = {"type": "json_object"}
-            response = requests.post(url, headers=headers, json=data, timeout=30)
-            if response.status_code != 200:
-                # Se falhar devido ao response_format, tenta sem ele
-                if "response_format" in response.text:
+ 
+        if force_json:
+            # Tenta forçar retorno JSON estruturado se suportado
+            # Em alguns modelos/provedores simplificados, response_format pode falhar, por isso tratamos em bloco try
+            try:
+                data["response_format"] = {"type": "json_object"}
+                response = requests.post(url, headers=headers, json=data, timeout=30)
+                if response.status_code != 200:
+                    # Se falhar devido ao response_format, tenta sem ele
+                    if "response_format" in response.text:
+                        del data["response_format"]
+                        response = requests.post(url, headers=headers, json=data, timeout=30)
+            except Exception:
+                if "response_format" in data:
                     del data["response_format"]
-                    response = requests.post(url, headers=headers, json=data, timeout=30)
-        except Exception:
-            if "response_format" in data:
-                del data["response_format"]
+                response = requests.post(url, headers=headers, json=data, timeout=30)
+        else:
             response = requests.post(url, headers=headers, json=data, timeout=30)
 
         if response.status_code != 200:

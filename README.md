@@ -6,7 +6,7 @@ O **Aegis RPA Suite** é um ecossistema portátil de desenvolvimento e resiliên
 
 ## 📂 Estrutura do Pacote Portátil
 
-O projeto está estruturado da seguinte forma:
+O projeto está estruturado de forma desacoplada seguindo a segregação de responsabilidades entre interface, orquestração física de projetos, gerenciamento de processos de background e lógicas de negócios:
 
 ```
 aegis_rpa_suite/
@@ -15,23 +15,107 @@ aegis_rpa_suite/
 │       ├── rpa-copilot-analyst/ # Skill de Mapeamento & Diagnóstico
 │       └── rpa-copilot-coder/   # Skill de Padrões de Resiliência (A-L)
 ├── aegis_blackbox/              # Gravador de Voo (BlackBox Recorder)
-│   └── recorder.py              # Captura eventos reativos, calendário e upload
-├── aegis_sanitizer/             # Compactador & Dicionário de Dados
-│   ├── sanitizer.py             # Sanitização de telemetria e geração de MD
-│   ├── dataset_validator.py     # Firewall de Validação de Datasets
-│   └── code_generator.py        # Compilador Cognitivo de Robôs RPA (IA)
+│   └── recorder.py              # Classe AegisRecorder para capturar eventos reativos
+├── aegis_sanitizer/             # Compactador, Dicionário de Dados e Firewall
+│   ├── sanitizer.py             # Classe SanitizerService (relatórios de telemetria)
+│   ├── dataset_validator.py     # Classe DatasetValidatorService (firewall de dados)
+│   └── code_generator.py        # Classe CodeGeneratorService (geração cognitiva via IA)
 ├── aegis_runner/                # Camada e helpers de execução resiliente
+│   ├── runner.py                # TransactionRunner com suporte a injeção do gateway
 │   └── cognitive_fallback.py    # Gateway cognitivo (LiteLLM/OpenRouter)
-├── aegis_cockpit/               # Painel gráfico orquestrador Flask
-│   └── cockpit.py               # Orquestrador Flask de RPAs
+├── aegis_cockpit/               # Painel gráfico orquestrador e managers
+│   ├── cockpit.py               # Entrypoint HTTP do servidor Cockpit
+│   ├── project_manager.py       # Classe ProjectManager (gerência do workspace)
+│   ├── process_manager.py       # Classe ProcessManager (controle assíncrono de processos)
+│   └── static/                  # Frontend estático da interface SPA
+│       └── index.html           # UI do Cockpit (HTML/CSS/JS segregado)
 ├── projects/                    # [Área Externa] Pasta de RPAs específicos
 │   ├── control_center/          # Script e simuladores do Control Center
-│   └── portal_segura_integracao_e2e/ # Scripts e testes do Portal Segura
+│   └── portal_segura_teste/     # Projeto de Testes com múltiplos cenários
+│       ├── project.json         # Metadados do Projeto
+│       └── tests/               # Subdiretório contendo cenários isolados
+│           ├── cenario_principal/ # Cenário 1 (dataset, bot, dicionário, logs)
+│           └── cenario_erro/    # Cenário 2 (dataset, bot, dicionário, logs)
 ├── telemetry_data/              # [Área Externa] Logs de telemetria e datasets
 ├── requirements.txt             # Dependências Python do ecossistema
 └── README.md                    # Este manual de operação
 ```
 
+### 🗺️ Mapeamento Arquitetural e Fluxo de Dados
+
+Abaixo, o grafo demonstra como os arquivos e componentes interagem ao longo do ciclo de vida das 5 fases de desenvolvimento e execução do Aegis:
+
+```mermaid
+graph TD
+    %% Nós de Módulos / Arquivos
+    subgraph Cockpit ["aegis_cockpit/ (Painel Orquestrador)"]
+        C_MAIN["cockpit.py (HTTP Router)"]
+        C_PM["project_manager.py (Gerência de Workspace)"]
+        C_PROC["process_manager.py (Controle de Processos)"]
+        C_UI["static/index.html (Interface SPA)"]
+    end
+
+    subgraph Blackbox ["aegis_blackbox/ (Gravador)"]
+        B_REC["recorder.py (AegisRecorder)"]
+    end
+
+    subgraph Sanitizer ["aegis_sanitizer/ (Processamento e Firewall)"]
+        S_SAN["sanitizer.py (SanitizerService)"]
+        S_VAL["dataset_validator.py (DatasetValidatorService)"]
+        S_GEN["code_generator.py (CodeGeneratorService)"]
+    end
+
+    subgraph Runner ["aegis_runner/ (Motor de Execução)"]
+        R_RUN["runner.py (TransactionRunner)"]
+        R_COG["cognitive_fallback.py (CognitiveGateway)"]
+    end
+
+    subgraph Projects ["projects/&lt;nome_projeto&gt;/ (Workspace do Robô)"]
+        P_ROOT_JSON["project.json (Metadados do Projeto)"]
+        subgraph Scenarios ["tests/&lt;nome_cenario&gt;/ (Cenário Isolado)"]
+            P_JSON["project.json (Metadados do Cenário)"]
+            P_RAW["gravacao.json (Telemetria Bruta)"]
+            P_DICT["dicionario.json (Dicionário de Dados)"]
+            P_DATA["dataset_inicial.json / dados_entrada.csv (Dados)"]
+            P_REP["relatorio.md (Fluxo Sanitizado)"]
+            P_VAL["relatorio_validacao.json (Log Firewall)"]
+            P_BOT["bot_producao.py (Script do Robô Gerado)"]
+            P_ENV[".env (Configurações do Cenário)"]
+        end
+    end
+
+    %% Relacionamentos e Fluxo
+    C_UI <-->|API HTTP| C_MAIN
+    C_MAIN -->|Usa| C_PM
+    C_MAIN -->|Usa| C_PROC
+    
+    %% Fluxo do Pipeline
+    C_PROC -->|Fase 1: Executa CLI| B_REC
+    B_REC -->|Salva| P_RAW
+    B_REC -->|Gera| P_DICT
+    B_REC -->|Gera| P_DATA
+
+    C_PROC -->|Fase 2: Executa CLI| S_SAN
+    P_RAW -->|Lido por| S_SAN
+    P_DICT -->|Lido por| S_SAN
+    S_SAN -->|Gera| P_REP
+
+    C_PROC -->|Fase 3: Executa CLI| S_VAL
+    P_DATA -->|Validado por| S_VAL
+    P_DICT -->|Regras para| S_VAL
+    S_VAL -->|Salva Relatório| P_VAL
+
+    C_PROC -->|Fase 4: Executa CLI| S_GEN
+    P_REP -->|Prompt Insumo| S_GEN
+    P_DICT -->|Prompt Insumo| S_GEN
+    S_GEN -->|Chama IA| R_COG
+    S_GEN -->|Compila| P_BOT
+
+    C_PROC -->|Fase 5: Executa CLI| P_BOT
+    P_BOT -->|Herda SDK| R_RUN
+    R_RUN -->|Fallback Cognitivo / Self-Healing| R_COG
+    P_ENV -->|Configura| R_COG
+```
 
 ---
 
@@ -57,6 +141,7 @@ Para garantir a portabilidade do core da suíte Aegis, a manutenção do framewo
 2. **Isolamento de Diretórios de Processos (Projects):** Todos os scripts, simuladores, testes e logs específicos de um sistema alvo (como o Portal Segura) devem ficar confinados exclusivamente sob subpastas de `projects/` (ex: `projects/portal_segura_integracao_e2e/`), nunca dentro de pastas internas do Aegis.
 3. **Core Framework Blindado:** A estrutura de pastas internas do Aegis (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_mentor`) é um motor de execução genérico e blindado. Nenhuma modificação específica de robôs ou arquivos de processos deve entrar nestas pastas.
 4. **Desacoplamento de `projects/` e `telemetry_data/`:** As pastas `projects/` (onde residem os robôs) e `telemetry_data/` (onde residem os dados de input e logs de execução) devem ser tratadas como áreas completamente externas à suite core do Aegis, mantendo o framework 100% reutilizável e desacoplado.
+5. **Múltiplos Cenários de Teste por Projeto:** Um único projeto (sistema/site alvo) pode agrupar múltiplos cenários de teste independentes (ex: Login com Sucesso, Login com Erro). Cada cenário é isolado em um subdiretório `tests/<slug_cenario>/` dentro do projeto, contendo suas próprias telemetrias, datasets, scripts gerados, arquivos `.env` e relatórios de execução.
 
 ---
 
@@ -91,6 +176,51 @@ claude
 ```
 > [!NOTE]
 > Ao iniciar o Claude Code dentro da pasta raiz do projeto, ele lerá e ativará automaticamente as skills locais declaradas em `.claude/skills/rpa-copilot-analyst/SKILL.md` e `.claude/skills/rpa-copilot-coder/SKILL.md` com base nos metadados de YAML frontmatter, sem necessidade de configuração adicional.
+
+---
+
+## 🕹️ Aegis Cockpit (Painel Orquestrador)
+
+O **Aegis Cockpit** centraliza a gestão dos projetos e cenários de testes, permitindo gravar, sanitizar, validar e executar robôs a partir de uma interface web interativa.
+
+### Como Executar
+Navegue até a pasta do projeto e inicie o servidor (ele carregará o ambiente padrão):
+```powershell
+python aegis_cockpit/cockpit.py
+```
+
+### Configurações de Porta e Workspace
+As configurações globais do Cockpit são salvas no arquivo `aegis_config.json` localizado na raiz do projeto:
+- **`port`**: Define a porta padrão do servidor (ex: `8075`). Se não estiver configurado ou se a porta estiver ocupada, o servidor tentará alocar portas sequenciais a partir de `8080`.
+- **`projects_dir`**: O caminho absoluto para a pasta onde os projetos RPA estão localizados.
+- **`telemetry_dir`**: O caminho para os arquivos de log centrais.
+
+Exemplo de `aegis_config.json`:
+```json
+{
+    "projects_dir": "C:\\Projetos\\aegis_rpa_suite\\projects",
+    "telemetry_dir": "C:\\Projetos\\aegis_rpa_suite\\telemetry_data",
+    "port": 8075
+}
+```
+
+### 🖥️ Fluxo de Navegação Dual-State (Usabilidade Otimizada)
+O Cockpit conta com uma arquitetura de navegação moderna dividida em dois ambientes principais para otimizar o fluxo de trabalho e evitar poluição visual:
+1. **Portal de Projetos (Visão Global):** Uma tela inicial limpa que exibe todos os projetos RPA do seu workspace em formato de grid responsivo, permitindo pesquisar projetos por nome/URL em tempo real, configurar o diretório do workspace e criar novos projetos de forma simplificada.
+2. **Workspace do Projeto (Visão Detalhada):** Ao selecionar um projeto, a interface foca exclusivamente nele. A barra lateral esquerda passa a gerenciar apenas os cenários de teste vinculados àquele projeto específico (incluindo criação e exclusão rápida) e oferece um botão `← Voltar para Projetos` para fácil retorno à tela inicial global. Os painéis de execução e visualizadores são mostrados no centro e direita focando no cenário selecionado.
+
+### 🤖 Acompanhamento e Auditoria de Passos (Tempo Real)
+O Cockpit conta com uma aba dedicada de **Passos** (na barra lateral direita) que permite acompanhar e auditar a execução do robô linha por linha:
+
+* **Mapeamento Prévio**: O painel carrega a lista de eventos pré-gravados em `gravacao.json` para exibir o plano de execução planejado.
+* **Status em Runtime**: Conforme as ações ocorrem no navegador, o painel do Cockpit consome a stream de logs e atualiza o grid dinamicamente:
+  - `⏳ Executando` (azul com pulso): Destaca a ação atual do robô.
+  - `✓ Sucesso` (verde): Ação concluída com sucesso.
+  - `✨ Healed` (gradiente roxo): Seletor falhou originalmente, mas o robô se recuperou via Inteligência Artificial (Self-Healing).
+  - `❌ Falhou` (vermelho): O passo falhou e abortou (com descrição detalhada do erro acessível ao posicionar o ponteiro do mouse sobre o campo correspondente).
+  - `⏹ Parado` (laranja): O robô parou ou foi interrompido antes do passo ser executado.
+* **Trilha de Auditoria Persistida**: Ao final de cada execução, o estado detalhado do grid é postado e gravado no arquivo `historico_passos.json` dentro do diretório do cenário. Isso mantém o histórico da última execução visível mesmo após recarregar a página ou reabrir o Cockpit.
+* **Zerar Status**: Permite redefinir os passos de volta ao estado original `Pendente` e remover o histórico salvo no servidor.
 
 ---
 

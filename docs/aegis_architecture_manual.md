@@ -88,6 +88,7 @@ graph TD
   * Totalmente modularizado em `aegis_cockpit/cockpit.py`.
   * Configuração flexível de portas de escuta HTTP via variável de ambiente `AEGIS_COCKPIT_PORT`.
   * Execução segura de RPAs como subprocessos isolados, forçando o diretório de execução correto (`cwd=PROJECT_ROOT`).
+  * **Interface Dual-State:** Reestruturada para operar em dois modos (Portal de Projetos e Workspace do Projeto) otimizando a usabilidade por meio de um grid global com barra de busca rápida e barra lateral dedicada exclusivamente aos cenários do projeto ativo.
 
 ### 🔒 6. Política de Segurança, Isolamento de RPAs e Zero Hardcodes
 * **Regra Absoluta contra Hardcodes:** O código dos robôs ou utilitários jamais deve conter credenciais fixas, senhas, tokens de API, portas ou URLs estáticas de homologação/produção.

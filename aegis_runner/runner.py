@@ -12,9 +12,10 @@ except ImportError:
     from aegis_runner.cognitive_fallback import CognitiveGateway
 
 class TransactionRunner:
-    def __init__(self, project_dir, error_message_selector=".toast-error, .alert-danger, #angular-field-status-message"):
+    def __init__(self, project_dir, error_message_selector=".toast-error, .alert-danger, #angular-field-status-message", cognitive_gateway=None, initial_url=None, **kwargs):
         self.project_dir = os.path.abspath(project_dir)
         self.error_message_selector = error_message_selector
+        self.initial_url = initial_url
         self.scenarios = {}
         
         # Arquivos de dados do projeto
@@ -26,7 +27,10 @@ class TransactionRunner:
         sys.stdout.reconfigure(encoding='utf-8')
 
         # Inicializa Gateway Cognitivo do Aegis apontando para a pasta do projeto
-        self.cognitive = CognitiveGateway(project_dir=self.project_dir)
+        if cognitive_gateway is not None:
+            self.cognitive = cognitive_gateway
+        else:
+            self.cognitive = CognitiveGateway(project_dir=self.project_dir)
 
     def register_scenario(self, scenario_name, callback):
         """Registra a rotina de preenchimento de formulário para um cenário lógico."""
@@ -44,6 +48,9 @@ class TransactionRunner:
         - Validação Ativa: Se validate_navigation=True, verifica se o clique causou navegação.
           Caso contrário, tenta clicar em outros elementos correspondentes de forma sequencial.
         """
+        print(f"[AEGIS_STEP] START | click | {selector} | {target_description}")
+        sys.stdout.flush()
+
         # 1. Se o seletor for composto (encadeado com >>), faz hover sequencial nos pais para expandir menus multinível
         if " >> " in selector:
             parts = selector.split(" >> ")
@@ -79,6 +86,8 @@ class TransactionRunner:
             try:
                 print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
                 page.locator(selector).click(timeout=timeout)
+                print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
+                sys.stdout.flush()
                 return True
             except Exception as e:
                 return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
@@ -161,6 +170,10 @@ class TransactionRunner:
                 RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM."),
                 original_coords
             )
+        
+        if clicked:
+            print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
+            sys.stdout.flush()
         return clicked
 
     def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None) -> bool:
@@ -168,15 +181,27 @@ class TransactionRunner:
             try:
                 print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
                 page.locator(selector).first.click(timeout=timeout)
+                print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
+                sys.stdout.flush()
                 return True
             except Exception as inner_e:
                 e = inner_e
 
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
-            return self.cognitive.self_healing_click(page, selector, target_description, original_coords)
+            healed = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
+            if healed:
+                print(f"[AEGIS_STEP] HEALED | click | {selector} | {target_description}")
+                sys.stdout.flush()
+                return True
+            else:
+                print(f"[AEGIS_STEP] FAILED | click | {selector} | {target_description} | IA self-healing failed")
+                sys.stdout.flush()
+                raise e
         else:
             print(f"[AEGIS RUNNER] Falha ao clicar em '{selector}' e módulo cognitivo inativo.")
+            print(f"[AEGIS_STEP] FAILED | click | {selector} | {target_description} | {str(e)}")
+            sys.stdout.flush()
             raise e
 
 
@@ -189,18 +214,29 @@ class TransactionRunner:
           necessário para campos com detecção de cadência de teclado (Zone.js, etc).
         Se falhar por timeout ou outra exceção, localiza visualmente o elemento na tela via IA e digita.
         """
+        print(f"[AEGIS_STEP] START | fill | {selector} | {target_description}")
+        sys.stdout.flush()
+
         if strategy == "HUMAN_LIKE":
-            return self.fill_human_like(page, selector, text_val, delay_ms=delay_ms, timeout=timeout)
+            res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout)
+            if res:
+                print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
+                sys.stdout.flush()
+            return res
 
         try:
             print(f"[AEGIS RUNNER] Tentando preenchimento físico em '{selector}'...")
             page.locator(selector).fill(text_val, timeout=timeout)
+            print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
+            sys.stdout.flush()
             return True
         except Exception as e:
             if "strict mode violation" in str(e) or "resolved to" in str(e):
                 try:
                     print(f"[AEGIS RUNNER] Múltiplos elementos encontrados para '{selector}'. Tentando preencher o primeiro...")
                     page.locator(selector).first.fill(text_val, timeout=timeout)
+                    print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
+                    sys.stdout.flush()
                     return True
                 except Exception as inner_e:
                     e = inner_e
@@ -213,40 +249,24 @@ class TransactionRunner:
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
                     page.evaluate("() => { const active = document.activeElement; if (active) { active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
+                    print(f"[AEGIS_STEP] HEALED | fill | {selector} | {target_description}")
+                    sys.stdout.flush()
                     return True
+                print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | IA self-healing failed")
+                sys.stdout.flush()
                 return False
             else:
                 print(f"[AEGIS RUNNER] Falha ao preencher em '{selector}' e módulo cognitivo inativo.")
+                print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | {str(e)}")
+                sys.stdout.flush()
                 raise e
 
-    def fill_human_like(self, page, selector, text_val, delay_ms=60, timeout=5000) -> bool:
+    def fill_human_like(self, page, selector, text_val, target_description=None, delay_ms=60, timeout=5000) -> bool:
         """
         Preenche um campo tecla por tecla com delay real (time.sleep) entre cada keystroke.
-
-        Necessário para campos que monitoram cadência de teclado — padrão usado por:
-        - Angular Zone.js (monitoramento de keydown + cálculo de avgInterval entre teclas)
-        - React Hook Forms com validação comportamental
-        - Formulários bancários e governamentais com anti-bot por timing
-
-        Por que time.sleep() e não keyboard.type(delay=X)?
-        - keyboard.type(delay=X) agenda os eventos no event loop interno do browser,
-          mas o performance.now() do JS pode registrar intervalos < 8ms se a CPU estiver
-          ocupada ou se o browser não tiver foco.
-        - time.sleep() bloqueia o processo Python inteiro entre cada tecla, garantindo
-          que o performance.now() do browser registre o intervalo real (>= delay_ms).
-
-        Args:
-            page: instância do Page do Playwright.
-            selector: seletor CSS/XPath do campo alvo.
-            text_val: texto a ser digitado tecla por tecla.
-            delay_ms: delay em milissegundos entre cada tecla (padrão: 60ms).
-                      Deve ser > 8ms para passar na maioria dos detectores.
-                      Recomendado: 50-80ms para simular digitacão humana confortável.
-            timeout: tempo máximo de espera para localizar o elemento.
-
-        Returns:
-            True se preenchimento bem-sucedido, False caso contrário.
         """
+        if target_description is None:
+            target_description = selector
         import time as _time
         try:
             print(f"[AEGIS RUNNER] Digitacão cadenciada (HUMAN_LIKE) em '{selector}' ({len(str(text_val))} chars, {delay_ms}ms/tecla)...")
@@ -270,7 +290,7 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] Falha em fill_human_like para '{selector}': {e}")
             if self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para HUMAN_LIKE em '{selector}'...")
-                clicked = self.cognitive.self_healing_click(page, selector, selector)
+                clicked = self.cognitive.self_healing_click(page, selector, target_description)
                 if clicked:
                     import time as _t2
                     page.keyboard.press("Control+A")
@@ -278,7 +298,11 @@ class TransactionRunner:
                     for char in str(text_val):
                         page.keyboard.press(char)
                         _t2.sleep(delay_ms / 1000.0)
+                    print(f"[AEGIS_STEP] HEALED | fill | {selector} | {target_description}")
+                    sys.stdout.flush()
                     return True
+            print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | {str(e)}")
+            sys.stdout.flush()
             raise e
 
     def diagnose_failure(self, page, error) -> str:
@@ -347,8 +371,8 @@ class TransactionRunner:
                 expected = row.get("expected_result", "SUCCESS").upper()
                 expected_token = row.get("expected_error_token", "")
                 
-                # Se a URL não foi fornecida por argumento, tenta usar o project.json ou do dataset
-                target_url = url
+                # Se a URL não foi fornecida por argumento, tenta usar a URL configurada na inicialização, ou do project.json
+                target_url = url or self.initial_url
                 if not target_url:
                     # Tenta ler do project.json se existir
                     project_json = os.path.join(self.project_dir, "project.json")
@@ -364,6 +388,8 @@ class TransactionRunner:
                     target_url = "http://localhost:5173/?e2e=true" # Fallback local
                 
                 print(f"\n[🚀 TRANSAÇÃO {row_id}/{len(dataset)}] Cenário: '{scenario}' | Expectativa: '{expected}'")
+                print(f"[AEGIS_TRANSACTION] START | {row_id} | {scenario}")
+                sys.stdout.flush()
                 start_time = time.time()
                 
                 # Executa a automação registrada
@@ -400,6 +426,8 @@ class TransactionRunner:
                             "extracted_value": "None",
                             "duration_seconds": duration
                         })
+                        print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
+                        sys.stdout.flush()
                     else:
                         # Sucesso
                         extracted_val = "EMITTED-OK"
@@ -422,6 +450,8 @@ class TransactionRunner:
                             "extracted_value": extracted_val,
                             "duration_seconds": duration
                         })
+                        print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
+                        sys.stdout.flush()
                         
                 except Exception as e:
                     duration = round(time.time() - start_time, 2)
@@ -449,6 +479,8 @@ class TransactionRunner:
                                 "extracted_value": "None",
                                 "duration_seconds": duration
                             })
+                            print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
+                            sys.stdout.flush()
                         else:
                             print(f"[❌ FALSO POSITIVO] Bloqueado com erro incorreto. Esperava '{expected_token}', obteve '{error_text}'")
                             reports.append({
@@ -460,6 +492,8 @@ class TransactionRunner:
                                 "extracted_value": "None",
                                 "duration_seconds": duration
                             })
+                            print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
+                            sys.stdout.flush()
                     else:
                         # Erro sistêmico
                         # Tenta extrair seletor que causou timeout
@@ -501,6 +535,8 @@ class TransactionRunner:
                             "extracted_value": "None",
                             "duration_seconds": duration
                         })
+                        print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
+                        sys.stdout.flush()
             
             # Fecha navegador e grava relatório
             self._write_report(reports)

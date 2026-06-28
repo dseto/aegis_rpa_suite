@@ -1,0 +1,2122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🛡️ Aegis RPA Suite Cockpit</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #070714;
+            --sidebar-bg: rgba(10,10,25,0.9);
+            --card-bg: rgba(18,18,38,0.7);
+            --card-border: rgba(124,58,237,0.2);
+            --card-border-hover: rgba(124,58,237,0.5);
+            --primary: #7c3aed;
+            --primary-glow: rgba(124,58,237,0.35);
+            --accent: #d946ef;
+            --accent-glow: rgba(217,70,239,0.35);
+            --text: #f1f5f9;
+            --text-muted: #64748b;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --info: #3b82f6;
+            --sidebar-w: 260px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            background: var(--bg);
+            background-image:
+                radial-gradient(at 0% 0%, rgba(124,58,237,0.07) 0, transparent 55%),
+                radial-gradient(at 100% 100%, rgba(217,70,239,0.07) 0, transparent 55%);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Header ── */
+        header {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(124,58,237,0.15);
+            background: rgba(5,5,15,0.6);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+        .logo { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .logo span { color: var(--accent); }
+        .header-right { display: flex; align-items: center; gap: 10px; }
+        .status-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+            transition: all 0.3s;
+        }
+        .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+        .status-idle { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.3); }
+        .status-idle .badge-dot { background: var(--success); }
+        .status-active { background: rgba(245,158,11,0.1); color: var(--warning); border: 1px solid rgba(245,158,11,0.4); animation: pulse-badge 1.8s infinite alternate; }
+        .status-active .badge-dot { background: var(--warning); animation: pulse-dot 1s infinite; }
+        @keyframes pulse-badge { 0% { box-shadow: 0 0 5px rgba(245,158,11,0.1); } 100% { box-shadow: 0 0 15px rgba(245,158,11,0.5); } }
+        @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+        /* ── Layout Principal ── */
+        .main-layout {
+            flex: 1 1 auto;
+            display: grid;
+            grid-template-columns: var(--sidebar-w) 1fr 1.4fr;
+            overflow: hidden;
+        }
+
+        /* ── Sidebar de Projetos ── */
+        .sidebar {
+            background: var(--sidebar-bg);
+            border-right: 1px solid rgba(124,58,237,0.15);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 14px 12px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+        .btn-new-project {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.15s;
+        }
+        .btn-new-project:hover { filter: brightness(1.15); transform: translateY(-1px); }
+        .projects-list { flex: 1; overflow-y: auto; padding: 8px; }
+        .projects-list::-webkit-scrollbar { width: 4px; }
+        .projects-list::-webkit-scrollbar-track { background: transparent; }
+        .projects-list::-webkit-scrollbar-thumb { background: rgba(124,58,237,0.3); border-radius: 2px; }
+
+        .project-card {
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.05);
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .project-card:hover { background: rgba(124,58,237,0.08); border-color: rgba(124,58,237,0.25); }
+        .project-card.active {
+            background: rgba(124,58,237,0.12);
+            border-color: var(--primary);
+            box-shadow: 0 0 12px rgba(124,58,237,0.15);
+        }
+        .proj-name { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 20px; }
+        .proj-url { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+        .proj-footer { display: flex; align-items: center; justify-content: space-between; }
+        .status-pill {
+            font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+            padding: 2px 7px; border-radius: 10px;
+        }
+        .pill-empty { background: rgba(100,116,139,0.2); color: var(--text-muted); }
+        .pill-recorded { background: rgba(59,130,246,0.15); color: var(--info); }
+        .pill-sanitized { background: rgba(217,70,239,0.15); color: var(--accent); }
+        .pill-validated { background: rgba(16,185,129,0.15); color: var(--success); }
+        .pill-generated { background: rgba(236,72,153,0.2); color: #f472b6; border: 1px solid rgba(236,72,153,0.4); }
+        .pill-executed { background: rgba(16,185,129,0.25); color: #10b981; border: 1px solid rgba(16,185,129,0.4); }
+        .proj-date { font-size: 9px; color: var(--text-muted); }
+        .btn-delete-proj {
+            position: absolute; top: 8px; right: 8px;
+            background: none; border: none; color: var(--text-muted);
+            cursor: pointer; font-size: 12px; padding: 2px; line-height: 1;
+            opacity: 0; transition: opacity 0.15s;
+        }
+        .project-card:hover .btn-delete-proj { opacity: 1; }
+        .btn-delete-proj:hover { color: var(--error); }
+
+        .no-projects { padding: 30px 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
+
+        /* ── Coluna Central ── */
+        .col-center {
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid rgba(124,58,237,0.1);
+            overflow: hidden;
+            padding: 14px;
+            gap: 12px;
+        }
+
+        .active-project-banner {
+            background: rgba(124,58,237,0.1);
+            border: 1px solid rgba(124,58,237,0.25);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .active-project-banner strong { color: var(--accent); }
+        .banner-no-project { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); color: rgba(239,68,68,0.8); }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 14px;
+            backdrop-filter: blur(12px);
+            transition: border-color 0.2s;
+        }
+        .card:hover { border-color: var(--card-border-hover); }
+        .card-title {
+            font-size: 13px; font-weight: 600; color: #fff;
+            margin-bottom: 12px;
+            display: flex; align-items: center; gap: 6px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 8px;
+        }
+
+        .ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+
+        label {
+            display: block; font-size: 10px; color: var(--text-muted);
+            text-transform: uppercase; font-weight: 600; margin-bottom: 5px;
+        }
+        input, select {
+            width: 100%;
+            background: rgba(5,5,15,0.8);
+            border: 1px solid rgba(124,58,237,0.3);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 12px;
+            outline: none;
+            transition: all 0.2s;
+        }
+        input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 8px rgba(217,70,239,0.2); }
+
+        .btn {
+            background: var(--primary);
+            color: #fff;
+            border: none; border-radius: 6px;
+            padding: 9px 14px;
+            font-weight: 600; font-size: 11px;
+            cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+            transition: all 0.15s;
+            box-shadow: 0 2px 8px var(--primary-glow);
+            width: 100%;
+        }
+        .btn:hover { transform: translateY(-1.5px); filter: brightness(1.1); }
+        .btn:active { transform: translateY(0.5px); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+        .btn-accent { background: var(--accent); box-shadow: 0 2px 8px var(--accent-glow); }
+        .btn-blue { background: var(--info); box-shadow: 0 2px 8px rgba(59,130,246,0.3); }
+        .btn-stop { background: var(--error); box-shadow: 0 2px 8px rgba(239,68,68,0.3); }
+        .btn-sm { padding: 4px 10px; font-size: 10px; width: auto; }
+
+        /* URL editável */
+        .url-row { display: flex; gap: 8px; align-items: flex-end; }
+        .url-row input { flex: 1; }
+        #btn-start-record { flex: 0 0 auto; width: auto; }
+
+        /* Terminal */
+        .terminal-header { display: flex; justify-content: space-between; align-items: center; }
+        .terminal-header .card-title { margin-bottom: 0; border: none; padding: 0; }
+        .terminal-actions { display: flex; gap: 5px; }
+        .terminal-box {
+            background: #020208;
+            border: 1px solid #1a1a35;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Fira Code', monospace;
+            color: #00ffcc;
+            height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 10.5px;
+            margin-top: 10px;
+            line-height: 1.55;
+            box-shadow: inset 0 4px 20px rgba(0,0,0,0.8);
+        }
+        .terminal-box::-webkit-scrollbar { width: 4px; }
+        .terminal-box::-webkit-scrollbar-thumb { background: rgba(0,255,204,0.2); border-radius: 2px; }
+
+        /* ── Coluna Direita (Visualizadores) ── */
+        .col-right {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 14px;
+        }
+        .tabs-header {
+            display: flex; gap: 3px;
+            border-bottom: 1px solid rgba(124,58,237,0.2);
+            margin-bottom: 12px;
+            flex-shrink: 0;
+        }
+        .tab-btn {
+            background: none; border: none; border-bottom: 2px solid transparent;
+            color: var(--text-muted);
+            padding: 7px 13px; cursor: pointer;
+            font-family: inherit; font-size: 11px; font-weight: 600;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #fff; }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-content { display: none; flex: 1; overflow-y: auto; min-height: 0; }
+        .tab-content.active { display: block; }
+        .tab-content::-webkit-scrollbar { width: 4px; }
+        .tab-content::-webkit-scrollbar-thumb { background: rgba(124,58,237,0.3); border-radius: 2px; }
+
+        /* Tabelas */
+        .table-wrap { overflow-x: auto; border-radius: 6px; border: 1px solid rgba(124,58,237,0.12); }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: left; background: rgba(5,5,15,0.4); }
+        th { background: rgba(124,58,237,0.12); color: #fff; padding: 8px 10px; font-weight: 600; border-bottom: 1px solid rgba(124,58,237,0.2); }
+        td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #d1d5db; }
+        tr:hover { background: rgba(124,58,237,0.04); }
+        code { font-family: 'Fira Code', monospace; background: rgba(217,70,239,0.1); color: var(--accent); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+        .empty-msg { color: var(--text-muted); font-size: 12px; text-align: center; padding: 40px 20px; border: 1px dashed rgba(124,58,237,0.1); border-radius: 6px; }
+
+        /* Relatório MD 2 colunas */
+        .report-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 20px; }
+        @media (max-width: 1400px) { .report-grid { grid-template-columns: 1fr; } }
+
+        /* Firewall */
+        .firewall-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        .metric-card { background: rgba(5,5,15,0.6); border: 1px solid rgba(124,58,237,0.15); border-radius: 8px; padding: 10px; text-align: center; }
+        .metric-label { font-size: 9px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+        .metric-value { font-size: 22px; font-weight: 700; }
+        .v-ok { color: var(--success); }
+        .v-err { color: var(--error); }
+        .v-neutral { color: #fff; }
+        .status-box { padding: 10px 14px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
+        .box-ok { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); color: var(--success); }
+
+        /* ── Passos do Robô ── */
+        .status-badge-step {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .status-step-pending {
+            background: rgba(100, 116, 139, 0.15);
+            color: var(--text-muted);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+        }
+        .status-step-running {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            animation: pulse-border 1.5s infinite alternate;
+        }
+        .status-step-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+        }
+        .status-step-healed {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.5);
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+        }
+        .status-step-failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.5);
+        }
+        .status-step-stopped {
+            background: rgba(245, 158, 11, 0.1);
+            color: #fbbf24;
+            border: 1px dashed rgba(245, 158, 11, 0.3);
+        }
+        
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 2px rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); }
+            100% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); border-color: rgba(59, 130, 246, 0.8); }
+        }
+
+        .type-badge {
+            font-family: 'Fira Code', monospace;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .type-click {
+            background: rgba(124, 58, 237, 0.15);
+            color: #c084fc;
+            border: 1px solid rgba(124, 58, 237, 0.3);
+        }
+        .type-fill {
+            background: rgba(217, 70, 239, 0.15);
+            color: #f472b6;
+            border: 1px solid rgba(217, 70, 239, 0.3);
+        }
+        .type-other {
+            background: rgba(59, 130, 246, 0.15);
+            color: #93c5fd;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .steps-header-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            background: rgba(124, 58, 237, 0.05);
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(124, 58, 237, 0.12);
+        }
+        .steps-summary {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text);
+        }
+        .box-err { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: var(--error); }
+        .failure-item { padding: 8px; border-bottom: 1px dashed rgba(239,68,68,0.15); }
+        .failure-item:last-child { border: none; }
+
+        /* ── Modal ── */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+            z-index: 1000; align-items: center; justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: #0e0e24;
+            border: 1px solid rgba(124,58,237,0.35);
+            border-radius: 12px;
+            padding: 24px;
+            width: 420px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .modal h3 { font-size: 16px; margin-bottom: 16px; color: #fff; }
+        .modal .form-group { margin-bottom: 14px; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
+        .btn-ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--text-muted); box-shadow: none; width: auto; }
+        .btn-ghost:hover { border-color: rgba(255,255,255,0.3); color: #fff; }
+        .test-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin-top: 2px;
+        }
+        .test-item:hover {
+            background: rgba(124, 58, 237, 0.08);
+            border-color: rgba(124, 58, 237, 0.2);
+        }
+        .test-item.active-test {
+            background: rgba(217, 70, 239, 0.15) !important;
+            border-color: var(--accent) !important;
+            color: #fff;
+        }
+        .test-item.active-test .status-pill {
+            box-shadow: 0 0 8px rgba(217, 70, 239, 0.2);
+        }
+
+        /* ── Reestruturação Dual-State Layout ── */
+        .projects-dashboard {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            padding: 24px;
+            overflow-y: auto;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .dashboard-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .dashboard-title-main {
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(135deg, #fff 0%, var(--text-muted) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .dashboard-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .dashboard-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .search-container {
+            position: relative;
+            width: 260px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 8px 12px 8px 32px;
+            font-size: 13px;
+            background: rgba(10, 10, 25, 0.6);
+            border: 1px solid rgba(124, 58, 237, 0.25);
+            border-radius: 8px;
+            color: #fff;
+            transition: all 0.2s;
+        }
+        .search-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 10px rgba(217, 70, 239, 0.15);
+            background: rgba(10, 10, 25, 0.8);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        .projects-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .proj-grid-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 180px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        .proj-grid-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 30px rgba(124,58,237,0.15);
+            background: rgba(124,58,237,0.05);
+        }
+
+        .proj-grid-card .btn-delete-proj {
+            opacity: 0.5;
+            transition: opacity 0.2s, color 0.2s;
+            z-index: 10;
+        }
+        .proj-grid-card:hover .btn-delete-proj {
+            opacity: 1;
+        }
+
+        .proj-grid-card .proj-name {
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+            padding-right: 24px;
+        }
+
+        .proj-grid-card .proj-url {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            word-break: break-all;
+            white-space: normal;
+        }
+
+        .proj-grid-card-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            padding-top: 12px;
+        }
+
+        .proj-meta-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .proj-meta-value {
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .proj-meta-value.accent {
+            color: var(--accent);
+        }
+
+        .proj-grid-card-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: auto;
+        }
+
+        .btn-access-project {
+            background: linear-gradient(135deg, var(--primary) 0%, #6d28d9 100%);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px var(--primary-glow);
+            width: 100%;
+            text-align: center;
+        }
+        .btn-access-project:hover {
+            filter: brightness(1.15);
+            transform: translateY(-1px);
+        }
+
+        /* Card tracejado de Novo Projeto */
+        .proj-grid-card-new {
+            border: 2px dashed rgba(124,58,237,0.3);
+            background: transparent;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            min-height: 180px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: none;
+        }
+        .proj-grid-card-new:hover {
+            border-color: var(--accent);
+            background: rgba(217,70,239,0.02);
+            box-shadow: 0 8px 24px rgba(217,70,239,0.05);
+        }
+        .proj-grid-card-new-icon {
+            font-size: 28px;
+            color: var(--text-muted);
+            transition: color 0.3s, transform 0.3s;
+        }
+        .proj-grid-card-new:hover .proj-grid-card-new-icon {
+            color: var(--accent);
+            transform: scale(1.1);
+        }
+        .proj-grid-card-new-text {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            transition: color 0.3s;
+        }
+        .proj-grid-card-new:hover .proj-grid-card-new-text {
+            color: #fff;
+        }
+
+        /* Seletor de visualização ativa */
+        .has-active-project.main-layout {
+            grid-template-columns: var(--sidebar-w) 1fr 1.4fr;
+        }
+        .no-active-project.main-layout {
+            grid-template-columns: 1fr;
+            display: block;
+            overflow-y: auto;
+        }
+        .has-active-project .projects-dashboard { display: none; }
+        .no-active-project .projects-dashboard { display: flex; }
+        .no-active-project .sidebar { display: none !important; }
+        .no-active-project .col-center { display: none !important; }
+        .no-active-project .col-right { display: none !important; }
+
+        /* Botão de Voltar */
+        .btn-back-projects {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px 12px;
+            margin: 12px 12px 6px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(124, 58, 237, 0.25);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: calc(100% - 24px);
+        }
+        .btn-back-projects:hover {
+            background: rgba(124, 58, 237, 0.1);
+            color: #fff;
+            border-color: var(--primary);
+            transform: translateX(-2px);
+        }
+        .workspace-sidebar-header {
+            padding: 12px;
+            border-bottom: 1px solid rgba(124,58,237,0.15);
+            margin-bottom: 8px;
+        }
+        .workspace-sidebar-projname {
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">🛡️ <span>Aegis</span> RPA Suite Cockpit</div>
+        <div class="header-right">
+            <button id="btn-install-browsers" class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px; margin-right: 10px; cursor: pointer;" title="Baixar/Instalar navegadores necessários via Playwright CLI">🌐 Playwright Install</button>
+            <div id="badge-status" class="status-badge status-idle">
+                <span class="badge-dot"></span>Ocioso
+            </div>
+        </div>
+    </header>
+
+    <div class="main-layout" id="main-layout">
+
+        <!-- ── Sidebar de Projetos ── -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <span class="sidebar-title">Projetos RPA</span>
+                <button class="btn-new-project" id="btn-open-modal">+ Novo</button>
+            </div>
+            <div class="projects-list" id="projects-list">
+                <div class="no-projects">Nenhum projeto encontrado.<br>Crie um novo para começar.</div>
+            </div>
+            <!-- Configurações de Workspace -->
+            <div style="padding: 12px; border-top: 1px solid rgba(124,58,237,0.15); background: rgba(5,5,10,0.4);">
+                <label style="font-size: 9px; margin-bottom: 4px; display: block; color: var(--text-muted);">DIRETÓRIO DO WORKSPACE (BASE)</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="cfg-projects-dir" placeholder="Carregando..." style="padding: 5px 8px; font-size: 11px;" title="Caminho raiz onde seus robôs serão salvos por padrão" />
+                    <button id="btn-save-cfg" class="btn btn-sm" style="width: auto; padding: 0 8px;" title="Salvar Workspace">💾</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ── Coluna Central: Operações + Terminal ── -->
+        <div class="col-center">
+
+            <div id="active-banner" class="active-project-banner banner-no-project">
+                ⚠️ Nenhum projeto selecionado. Selecione ou crie um projeto na sidebar.
+            </div>
+
+            <div class="card">
+                <div class="card-title">🕹️ Painel de Operações</div>
+
+                <div style="margin-bottom:12px;">
+                    <label for="record-url">URL de Gravação</label>
+                    <div class="url-row">
+                        <input type="text" id="record-url" placeholder="Selecione um projeto para carregar a URL" readonly />
+                        <button id="btn-start-record" class="btn" style="min-width:120px;" disabled>⏺️ Gravar Voo</button>
+                    </div>
+                </div>
+
+                <div class="ops-grid">
+                    <div>
+                        <label>Fase 2: Compactador</label>
+                        <p style="font-size:10px;color:var(--text-muted);margin:3px 0 8px;">Sanitiza logs e gera o dicionário.</p>
+                        <button id="btn-run-sanitizer" class="btn btn-accent" disabled>⚡ Sanitizar Logs</button>
+                    </div>
+                    <div>
+                        <label>Fase 3: Dataset Firewall</label>
+                        <p style="font-size:10px;color:var(--text-muted);margin:3px 0 8px;">Valida registros contra o dicionário.</p>
+                        <button id="btn-run-validator" class="btn btn-blue" disabled>🔍 Validar Carga</button>
+                    </div>
+                    <div>
+                        <label>Fase 4: Gerador de Código</label>
+                        <p style="font-size:10px;color:var(--text-muted);margin:3px 0 8px;">Gera o robô resiliente via IA.</p>
+                        <button id="btn-run-generator" class="btn btn-accent" style="background: linear-gradient(135deg, #ec4899 0%, #be185d 100%);" disabled>🤖 Gerar Robô</button>
+                    </div>
+                    <div>
+                        <label>Fase 5: Aegis Runner</label>
+                        <p style="font-size:10px;color:var(--text-muted);margin:3px 0 8px;">Executa o robô de produção em lote.</p>
+                        <button id="btn-run-bot" class="btn" style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);" disabled>🚀 Executar Robô</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+                <div class="terminal-header">
+                    <div class="card-title">📟 Terminal de Execução</div>
+                    <div class="terminal-actions">
+                        <button id="btn-stop-proc" class="btn btn-stop btn-sm" disabled>⏹ Parar</button>
+                        <button id="btn-clear-logs" class="btn btn-sm" style="background:#374151;box-shadow:none;">Limpar</button>
+                    </div>
+                </div>
+                <div id="terminal" class="terminal-box">Aguardando disparo de tarefas...</div>
+            </div>
+        </div>
+
+        <!-- ── Coluna Direita: Visualizadores ── -->
+        <div class="col-right">
+            <div class="tabs-header">
+                <button class="tab-btn active" onclick="switchTab(event,'tab-dict')">📋 Dicionário</button>
+                <button class="tab-btn" onclick="switchTab(event,'tab-dataset')">📊 Dataset</button>
+                <button class="tab-btn" onclick="switchTab(event,'tab-report')">📝 Relatório</button>
+                <button class="tab-btn" onclick="switchTab(event,'tab-validation')">🛡️ Firewall</button>
+                <button class="tab-btn" id="btn-tab-steps" onclick="switchTab(event,'tab-steps')">🤖 Passos</button>
+            </div>
+
+            <div id="tab-dict" class="tab-content active"><div id="dict-view" class="empty-msg">Selecione um projeto para visualizar o dicionário.</div></div>
+            <div id="tab-dataset" class="tab-content"><div id="dataset-view" class="empty-msg">Selecione um projeto para visualizar o dataset.</div></div>
+            <div id="tab-report" class="tab-content"><div id="report-view" class="empty-msg">Selecione um projeto para visualizar o relatório.</div></div>
+            <div id="tab-validation" class="tab-content"><div id="validation-view" class="empty-msg">Selecione um projeto para visualizar o relatório de validação.</div></div>
+            <div id="tab-steps" class="tab-content">
+                <div class="steps-header-info">
+                    <div id="steps-summary" class="steps-summary">Selecione um projeto para carregar os passos.</div>
+                    <button id="btn-reset-steps" class="btn btn-sm" style="display:none; background:rgba(239, 68, 68, 0.2); border: 1px solid var(--error); padding: 2px 8px; font-size: 10px;" onclick="resetStepsState()">Zerar Status</button>
+                </div>
+                <div id="steps-view" class="empty-msg">Selecione um projeto para visualizar os passos do robô.</div>
+            </div>
+        </div>
+
+        <!-- ── Dashboard de Projetos (Exibido se nenhum projeto ativo) ── -->
+        <div class="projects-dashboard" id="projects-dashboard">
+            <div class="dashboard-header">
+                <div class="dashboard-info">
+                    <div class="dashboard-title-main">📁 Portal de Projetos RPA</div>
+                    <div class="dashboard-subtitle" id="dashboard-proj-count">Carregando projetos...</div>
+                </div>
+                <div class="dashboard-actions">
+                    <div class="search-container">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="project-search" class="search-input" placeholder="Buscar projeto..." oninput="filterDashboardProjects(this.value)">
+                    </div>
+                    <button class="btn btn-sm btn-accent" id="btn-new-project-dashboard" style="width: auto; padding: 8px 16px; border-radius: 8px;">➕ Novo Projeto</button>
+                </div>
+            </div>
+            
+            <div class="projects-grid" id="projects-grid">
+                <!-- Grid de projetos gerado dinamicamente -->
+            </div>
+
+            <!-- Configurações de Workspace no Dashboard -->
+            <div class="card" style="margin-top: auto; padding: 16px; border: 1px dashed rgba(124,58,237,0.3); background: rgba(5,5,10,0.3);">
+                <label style="font-size: 10px; margin-bottom: 6px; display: block; color: var(--text-muted); font-weight: 700;">CONFIGURAÇÃO DO WORKSPACE ATUAL</label>
+                <div style="display: flex; gap: 8px; max-width: 600px;">
+                    <input type="text" id="cfg-projects-dir-dashboard" placeholder="Caminho do diretório de projetos..." style="padding: 8px 12px;" />
+                    <button id="btn-save-cfg-dashboard" class="btn btn-sm" style="width: auto; padding: 0 16px; border-radius: 6px;">💾 Salvar Diretório</button>
+                </div>
+                <p style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">Este diretório é a pasta base física onde todos os robôs e metadados de projetos serão gerados.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Novo Projeto ── -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <h3>➕ Novo Projeto RPA</h3>
+            <div class="form-group">
+                <label for="modal-proj-name">Nome do Projeto</label>
+                <input type="text" id="modal-proj-name" placeholder="Ex: Portal Segura - Cotação PF" />
+            </div>
+            <div class="form-group">
+                <label for="modal-proj-url">URL de Gravação</label>
+                <input type="text" id="modal-proj-url" placeholder="Ex: http://localhost:5173/?e2e=true" />
+            </div>
+            <div class="form-group">
+                <label for="modal-proj-path">Caminho Físico de Destino (Opcional)</label>
+                <input type="text" id="modal-proj-path" placeholder="Ex: C:\\Projetos\\Lab\\projects\\meu-bot (Em branco usa padrão)" />
+                <div id="modal-path-preview" style="font-size: 11px; color: var(--accent); margin-top: 8px; font-family: 'Fira Code', monospace; word-break: break-all; opacity: 0.9;"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-close-modal">Cancelar</button>
+                <button class="btn btn-sm" id="btn-confirm-create" style="width:auto;">✅ Criar Projeto</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Novo Cenário ── -->
+    <div class="modal-overlay" id="modal-test-overlay">
+        <div class="modal">
+            <h3>➕ Novo Cenário de Teste</h3>
+            <input type="hidden" id="modal-test-proj-slug" />
+            <div class="form-group">
+                <label for="modal-test-name">Nome do Cenário</label>
+                <input type="text" id="modal-test-name" placeholder="Ex: Login com Sucesso" />
+            </div>
+            <div class="form-group">
+                <label for="modal-test-url">URL de Gravação (Opcional - Em branco usa a do projeto)</label>
+                <input type="text" id="modal-test-url" placeholder="Ex: http://localhost:5173/?login=true" />
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-close-test-modal">Cancelar</button>
+                <button class="btn btn-sm" id="btn-confirm-create-test" style="width:auto;">✅ Criar Cenário</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ── Estado ──
+        let activeProjectSlug = localStorage.getItem('aegis_active_project') || null;
+        let activeTestSlug = localStorage.getItem('aegis_active_test') || null;
+        let logsOffset = 0;
+        let logsInterval = null;
+        let allProjects = [];
+        let robotSteps = [];
+        let currentStepIndex = 0;
+        let currentTransactionId = "";
+        let justFinishedRun = false;
+
+        // ── Utilities ──
+        function updateStatusBadge(status, isRunning) {
+            const badge = document.getElementById('badge-status');
+            const stopBtn = document.getElementById('btn-stop-proc');
+            if (isRunning) {
+                badge.className = 'status-badge status-active';
+                badge.innerHTML = '<span class="badge-dot"></span>' + status;
+                stopBtn.disabled = false;
+            } else {
+                badge.className = 'status-badge status-idle';
+                badge.innerHTML = '<span class="badge-dot"></span>Ocioso';
+                stopBtn.disabled = true;
+            }
+        }
+
+        function switchTab(evt, tabId) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            if (evt && evt.currentTarget) {
+                evt.currentTarget.classList.add('active');
+            } else {
+                const btn = document.querySelector(`.tab-btn[onclick*="${tabId}"]`) || document.getElementById('btn-tab-steps');
+                if (btn) btn.classList.add('active');
+            }
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        function fmtDate(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+        }
+
+        function pillFor(status) {
+            const map = { 
+                empty: 'pill-empty', 
+                recorded: 'pill-recorded', 
+                sanitized: 'pill-sanitized', 
+                validated: 'pill-validated',
+                generated: 'pill-generated',
+                executed: 'pill-executed'
+            };
+            const label = { 
+                empty: 'Novo', 
+                recorded: 'Gravado', 
+                sanitized: 'Sanitizado', 
+                validated: 'Validado',
+                generated: 'Gerado',
+                executed: 'Executado'
+            };
+            return `<span class="status-pill ${map[status]||'pill-empty'}">${label[status]||status}</span>`;
+        }
+
+        // ── Renderizadores e Controle de Usabilidade Dual-State ──
+        let dashboardSearchQuery = '';
+
+        function updateLayoutState() {
+            const layout = document.getElementById('main-layout');
+            const dashboard = document.getElementById('projects-dashboard');
+            const sidebar = document.querySelector('.sidebar');
+            const colCenter = document.querySelector('.col-center');
+            const colRight = document.querySelector('.col-right');
+
+            if (activeProjectSlug) {
+                layout.classList.remove('no-active-project');
+                layout.classList.add('has-active-project');
+                
+                // Exibe as colunas de workspace
+                sidebar.style.display = 'flex';
+                colCenter.style.display = 'flex';
+                colRight.style.display = 'flex';
+                dashboard.style.display = 'none';
+
+                renderWorkspaceSidebar();
+            } else {
+                layout.classList.remove('has-active-project');
+                layout.classList.add('no-active-project');
+
+                // Oculta as colunas de workspace e mostra o dashboard
+                sidebar.style.display = 'none';
+                colCenter.style.display = 'none';
+                colRight.style.display = 'none';
+                dashboard.style.display = 'flex';
+
+                renderProjectsDashboard();
+            }
+        }
+
+        function renderWorkspaceSidebar() {
+            const list = document.getElementById('projects-list');
+            const sidebarHeader = document.querySelector('.sidebar-header');
+            
+            if (!activeProjectSlug) return;
+            
+            const p = allProjects.find(proj => proj.slug === activeProjectSlug);
+            if (!p) return;
+
+            // Restaura e atualiza o header da sidebar
+            sidebarHeader.innerHTML = `
+                <span class="sidebar-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; font-weight: 700;" title="${p.name}">📁 ${p.name}</span>
+                <button class="btn btn-ghost btn-sm" style="padding: 2px 6px; font-size: 9px; width: auto;" onclick="event.stopPropagation(); openNewTestModal('${p.slug}')">+ Cenário</button>
+            `;
+
+            const tests = p.tests || [];
+            let testsHtml = `
+                <button class="btn-back-projects" onclick="selectProject(null)">
+                    <span>← Voltar para Projetos</span>
+                </button>
+                
+                <div style="padding: 12px 12px 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); border-top: 1px solid rgba(124,58,237,0.1); margin-top: 8px;">
+                    Cenários do Projeto
+                </div>
+                
+                <div class="tests-list" style="display: flex; flex-direction: column; gap: 6px; padding: 6px 12px 12px;">
+                    ${tests.length === 0 ? `
+                        <div style="font-size: 10px; color: var(--text-muted); padding: 12px 0; text-align: center; line-height: 1.4;">
+                            Nenhum cenário criado.<br>Clique em "+ Cenário" acima para começar.
+                        </div>
+                    ` : tests.map(t => {
+                        const isTestActive = t.slug === activeTestSlug;
+                        return `
+                            <div class="test-item ${isTestActive ? 'active-test' : ''}" 
+                                 style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; cursor: pointer; transition: all 0.2s;"
+                                 onclick="event.stopPropagation(); selectTest('${p.slug}', '${t.slug}')">
+                                <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; width: 85%;">
+                                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;" title="${t.name}">${t.name}</span>
+                                    ${pillFor(t.status)}
+                                </div>
+                                <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
+                                        onclick="event.stopPropagation(); confirmDeleteTest('${p.slug}', '${t.slug}')" title="Remover cenário">🗑</button>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+            
+            list.innerHTML = testsHtml;
+        }
+
+        function renderProjectsDashboard() {
+            const grid = document.getElementById('projects-grid');
+            const countLabel = document.getElementById('dashboard-proj-count');
+            
+            const filtered = allProjects.filter(p => {
+                if (!dashboardSearchQuery) return true;
+                const query = dashboardSearchQuery.toLowerCase();
+                return p.name.toLowerCase().includes(query) || (p.url && p.url.toLowerCase().includes(query));
+            });
+
+            countLabel.innerHTML = `${allProjects.length} ${allProjects.length === 1 ? 'projeto encontrado' : 'projetos encontrados'} no workspace.`;
+
+            if (filtered.length === 0) {
+                grid.innerHTML = `
+                    <div class="proj-grid-card-new" onclick="document.getElementById('modal-overlay').classList.add('open'); document.getElementById('modal-proj-name').focus();">
+                        <div class="proj-grid-card-new-icon">➕</div>
+                        <div class="proj-grid-card-new-text">Criar Novo Projeto</div>
+                    </div>
+                    <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 40px 20px; font-size: 13px;">
+                        Nenhum projeto corresponde à sua pesquisa.
+                    </div>
+                `;
+                return;
+            }
+
+            let html = filtered.map(p => {
+                const testCount = p.tests ? p.tests.length : 0;
+                return `
+                    <div class="proj-grid-card" onclick="selectProject('${p.slug}')">
+                        <div>
+                            <button class="btn-delete-proj" onclick="event.stopPropagation(); confirmDeleteProject('${p.slug}')">🗑</button>
+                            <div class="proj-name" title="${p.name}">📁 ${p.name}</div>
+                            <div class="proj-url" title="${p.url || 'Sem URL de gravação configurada'}">
+                                🔗 ${p.url || '—'}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <div class="proj-grid-card-meta">
+                                <div class="proj-meta-item">
+                                    <span>Cenários de Teste:</span>
+                                    <span class="proj-meta-value ${testCount > 0 ? 'accent' : ''}">${testCount}</span>
+                                </div>
+                                <div class="proj-meta-item">
+                                    <span>Última Atividade:</span>
+                                    <span class="proj-meta-value">${fmtDate(p.last_activity)}</span>
+                                </div>
+                            </div>
+                            
+                            <div class="proj-grid-card-actions">
+                                <button class="btn-access-project" onclick="event.stopPropagation(); selectProject('${p.slug}')">Acessar Workspace</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Card tracejado de Novo Projeto ao final do grid
+            html += `
+                <div class="proj-grid-card-new" onclick="document.getElementById('modal-overlay').classList.add('open'); document.getElementById('modal-proj-name').focus();">
+                    <div class="proj-grid-card-new-icon">➕</div>
+                    <div class="proj-grid-card-new-text">Criar Novo Projeto</div>
+                </div>
+            `;
+
+            grid.innerHTML = html;
+        }
+
+        function filterDashboardProjects(query) {
+            dashboardSearchQuery = query;
+            renderProjectsDashboard();
+        }
+
+        function loadProjects(cb) {
+            fetch('/api/projects')
+                .then(r => r.json())
+                .then(data => {
+                    allProjects = data.projects || [];
+                    
+                    // Se projeto ativo não existe mais, desseleciona
+                    if (activeProjectSlug && !allProjects.find(p => p.slug === activeProjectSlug)) {
+                        activeProjectSlug = null;
+                        localStorage.removeItem('aegis_active_project');
+                        activeTestSlug = null;
+                        localStorage.removeItem('aegis_active_test');
+                    } else if (activeProjectSlug) {
+                        const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                        if (activeTestSlug && proj && proj.tests && !proj.tests.find(t => t.slug === activeTestSlug)) {
+                            activeTestSlug = proj.tests.length > 0 ? proj.tests[0].slug : null;
+                            localStorage.setItem('aegis_active_test', activeTestSlug);
+                        }
+                    }
+
+                    // Atualiza o layout conforme estado
+                    updateLayoutState();
+                    updateActiveUI();
+                    
+                    if (activeProjectSlug && activeTestSlug) {
+                        loadTelemetryData(activeProjectSlug);
+                    } else {
+                        clearVisualizers();
+                    }
+                    if (typeof cb === 'function') cb();
+                });
+        }
+
+        function selectProject(slug) {
+            activeProjectSlug = slug;
+            if (slug) {
+                localStorage.setItem('aegis_active_project', slug);
+                const proj = allProjects.find(p => p.slug === slug);
+                const tests = proj ? (proj.tests || []) : [];
+                if (tests.length > 0) {
+                    const exists = tests.find(t => t.slug === activeTestSlug);
+                    activeTestSlug = exists ? activeTestSlug : tests[0].slug;
+                } else {
+                    activeTestSlug = null;
+                }
+                localStorage.setItem('aegis_active_test', activeTestSlug);
+            } else {
+                localStorage.removeItem('aegis_active_project');
+                activeTestSlug = null;
+                localStorage.removeItem('aegis_active_test');
+            }
+            
+            updateLayoutState();
+            updateActiveUI();
+            if (activeProjectSlug && activeTestSlug) {
+                loadTelemetryData(activeProjectSlug);
+            } else {
+                clearVisualizers();
+            }
+        }
+
+        function selectTest(projectSlug, testSlug) {
+            activeProjectSlug = projectSlug;
+            activeTestSlug = testSlug;
+            localStorage.setItem('aegis_active_project', projectSlug);
+            localStorage.setItem('aegis_active_test', testSlug);
+            
+            updateLayoutState();
+            updateActiveUI();
+            if (activeProjectSlug && activeTestSlug) {
+                loadTelemetryData(activeProjectSlug);
+            } else {
+                clearVisualizers();
+            }
+        }
+
+        function updateActiveUI() {
+            const banner = document.getElementById('active-banner');
+            const urlInput = document.getElementById('record-url');
+            const btns = [
+                document.getElementById('btn-start-record'),
+                document.getElementById('btn-run-sanitizer'),
+                document.getElementById('btn-run-validator'),
+                document.getElementById('btn-run-generator'),
+            ];
+            const runBotBtn = document.getElementById('btn-run-bot');
+            
+            if (activeProjectSlug) {
+                const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                const name = proj ? proj.name : activeProjectSlug;
+                
+                let testName = "";
+                let url = "";
+                if (activeTestSlug && proj && proj.tests) {
+                    const test = proj.tests.find(t => t.slug === activeTestSlug);
+                    if (test) {
+                        testName = test.name;
+                        url = test.url || proj.url || '';
+                    }
+                }
+                
+                if (!url && proj) {
+                    url = proj.url || '';
+                }
+                
+                banner.className = 'active-project-banner';
+                if (testName) {
+                    banner.innerHTML = `📁 Projeto: <strong>${name}</strong> &nbsp;❯&nbsp; Cenário: <strong style="color:var(--accent);">${testName}</strong>`;
+                } else {
+                    banner.innerHTML = `📁 Projeto: <strong>${name}</strong> <span style="color:var(--text-muted);">(Sem Cenários)</span>`;
+                }
+                
+                urlInput.value = url;
+                
+                const hasTest = !!activeTestSlug;
+                urlInput.readOnly = !hasTest;
+                btns.forEach(b => b.disabled = !hasTest);
+                if (runBotBtn) runBotBtn.disabled = true; // Será atualizado por loadTelemetryData
+            } else {
+                banner.className = 'active-project-banner banner-no-project';
+                banner.innerHTML = '⚠️ Nenhum projeto selecionado. Selecione ou crie um projeto na sidebar.';
+                urlInput.value = '';
+                urlInput.readOnly = true;
+                btns.forEach(b => b.disabled = true);
+                if (runBotBtn) runBotBtn.disabled = true;
+            }
+        }
+
+        function confirmDeleteProject(slug) {
+            const proj = allProjects.find(p => p.slug === slug);
+            const name = proj ? proj.name : slug;
+            if (confirm(`Remover o projeto "${name}" e todos os seus dados?\nEsta ação não pode ser desfeita.`)) {
+                fetch('/api/projects/' + encodeURIComponent(slug), { method: 'DELETE' })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (activeProjectSlug === slug) {
+                                activeProjectSlug = null;
+                                localStorage.removeItem('aegis_active_project');
+                                activeTestSlug = null;
+                                localStorage.removeItem('aegis_active_test');
+                                clearVisualizers();
+                            }
+                            loadProjects();
+                        } else {
+                            alert(data.message);
+                        }
+                    });
+            }
+        }
+
+        function confirmDeleteTest(projectSlug, testSlug) {
+            const proj = allProjects.find(p => p.slug === projectSlug);
+            const test = proj && proj.tests ? proj.tests.find(t => t.slug === testSlug) : null;
+            const testName = test ? test.name : testSlug;
+            
+            if (confirm(`Remover o cenário "${testName}" e todos os seus dados?\nEsta ação não pode ser desfeita.`)) {
+                fetch(`/api/projects/${encodeURIComponent(projectSlug)}/tests/${encodeURIComponent(testSlug)}`, { method: 'DELETE' })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (activeTestSlug === testSlug && activeProjectSlug === projectSlug) {
+                                activeTestSlug = null;
+                                localStorage.removeItem('aegis_active_test');
+                                clearVisualizers();
+                            }
+                            loadProjects();
+                        } else {
+                            alert(data.message);
+                        }
+                    });
+            }
+        }
+
+        // ── Modal & Configurações de Workspace ──
+        let defaultProjectsDir = '';
+
+        function slugify(name) {
+            return name.toString().toLowerCase()
+                .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+                .replace(/[^\\w\\s-]/g, '')
+                .replace(/[\\s_-]+/g, '_')
+                .trim();
+        }
+
+        function fetchConfig() {
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(data => {
+                    defaultProjectsDir = data.projects_dir;
+                    const input = document.getElementById('cfg-projects-dir');
+                    if (input) input.value = defaultProjectsDir;
+                    const dashInput = document.getElementById('cfg-projects-dir-dashboard');
+                    if (dashInput) dashInput.value = defaultProjectsDir;
+                    updatePathPreview();
+                });
+        }
+
+        function updatePathPreview() {
+            const name = document.getElementById('modal-proj-name').value.trim();
+            const customPath = document.getElementById('modal-proj-path').value.trim();
+            const previewDiv = document.getElementById('modal-path-preview');
+            
+            if (!previewDiv) return;
+            
+            if (customPath) {
+                previewDiv.innerText = '📁 Salvar em: ' + customPath;
+            } else if (name) {
+                const slug = slugify(name);
+                const separator = defaultProjectsDir.includes('/') ? '/' : '\\\\';
+                previewDiv.innerText = '📁 Salvar em: ' + defaultProjectsDir + separator + slug;
+            } else {
+                previewDiv.innerText = '📁 Salvar em: ' + defaultProjectsDir + (defaultProjectsDir.includes('/') ? '/' : '\\\\') + '[slug_do_projeto]';
+            }
+        }
+
+        document.getElementById('modal-proj-name').addEventListener('input', updatePathPreview);
+        document.getElementById('modal-proj-path').addEventListener('input', updatePathPreview);
+
+        function saveWorkspaceDir(projects_dir) {
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projects_dir })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Diretório do Workspace atualizado com sucesso!');
+                    fetchConfig();
+                    loadProjects();
+                } else {
+                    alert(data.message);
+                }
+            });
+        }
+
+        document.getElementById('btn-save-cfg').addEventListener('click', () => {
+            const projects_dir = document.getElementById('cfg-projects-dir').value.trim();
+            if (!projects_dir) return alert('O diretório de projetos não pode ser vazio.');
+            saveWorkspaceDir(projects_dir);
+        });
+
+        document.getElementById('btn-save-cfg-dashboard').addEventListener('click', () => {
+            const projects_dir = document.getElementById('cfg-projects-dir-dashboard').value.trim();
+            if (!projects_dir) return alert('O diretório de projetos não pode ser vazio.');
+            saveWorkspaceDir(projects_dir);
+        });
+
+        document.getElementById('btn-new-project-dashboard').addEventListener('click', () => {
+            document.getElementById('modal-overlay').classList.add('open');
+            document.getElementById('modal-proj-name').focus();
+            fetchConfig();
+        });
+
+        document.getElementById('btn-open-modal').addEventListener('click', () => {
+            document.getElementById('modal-overlay').classList.add('open');
+            document.getElementById('modal-proj-name').focus();
+            fetchConfig(); // Garante o caminho mais atualizado ao abrir
+        });
+        document.getElementById('btn-close-modal').addEventListener('click', () => {
+            document.getElementById('modal-overlay').classList.remove('open');
+        });
+        document.getElementById('modal-overlay').addEventListener('click', e => {
+            if (e.target === document.getElementById('modal-overlay'))
+                document.getElementById('modal-overlay').classList.remove('open');
+        });
+        document.getElementById('btn-confirm-create').addEventListener('click', () => {
+            const name = document.getElementById('modal-proj-name').value.trim();
+            const url = document.getElementById('modal-proj-url').value.trim();
+            const custom_path = document.getElementById('modal-proj-path').value.trim();
+            if (!name) { alert('Por favor, informe o nome do projeto.'); return; }
+            fetch('/api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url, custom_path })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('modal-overlay').classList.remove('open');
+                    document.getElementById('modal-proj-name').value = '';
+                    document.getElementById('modal-proj-url').value = '';
+                    document.getElementById('modal-proj-path').value = '';
+                    loadProjects(() => {
+                        selectProject(data.project.slug);
+                    });
+                } else {
+                    alert(data.message);
+                }
+            });
+        });
+
+        // ── Terminal / Polling ──
+        function appendLogs(lines) {
+            const t = document.getElementById('terminal');
+            if (lines.length > 0) {
+                if (t.innerText === 'Aguardando disparo de tarefas...') t.innerText = '';
+                lines.forEach(l => { 
+                    t.innerText += l; 
+                    
+                    // Parse logs for steps tracking
+                    if (l.includes('[AEGIS_TRANSACTION]')) {
+                        const parts = l.split('|').map(p => p.trim());
+                        const status = parts[0].split(' ')[1];
+                        const txId = parts[1];
+                        const scenario = parts[2] || '';
+                        
+                        currentTransactionId = txId;
+                        const summaryDiv = document.getElementById('steps-summary');
+                        if (status === 'START') {
+                            summaryDiv.innerHTML = `⚙️ Executando Transação: <strong>#${txId}</strong> &nbsp;|&nbsp; Cenário: <strong>${scenario}</strong>`;
+                            resetStepsState();
+                        } else if (status === 'SUCCESS') {
+                            summaryDiv.innerHTML = `✅ Transação <strong>#${txId}</strong> Concluída com Sucesso!`;
+                        } else if (status === 'FAILED') {
+                            summaryDiv.innerHTML = `❌ Transação <strong>#${txId}</strong> Falhou!`;
+                        }
+                    }
+                    
+                    if (l.includes('[AEGIS_STEP]')) {
+                        const parts = l.split('|').map(p => p.trim());
+                        if (parts.length >= 4) {
+                            const statusPart = parts[0].split(' ');
+                            const status = statusPart[1]; // START, SUCCESS, HEALED, FAILED
+                            const type = parts[1];
+                            const selector = parts[2];
+                            const desc = parts[3];
+                            const errorMsg = parts[4] || '';
+                            
+                            updateRobotStep(status, type, selector, desc, errorMsg);
+                        }
+                    }
+                });
+                t.scrollTop = t.scrollHeight;
+            }
+        }
+
+        function pollLogs() {
+            fetch(`/api/logs?offset=${logsOffset}`)
+                .then(r => r.json())
+                .then(data => {
+                    appendLogs(data.lines);
+                    logsOffset = data.offset;
+                    updateStatusBadge(data.status, data.running);
+                    if (!data.running && logsInterval) {
+                        clearInterval(logsInterval);
+                        logsInterval = null;
+                        
+                        let keepSteps = false;
+                        if (justFinishedRun) {
+                            justFinishedRun = false;
+                            keepSteps = true;
+                            // Mark running steps as stopped
+                            robotSteps.forEach(step => {
+                                if (step.status === 'RUNNING') {
+                                    step.status = 'STOPPED';
+                                }
+                            });
+                            updateStepsUI();
+                            
+                            // Grava o histórico final no backend de forma assíncrona
+                            if (activeProjectSlug && activeTestSlug) {
+                                fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/steps-history`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        test_slug: activeTestSlug,
+                                        steps: robotSteps
+                                    })
+                                }).catch(e => console.error('Erro ao salvar historico:', e));
+                            }
+                        }
+                        
+                        // Verifica se o processo terminou com erro (código diferente de 0)
+                        const termText = document.getElementById('terminal').innerText;
+                        const match = termText.match(/\[AEGIS COCKPIT\] Processo concluído com código:\s*([1-9]\d*)/);
+                        if (match) {
+                            const errCode = match[1];
+                            alert(`❌ Falha na execução da tarefa. O processo terminou com código de erro ${errCode}. Verifique o log para detalhes.`);
+                        }
+                        
+                        if (activeProjectSlug) loadTelemetryData(activeProjectSlug, keepSteps);
+                        loadProjects(); // Atualiza status pills
+                    }
+                })
+                .catch(err => console.error('Polling error:', err));
+        }
+
+        function startPolling() {
+            if (logsInterval) clearInterval(logsInterval);
+            logsInterval = setInterval(pollLogs, 800);
+        }
+
+        // ── Ações dos Botões ──
+        document.getElementById('btn-start-record').addEventListener('click', () => {
+            if (!activeProjectSlug) return alert('Selecione um projeto primeiro.');
+            if (!activeTestSlug) return alert('Selecione um cenário primeiro.');
+            const url = document.getElementById('record-url').value.trim();
+            if (!url) return alert('Por favor, informe a URL.');
+
+            // Salva URL editada no project.json via API (patch)
+            fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, test_slug: activeTestSlug })
+            }).catch(() => {});
+
+            document.getElementById('terminal').innerText = 'Iniciando BlackBox Gravador Headed...';
+            logsOffset = 0;
+            fetch('/api/run-recorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, project_slug: activeProjectSlug, test_slug: activeTestSlug })
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-run-sanitizer').addEventListener('click', () => {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            document.getElementById('terminal').innerText = 'Iniciando Sanitizador de Logs...';
+            logsOffset = 0;
+            fetch('/api/run-sanitizer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_slug: activeProjectSlug, test_slug: activeTestSlug })
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-run-validator').addEventListener('click', () => {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            document.getElementById('terminal').innerText = 'Iniciando Dataset Firewall Validator...';
+            logsOffset = 0;
+            fetch('/api/run-validator', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_slug: activeProjectSlug, test_slug: activeTestSlug })
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-run-generator').addEventListener('click', () => {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            document.getElementById('terminal').innerText = 'Iniciando Gerador de Código com IA...';
+            logsOffset = 0;
+            fetch('/api/run-code-generator', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_slug: activeProjectSlug, test_slug: activeTestSlug })
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-run-bot').addEventListener('click', () => {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            document.getElementById('terminal').innerText = 'Iniciando Robô de Produção (Aegis Runner)...';
+            logsOffset = 0;
+            resetStepsState();
+            justFinishedRun = true;
+            document.getElementById('steps-summary').innerHTML = '⚙️ Preparando execução do robô...';
+            switchTab(null, 'tab-steps');
+            
+            fetch('/api/run-bot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_slug: activeProjectSlug, test_slug: activeTestSlug })
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-stop-proc').addEventListener('click', () => {
+            fetch('/api/stop', { method: 'POST' });
+        });
+
+        document.getElementById('btn-install-browsers').addEventListener('click', () => {
+            if (!confirm('Deseja iniciar a instalação de navegadores via Playwright CLI? (chromium, msedge)')) return;
+            document.getElementById('terminal').innerText = 'Iniciando instalação de navegadores via Playwright CLI...';
+            logsOffset = 0;
+            fetch('/api/install-browsers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            })
+            .then(r => r.json())
+            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+        });
+
+        document.getElementById('btn-clear-logs').addEventListener('click', () => {
+            document.getElementById('terminal').innerText = 'Aguardando disparo de tarefas...';
+        });
+
+        // ── Visualizadores ──
+         function clearVisualizers() {
+            const msg = '<div class="empty-msg">Selecione um projeto e cenário para visualizar.</div>';
+            document.getElementById('dict-view').innerHTML = msg;
+            document.getElementById('dataset-view').innerHTML = msg;
+            document.getElementById('report-view').innerHTML = msg;
+            document.getElementById('validation-view').innerHTML = msg;
+            
+            document.getElementById('steps-view').innerHTML = '<div class="empty-msg">Selecione um projeto para visualizar os passos do robô.</div>';
+            document.getElementById('steps-summary').innerHTML = 'Selecione um projeto para carregar os passos.';
+            document.getElementById('btn-reset-steps').style.display = 'none';
+            robotSteps = [];
+            currentStepIndex = 0;
+        }
+
+        function loadTelemetryData(slug, keepStepsState = false) {
+            if (!activeTestSlug) {
+                clearVisualizers();
+                return;
+            }
+            fetch('/api/projects/' + encodeURIComponent(slug) + '/telemetry-files?test_slug=' + encodeURIComponent(activeTestSlug))
+                .then(r => r.json())
+                .then(data => {
+                    renderDict(data.dictionary);
+                    renderDataset(data.dataset);
+                    renderReport(data.report);
+                    renderValidation(data.validation);
+                    if (!keepStepsState) {
+                        renderSteps(data.recording, data.steps_history);
+                    }
+                    
+                    const runBotBtn = document.getElementById('btn-run-bot');
+                    if (runBotBtn) {
+                        runBotBtn.disabled = !data.has_bot;
+                    }
+                })
+                .catch(() => clearVisualizers());
+        }
+
+        // ── Modal Cenários de Teste Event Listeners ──
+        function openNewTestModal(projSlug) {
+            document.getElementById('modal-test-proj-slug').value = projSlug;
+            document.getElementById('modal-test-name').value = '';
+            
+            const proj = allProjects.find(p => p.slug === projSlug);
+            document.getElementById('modal-test-url').value = proj ? (proj.url || '') : '';
+            
+            document.getElementById('modal-test-overlay').classList.add('open');
+            document.getElementById('modal-test-name').focus();
+        }
+        
+        document.getElementById('btn-close-test-modal').addEventListener('click', () => {
+            document.getElementById('modal-test-overlay').classList.remove('open');
+        });
+        
+        document.getElementById('modal-test-overlay').addEventListener('click', e => {
+            if (e.target === document.getElementById('modal-test-overlay'))
+                document.getElementById('modal-test-overlay').classList.remove('open');
+        });
+        
+        document.getElementById('btn-confirm-create-test').addEventListener('click', () => {
+            const projectSlug = document.getElementById('modal-test-proj-slug').value;
+            const name = document.getElementById('modal-test-name').value.trim();
+            const url = document.getElementById('modal-test-url').value.trim();
+            if (!name) { alert('Por favor, informe o nome do cenário.'); return; }
+            
+            fetch(`/api/projects/${encodeURIComponent(projectSlug)}/tests`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('modal-test-overlay').classList.remove('open');
+                    loadProjects(() => {
+                        selectTest(projectSlug, data.test.slug);
+                    });
+                } else {
+                    alert(data.message);
+                }
+            });
+        });
+
+        function renderDict(dictionary) {
+            const div = document.getElementById('dict-view');
+            if (!dictionary || !dictionary.fields || !Object.keys(dictionary.fields).length) {
+                div.innerHTML = '<div class="empty-msg">Nenhum dicionário gerado. Execute a Sanitização primeiro.</div>';
+                return;
+            }
+            let html = '<div class="table-wrap"><table><tr><th>Chave Semântica</th><th>Tipo</th><th>Seletor</th><th>Valor Observado</th><th>Regex</th></tr>';
+            for (const [key, val] of Object.entries(dictionary.fields)) {
+                html += `<tr>
+                    <td><strong>${key}</strong></td>
+                    <td><code>${val.type}</code></td>
+                    <td style="font-size:10px;font-family:monospace;">${val.selector}</td>
+                    <td>"${val.observed_value}"</td>
+                    <td><code>${(val.validation_rules && val.validation_rules.regex) || 'N/A'}</code></td>
+                </tr>`;
+            }
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function renderDataset(dataset) {
+            const div = document.getElementById('dataset-view');
+            if (!dataset || !dataset.length) {
+                div.innerHTML = '<div class="empty-msg">Nenhum dataset gerado ainda.</div>';
+                return;
+            }
+            const keys = Object.keys(dataset[0]);
+            let html = '<div class="table-wrap"><table><tr>' + keys.map(k => `<th>${k}</th>`).join('') + '</tr>';
+            dataset.forEach(row => {
+                html += '<tr>' + keys.map(k => {
+                    const v = row[k] === null ? '<em style="color:var(--text-muted)">null</em>' : row[k];
+                    return `<td>${v}</td>`;
+                }).join('') + '</tr>';
+            });
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function renderSteps(recording, stepsHistory = null) {
+            const div = document.getElementById('steps-view');
+            const btnReset = document.getElementById('btn-reset-steps');
+            const summary = document.getElementById('steps-summary');
+            
+            // Se houver histórico salvo da última execução, use-o!
+            if (stepsHistory && stepsHistory.length > 0) {
+                robotSteps = stepsHistory;
+                const firstPending = robotSteps.findIndex(s => s.status === 'PENDING' || s.status === 'RUNNING');
+                currentStepIndex = firstPending !== -1 ? firstPending : robotSteps.length - 1;
+                
+                const total = robotSteps.length;
+                const success = robotSteps.filter(s => s.status === 'SUCCESS').length;
+                const failed = robotSteps.filter(s => s.status === 'FAILED' || s.status === 'STOPPED').length;
+                const healed = robotSteps.filter(s => s.usedHealing).length;
+                
+                summary.innerHTML = `📋 Histórico da Última Execução | Total: <strong>${total}</strong> &nbsp;|&nbsp; Sucesso: <strong style="color:var(--success);">${success}</strong> &nbsp;|&nbsp; Falhas/Parados: <strong style="color:var(--error);">${failed}</strong> &nbsp;|&nbsp; Healed: <strong style="color:var(--accent);">${healed}</strong>`;
+                btnReset.style.display = 'inline-block';
+                updateStepsUI();
+                return;
+            }
+            
+            if (!recording || !recording.events || !recording.events.length) {
+                div.innerHTML = '<div class="empty-msg">Nenhum passo gravado para este cenário.</div>';
+                summary.innerText = 'Passos do robô não gravados.';
+                btnReset.style.display = 'none';
+                robotSteps = [];
+                currentStepIndex = 0;
+                return;
+            }
+            
+            // Map recorded events to robotSteps
+            robotSteps = recording.events.filter(evt => evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select').map((evt, idx) => {
+                let actionDesc = '';
+                if (evt.type === 'fill' || evt.type === 'change') {
+                    actionDesc = evt.value ? `Preencher: "${evt.value}"` : 'Preencher campo';
+                } else if (evt.type === 'click') {
+                    actionDesc = evt.text ? `Clicar em: "${evt.text}"` : 'Clique físico';
+                } else {
+                    actionDesc = evt.text || evt.value || 'Interação';
+                }
+                
+                return {
+                    index: idx + 1,
+                    type: evt.type,
+                    selector: evt.selector || '',
+                    desc: actionDesc,
+                    status: 'PENDING',
+                    error: '',
+                    usedHealing: false
+                };
+            });
+            
+            currentStepIndex = 0;
+            summary.innerHTML = `📋 Total de Passos Mapeados: <strong>${robotSteps.length}</strong>`;
+            btnReset.style.display = 'inline-block';
+            updateStepsUI();
+        }
+
+        function updateStepsUI() {
+            const div = document.getElementById('steps-view');
+            if (robotSteps.length === 0) {
+                div.innerHTML = '<div class="empty-msg">Nenhum passo carregado.</div>';
+                return;
+            }
+            
+            let html = '<div class="table-wrap"><table>';
+            html += '<tr><th style="width:7%">#</th><th style="width:15%">Tipo</th><th style="width:40%">Seletor Físico</th><th style="width:23%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
+            
+            robotSteps.forEach(step => {
+                let statusClass = 'status-step-pending';
+                let statusText = 'Pendente';
+                
+                if (step.status === 'RUNNING') {
+                    statusClass = 'status-step-running';
+                    statusText = '⏳ Executando';
+                } else if (step.status === 'SUCCESS') {
+                    statusClass = 'status-step-success';
+                    statusText = '✓ Sucesso';
+                } else if (step.status === 'HEALED') {
+                    statusClass = 'status-step-healed';
+                    statusText = '✨ Healed';
+                } else if (step.status === 'FAILED') {
+                    statusClass = 'status-step-failed';
+                    statusText = '❌ Falhou';
+                } else if (step.status === 'STOPPED') {
+                    statusClass = 'status-step-stopped';
+                    statusText = '⏹ Parado';
+                }
+                
+                let typeClass = 'type-other';
+                if (step.type === 'click') typeClass = 'type-click';
+                else if (step.type === 'fill') typeClass = 'type-fill';
+                
+                const titleAttr = step.error ? `title="${step.error.replace(/"/g, '&quot;')}"` : '';
+                const styleErr = step.error ? 'style="cursor:help; border-bottom: 1px dotted var(--error);"' : '';
+                
+                const selectorDisplay = step.selector.length > 60 ? step.selector.substring(0, 57) + '...' : step.selector;
+                
+                html += `<tr>
+                    <td><strong>${step.index}</strong></td>
+                    <td><span class="type-badge ${typeClass}">${step.type}</span></td>
+                    <td style="font-family:monospace;font-size:10px;" title="${step.selector}">${selectorDisplay}</td>
+                    <td ${titleAttr} ${styleErr}>${step.desc}</td>
+                    <td><span class="status-badge-step ${statusClass}">${statusText}</span></td>
+                </tr>`;
+            });
+            
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function resetStepsState() {
+            robotSteps.forEach(step => {
+                step.status = 'PENDING';
+                step.error = '';
+                step.usedHealing = false;
+            });
+            currentStepIndex = 0;
+            updateStepsUI();
+            
+            // Também notifica o backend para limpar o histórico persistido
+            if (activeProjectSlug && activeTestSlug) {
+                fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/steps-history/clear?test_slug=${encodeURIComponent(activeTestSlug)}`, {
+                    method: 'POST'
+                }).catch(e => console.error('Erro ao limpar historico no servidor:', e));
+            }
+        }
+
+        function updateRobotStep(status, type, selector, desc, errorMsg) {
+            let foundIdx = -1;
+            
+            // 1. Procura primeiro a partir do currentStepIndex atual buscando match EXATO de seletor
+            for (let i = currentStepIndex; i < robotSteps.length; i++) {
+                if (robotSteps[i].selector === selector) {
+                    foundIdx = i;
+                    break;
+                }
+            }
+            
+            // 2. Se não achou por seletor exato, busca o próximo passo PENDENTE do mesmo tipo (clique ou fill)
+            if (foundIdx === -1) {
+                for (let i = currentStepIndex; i < robotSteps.length; i++) {
+                    if (robotSteps[i].type === type && robotSteps[i].status === 'PENDING') {
+                        foundIdx = i;
+                        break;
+                    }
+                }
+            }
+            
+            // 3. Se ainda assim não achou, busca em toda a lista por um passo PENDENTE com o mesmo seletor
+            if (foundIdx === -1) {
+                for (let i = 0; i < robotSteps.length; i++) {
+                    if (robotSteps[i].selector === selector && robotSteps[i].status === 'PENDING') {
+                        foundIdx = i;
+                        break;
+                    }
+                }
+            }
+            
+            if (foundIdx !== -1) {
+                if (status === 'START') {
+                    robotSteps[foundIdx].status = 'RUNNING';
+                    currentStepIndex = foundIdx;
+                } else {
+                    robotSteps[foundIdx].status = status;
+                    if (status === 'HEALED') {
+                        robotSteps[foundIdx].usedHealing = true;
+                    } else if (status === 'FAILED') {
+                        robotSteps[foundIdx].error = errorMsg || 'Ocorreu um erro neste passo.';
+                    }
+                }
+            } else {
+                // Insere passo dinamicamente caso não estivesse na gravação
+                const newStep = {
+                    index: robotSteps.length + 1,
+                    type: type,
+                    selector: selector,
+                    desc: desc || 'Passo dinâmico',
+                    status: status === 'START' ? 'RUNNING' : status,
+                    error: errorMsg,
+                    usedHealing: status === 'HEALED'
+                };
+                robotSteps.push(newStep);
+                currentStepIndex = robotSteps.length - 1;
+            }
+            
+            updateStepsUI();
+        }
+
+        function parseSectionMarkdown(md) {
+            let lines = md.split('\\n');
+            let html = [], inTable = false, tableHtml = '', inList = false, inCodeBlock = false, codeContent = '';
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (line.startsWith('```')) {
+                    if (inCodeBlock) {
+                        inCodeBlock = false;
+                        html.push(`<pre style="background:#02020a;border:1px solid rgba(124,58,237,0.15);padding:10px;border-radius:6px;font-family:'Fira Code',monospace;font-size:10px;overflow-x:auto;color:#a78bfa;margin:8px 0;"><code>${codeContent}</code></pre>`);
+                        codeContent = '';
+                    } else { inCodeBlock = true; }
+                    continue;
+                }
+                if (inCodeBlock) { codeContent += line + '\\n'; continue; }
+                if (line.startsWith('|')) {
+                    if (inList) { html.push('</ul>'); inList = false; }
+                    if (!inTable) { inTable = true; tableHtml = '<div class="table-wrap"><table>'; }
+                    const cells = line.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
+                    if (line.includes('---')) continue;
+                    const isHeader = line.includes('Passo') || line.includes('Cenário') || line.includes('Chave');
+                    tableHtml += '<tr>' + cells.map(c => isHeader ? `<th>${c}</th>` : `<td>${c}</td>`).join('') + '</tr>';
+                    continue;
+                } else if (inTable) { inTable = false; tableHtml += '</table></div>'; html.push(tableHtml); }
+                if (line.startsWith('# ')) { if(inList){html.push('</ul>');inList=false;} html.push(`<h3 style="color:#fff;margin:0 0 8px;">${line.slice(2)}</h3>`); }
+                else if (line.startsWith('## ')) { if(inList){html.push('</ul>');inList=false;} html.push(`<h4 style="color:var(--accent);margin:0 0 10px;border-bottom:1px solid rgba(124,58,237,0.2);padding-bottom:5px;font-size:13px;">${line.slice(3)}</h4>`); }
+                else if (line.startsWith('### ')) { if(inList){html.push('</ul>');inList=false;} html.push(`<h5 style="color:#fff;margin:12px 0 6px;font-size:11px;">${line.slice(4)}</h5>`); }
+                else if (line.startsWith('* ')) { if(!inList){inList=true;html.push('<ul style="margin:8px 0;padding-left:18px;">')} html.push(`<li style="margin-bottom:5px;font-size:12px;color:#d1d5db;">${line.slice(2)}</li>`); }
+                else if (line === '---') { if(inList){html.push('</ul>');inList=false;} html.push('<hr style="border:none;border-bottom:1px solid rgba(124,58,237,0.12);margin:15px 0;">'); }
+                else if (line === '') { if(inList){html.push('</ul>');inList=false;} }
+                else { if(inList){html.push('</ul>');inList=false;} html.push(`<p style="margin:8px 0;font-size:12px;color:#d1d5db;line-height:1.6;">${line}</p>`); }
+            }
+            if (inTable) { tableHtml += '</table></div>'; html.push(tableHtml); }
+            if (inList) html.push('</ul>');
+            let result = html.join('\\n');
+            result = result.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+            result = result.replace(/`(.*?)`/g, '<code>$1</code>');
+            return result;
+        }
+
+        let activeReportContent = '';
+
+        function downloadReport() {
+            if (!activeReportContent) {
+                alert('Nenhum relatório disponível para download.');
+                return;
+            }
+            const blob = new Blob([activeReportContent], { type: 'text/markdown;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `${activeProjectSlug || 'projeto'}_relatorio.md`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function renderReport(md) {
+            const div = document.getElementById('report-view');
+            activeReportContent = md || '';
+            if (!md) { 
+                div.innerHTML = '<div class="empty-msg">Nenhum relatório disponível. Execute a Sanitização.</div>'; 
+                return; 
+            }
+            
+            div.innerHTML = `
+                <div class="report-download-card" style="
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 40px 30px;
+                    margin: 30px auto;
+                    max-width: 480px;
+                    background: rgba(30, 27, 75, 0.4);
+                    backdrop-filter: blur(12px);
+                    -webkit-backdrop-filter: blur(12px);
+                    border: 1px solid rgba(139, 92, 246, 0.25);
+                    border-radius: 16px;
+                    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+                    text-align: center;
+                    animation: fadeIn 0.5s ease-out;
+                ">
+                    <div class="icon-pulse" style="
+                        width: 80px;
+                        height: 80px;
+                        border-radius: 50%;
+                        background: rgba(139, 92, 246, 0.15);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 36px;
+                        margin-bottom: 24px;
+                        border: 1px solid rgba(139, 92, 246, 0.3);
+                        box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+                    ">
+                        📥
+                    </div>
+                    <h3 style="
+                        color: #fff;
+                        font-size: 20px;
+                        font-weight: 600;
+                        margin: 0 0 10px 0;
+                        background: linear-gradient(135deg, #fff 0%, #c084fc 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                    ">
+                        Relatório Disponível para Download
+                    </h3>
+                    <p style="
+                        color: #9ca3af;
+                        font-size: 13px;
+                        line-height: 1.6;
+                        margin: 0 0 28px 0;
+                    ">
+                        O relatório <strong>relatorio.md</strong> foi gerado e sanitizado com sucesso. Devido à riqueza de detalhes e formatação em Markdown, baixe o arquivo para visualizá-lo em seu editor preferido.
+                    </p>
+                    <button class="btn btn-accent" style="
+                        padding: 12px 28px;
+                        font-size: 14px;
+                        font-weight: 600;
+                        border-radius: 8px;
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 10px;
+                        cursor: pointer;
+                        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                        box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+                        background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+                        border: none;
+                        color: #fff;
+                    " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(139, 92, 246, 0.6)';" 
+                      onmouseout="this.style.transform='none'; this.style.boxShadow='0 4px 15px rgba(139, 92, 246, 0.4)';"
+                      onclick="downloadReport()">
+                        Baixar Relatório (Markdown)
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderValidation(v) {
+            const div = document.getElementById('validation-view');
+            if (!v || !Object.keys(v).length) {
+                div.innerHTML = '<div class="empty-msg">Nenhum resultado de validação. Execute o Firewall.</div>';
+                return;
+            }
+            const ok = v.is_valid;
+            let html = `<div class="status-box ${ok ? 'box-ok' : 'box-err'}">
+                <strong>${ok ? '✅ DATASET PRONTO PARA CARGA (100% VÁLIDO)' : '❌ DATASET CONTÉM INCONSISTÊNCIAS'}</strong><br>
+                <span style="font-size:10px;opacity:0.8;">${v.dataset_path || ''}</span>
+            </div>
+            <div class="firewall-summary">
+                <div class="metric-card"><div class="metric-label">Processados</div><div class="metric-value v-neutral">${v.total_records || 0}</div></div>
+                <div class="metric-card"><div class="metric-label">Válidos</div><div class="metric-value v-ok">${v.passed_records || 0}</div></div>
+                <div class="metric-card"><div class="metric-label">Inválidos</div><div class="metric-value v-err">${v.failed_records !== undefined ? v.failed_records : (v.critical_errors_count !== undefined ? v.critical_errors_count : 0)}</div></div>
+            </div>`;
+            if (v.failures && v.failures.length) {
+                html += '<div class="card" style="padding:10px;max-height:200px;overflow-y:auto;">';
+                v.failures.forEach(f => {
+                    html += `<div class="failure-item">
+                        <strong style="font-size:11px;color:var(--error);">Registro ID: ${f.record_id} (Índice ${f.record_index})</strong>
+                        <ul style="margin:4px 0 0 14px;font-size:11px;color:#d1d5db;">
+                            ${f.errors.map(e => `<li>${e}</li>`).join('')}
+                        </ul>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+            div.innerHTML = html;
+        }
+
+        // ── Init ──
+        updateLayoutState();
+        fetchConfig();
+        loadProjects();
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                updateStatusBadge(data.status, data.running);
+                if (data.running) startPolling();
+            });
+    </script>
+</body>
+</html>
