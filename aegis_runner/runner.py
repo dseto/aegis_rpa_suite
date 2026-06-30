@@ -120,112 +120,106 @@ class TransactionRunner:
             except Exception:
                 pass
 
-        # 2. Aguarda visibilidade por até 2 segundos antes de listar os candidatos
-        try:
-            page.wait_for_selector(selector, state="visible", timeout=2000)
-        except Exception:
-            pass
-
-        try:
-            # Tenta listar todos os elementos que combinam com o seletor
-            locators = page.locator(selector).all()
-        except Exception:
-            locators = []
-
-        if not locators:
-            # Se não achou nenhum no DOM, faz a tentativa padrão para disparar a exceção correta
+        # 2. Loop de retentativas com Auto-Healing de UI
+        last_exception = None
+        for attempt in range(1, 3):
             try:
-                print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
-                page.locator(selector).click(timeout=timeout)
-                self._log_step(page, "SUCCESS", "click", selector, target_description)
-                return True
-            except Exception as e:
-                return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
+                # Nível 2: Auto-Healing de UI - Tenta limpar overlays ativos na segunda tentativa
+                if attempt == 2:
+                    print(f"[AEGIS RUNNER] [RETRY 2] Limpando possíveis overlays pendentes via Escape...")
+                    page.keyboard.press("Escape")
+                    time.sleep(0.3)
 
-        # Sugestão A: Heurística Estática (Separar âncoras locais de links externos reais)
-        prioritized_locators = []
-        anchor_locators = []
-        for loc in locators:
-            try:
-                # Limitamos o timeout a 500ms para evitar travar em elementos ocultos do DOM
-                href = loc.get_attribute("href", timeout=500) or ""
-                if href.startswith("#"):
-                    anchor_locators.append(loc)
-                else:
-                    prioritized_locators.append(loc)
-            except Exception:
-                prioritized_locators.append(loc)
+                # Aguarda visibilidade por até 2 segundos antes de listar os candidatos
+                try:
+                    page.wait_for_selector(selector, state="visible", timeout=2000)
+                except Exception:
+                    pass
 
-        # Se temos elementos que não são âncoras, focamos neles. Caso contrário, usamos o que sobrou.
-        candidate_locators = prioritized_locators if prioritized_locators else anchor_locators
-        
-        # Sugestão B: Validação Ativa de Transição de Estado
-        initial_url = page.url
-        clicked = False
-        
-        for idx, loc in enumerate(candidate_locators):
-            try:
-                # Pula rapidamente elementos que não estão visíveis no DOM ativo
-                if not loc.is_visible():
-                    continue
+                locators = page.locator(selector).all()
+                if not locators:
+                    print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
+                    page.locator(selector).click(timeout=timeout)
+                    self._log_step(page, "SUCCESS", "click", selector, target_description)
+                    return True
 
-                print(f"[AEGIS RUNNER] Tentando clique físico no elemento {idx+1}/{len(candidate_locators)} de '{selector}'...")
-                loc.scroll_into_view_if_needed(timeout=1000)
-                time.sleep(0.2)
-                loc.click(timeout=3000, force=True)  # Timeout de 3s para o clique físico do candidato
-                clicked = True
-                
-                if validate_navigation:
-                    # Aguarda um pequeno período para validar se a navegação ocorreu
-                    time.sleep(3.0)
-                    if page.url == initial_url:
-                        # A URL não mudou. Se for um link externo válido, força a navegação direta
+                # Heurística Estática (Separar âncoras locais de links externos reais)
+                prioritized_locators = []
+                anchor_locators = []
+                for loc in locators:
+                    try:
                         href = loc.get_attribute("href", timeout=500) or ""
-                        if href and not href.startswith("#") and href.startswith("http"):
-                            print(f"[AEGIS RUNNER] Clique físico no candidato {idx+1} não alterou a URL. Forçando navegação direta para: {href}")
+                        if href.startswith("#"):
+                            anchor_locators.append(loc)
+                        else:
+                            prioritized_locators.append(loc)
+                    except Exception:
+                        prioritized_locators.append(loc)
+
+                candidate_locators = prioritized_locators if prioritized_locators else anchor_locators
+                initial_url = page.url
+                clicked = False
+
+                for idx, loc in enumerate(candidate_locators):
+                    try:
+                        if not loc.is_visible():
+                            continue
+
+                        print(f"[AEGIS RUNNER] Tentando clique físico no elemento {idx+1}/{len(candidate_locators)} de '{selector}'...")
+                        loc.scroll_into_view_if_needed(timeout=1000)
+                        time.sleep(0.2)
+                        loc.click(timeout=3000, force=True)
+                        clicked = True
+                        
+                        if validate_navigation:
+                            time.sleep(3.0)
+                            if page.url == initial_url:
+                                href = loc.get_attribute("href", timeout=500) or ""
+                                if href and not href.startswith("#") and href.startswith("http"):
+                                    print(f"[AEGIS RUNNER] Clique físico no candidato {idx+1} não alterou a URL. Forçando navegação direta para: {href}")
+                                    try:
+                                        page.goto(href, timeout=20000, wait_until="domcontentloaded")
+                                        clicked = True
+                                        break
+                                    except Exception as goto_ex:
+                                        print(f"[AEGIS RUNNER] Falha ao forçar navegação direta: {goto_ex}")
+
+                                if idx < len(candidate_locators) - 1:
+                                    print(f"[AEGIS RUNNER] Clique no candidato {idx+1} não resultou em navegação (URL inalterada). Tentando próximo candidato...")
+                                    clicked = False
+                                    continue
+                        break
+                    except Exception as e:
+                        # Nível 1: Elemento desprendido (Stale/Detached)
+                        if "attached" in str(e) or "stale" in str(e).lower() or "detached" in str(e).lower():
+                            print(f"[AEGIS RUNNER] Elemento desprendido do DOM (Stale/Detached). Aguardando estabilização...")
+                            time.sleep(0.2)
                             try:
-                                page.goto(href, timeout=20000, wait_until="domcontentloaded")
+                                page.locator(selector).first.click(timeout=3000)
                                 clicked = True
                                 break
-                            except Exception as goto_ex:
-                                print(f"[AEGIS RUNNER] Falha ao forçar navegação direta: {goto_ex}")
+                            except Exception as retry_ex:
+                                e = retry_ex
 
-                        # Se não foi possível forçar e houver outro elemento disponível, tenta o próximo candidato.
-                        if idx < len(candidate_locators) - 1:
-                            print(f"[AEGIS RUNNER] Clique no candidato {idx+1} não resultou em navegação (URL inalterada). Tentando próximo candidato...")
-                            clicked = False
-                            continue
-                break
+                        if idx == len(candidate_locators) - 1:
+                            raise e
+                        print(f"[AEGIS RUNNER] Falha ao clicar no candidato {idx+1}: {e}. Retentando próximo...")
+                        continue
+
+                if clicked:
+                    self._log_step(page, "SUCCESS", "click", selector, target_description)
+                    return True
+                else:
+                    raise RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM.")
+
             except Exception as e:
-                # Se for erro de desprendimento (Angular Change Detection / Stale Element), retenta clique direto
-                if "attached" in str(e) or "stale" in str(e).lower() or "detached" in str(e).lower():
-                    print(f"[AEGIS RUNNER] Elemento desprendido do DOM (Angular Change Detection). Retentando clique direto no primeiro correspondente...")
-                    try:
-                        page.locator(selector).first.click(timeout=3000)
-                        clicked = True
-                        break
-                    except Exception as retry_ex:
-                        e = retry_ex
-
-                if idx == len(candidate_locators) - 1:
-                    # Se falhar no último candidato, aciona o manipulador de falha
+                last_exception = e
+                print(f"[AEGIS RUNNER] Tentativa {attempt} de clique falhou para '{selector}': {e}")
+                if attempt == 2:
                     return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
-                print(f"[AEGIS RUNNER] Falha ao clicar no candidato {idx+1}: {e}. Retentando próximo...")
-                continue
-                
-        if not clicked:
-            # Se não conseguimos clicar em nenhum candidato, aciona o autotratamento cognitivo
-            return self._handle_click_failure(
-                page, selector, target_description, timeout, 
-                RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM."),
-                original_coords
-            )
-        
-        if clicked:
-            self._log_step(page, "SUCCESS", "click", selector, target_description)
-        return clicked
 
     def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None) -> bool:
+        # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
         if "strict mode violation" in str(e) or "resolved to" in str(e):
             try:
                 print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
@@ -235,19 +229,46 @@ class TransactionRunner:
             except Exception as inner_e:
                 e = inner_e
 
+        # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
+        print(f"[AEGIS RUNNER] Falha de clique físico em '{selector}'. Tentando limpar overlays via Escape...")
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
+            page.locator(selector).first.click(timeout=3000)
+            self._log_step(page, "SUCCESS", "click", selector, target_description)
+            print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
+            return True
+        except Exception:
+            pass
+
+        # Nível 3: Self-Healing Cognitivo por IA
+        healed_by_ia = False
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
-            healed = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
-            if healed:
-                self._log_step(page, "HEALED", "click", selector, target_description)
+            try:
+                healed_by_ia = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
+                if healed_by_ia:
+                    self._log_step(page, "HEALED", "click", selector, target_description)
+                    return True
+            except Exception as ia_err:
+                print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
+
+        # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
+        if not healed_by_ia and original_coords and len(original_coords) == 2:
+            try:
+                viewport = page.viewport_size or {"width": 1280, "height": 720}
+                x = int(viewport["width"] * original_coords[0])
+                y = int(viewport["height"] * original_coords[1])
+                print(f"[AEGIS RUNNER] [FALLBACK ÚLTIMO RECURSO] Clicando em coordenadas históricas da gravação: ({x}, {y})")
+                page.mouse.click(x, y)
+                self._log_step(page, "HEALED", "click", selector, target_description, "Fallback coords used")
                 return True
-            else:
-                self._log_step(page, "FAILED", "click", selector, target_description, "IA self-healing failed")
-                raise e
-        else:
-            print(f"[AEGIS RUNNER] Falha ao clicar em '{selector}' e módulo cognitivo inativo.")
-            self._log_step(page, "FAILED", "click", selector, target_description, str(e))
-            raise e
+            except Exception as coords_err:
+                print(f"[AEGIS RUNNER] Falha crítica no clique por coordenadas de fallback: {coords_err}")
+
+        print(f"[AEGIS RUNNER] Falha definitiva ao clicar em '{selector}'.")
+        self._log_step(page, "FAILED", "click", selector, target_description, str(e))
+        raise e
 
     def wait_for_selector(self, page, selector, state="visible", timeout=10000, target_description=None) -> bool:
         """Aguarda um seletor ficar visível ou oculto com suporte a logs resilientes."""
@@ -273,6 +294,11 @@ class TransactionRunner:
             print(f"[AEGIS_STEP] START | fill | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
             sys.stdout.flush()
 
+        # Força HUMAN_LIKE globalmente caso a variável de ambiente esteja ativa
+        force_human_like = os.environ.get("AEGIS_FORCE_HUMAN_LIKE", "false").lower() in ("true", "1", "yes")
+        if force_human_like:
+            strategy = "HUMAN_LIKE"
+
         if strategy == "HUMAN_LIKE":
             res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout)
             if res:
@@ -293,6 +319,18 @@ class TransactionRunner:
                     return True
                 except Exception as inner_e:
                     e = inner_e
+
+            # Auto-Healing de UI - Tenta limpar overlays ativos via Escape e retry
+            print(f"[AEGIS RUNNER] Falha no preenchimento de '{selector}'. Tentando limpar possíveis overlays via Escape...")
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.locator(selector).first.fill(text_val, timeout=3000)
+                self._log_step(page, "SUCCESS", "fill", selector, target_description)
+                print(f"[AEGIS RUNNER] Preenchimento resolvido reativamente após limpeza de overlays!")
+                return True
+            except Exception:
+                pass
 
             if self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Falha no preenchimento padrão de '{selector}'. Acionando localização visual por screenshot...")

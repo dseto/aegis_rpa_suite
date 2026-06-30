@@ -1,4 +1,4 @@
-﻿# 🛡️ Aegis RPA Suite: Guia de Instalação e Operação
+# 🛡️ Aegis RPA Suite: Guia de Instalação e Operação
 
 O **Aegis RPA Suite** é um ecossistema portátil de desenvolvimento e resiliência de robôs RPA baseados em Python + Playwright. Este manual descreve como transferir, instalar e utilizar o framework em outro computador, opcionalmente assistido por uma ferramenta de codificação com IA (como Gemini Antigravity, Claude Code ou similares).
 
@@ -106,6 +106,13 @@ python aegis_cockpit/cockpit.py
 ### 🖥️ Fluxo de Navegação Dual-State
 1. **Portal de Projetos (Visão Global):** Grid responsivo de projetos com pesquisa em tempo real.
 2. **Workspace do Projeto (Visão Detalhada):** Foco no projeto selecionado com gerenciamento de cenários de teste na barra lateral.
+
+### 🎨 Melhorias de Layout e Usabilidade (Pipeline Flex)
+* **Estrutura Adaptável (Fases 1 a 4):** As etapas de preparação e geração de robô foram organizadas em um grid auto-ajustável (`.prep-grid` com `.step-card` de largura mínima de `180px`), eliminando amontoamentos em telas menores e se empilhando de forma fluida.
+* **Fase 1 Integrada:** O campo de URL de Gravação e o botão de acionamento do gravador de voo foram unificados de forma limpa dentro do card da Fase 1.
+* **Fase 5 Expandida:** A etapa do Aegis Runner foi promovida a um card de largura total (`.runner-card`), organizando as opções de execução (checkboxes) de forma horizontal e elegante.
+* **Checkboxes Personalizados:** Substituição dos checkboxes nativos por controles personalizados de alta fidelidade visual com capitalização em texto natural (evitando a coerção do estilo em maiúsculas).
+* **Painel e Terminal de Execução com Scroll:** A coluna central agora suporta rolagem vertical nativa com scrollbars personalizados no tom estético violeta. O Terminal de Execução possui altura mínima garantida de `300px` para evitar que suma da tela.
 
 ### 📊 Gestão de Dataset (Aba Dataset)
 
