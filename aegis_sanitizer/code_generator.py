@@ -395,41 +395,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         print("=" * 60 + "\n")
         return True
 
-        channel=channel
-    )
 
-
-if __name__ == "__main__":
-    main()
-"""
-        bot_path = os.path.join(self.project_dir, "bot_producao.py")
-        try:
-            with open(bot_path, "w", encoding="utf-8") as f:
-                f.write(bot_content)
-            print(f"[INFO] bot_producao.py funcional de fallback gravado com sucesso em {bot_path}!")
-            
-            # Atualiza project.json para status "generated"
-            project_json_path = os.path.join(self.project_dir, "project.json")
-            if os.path.exists(project_json_path):
-                try:
-                    with open(project_json_path, "r", encoding="utf-8") as f:
-                        proj = json.load(f)
-                    proj["status"] = "generated"
-                    proj["last_activity"] = datetime.now().isoformat(timespec='seconds')
-                    with open(project_json_path, "w", encoding="utf-8") as f:
-                        json.dump(proj, f, indent=4, ensure_ascii=False)
-                    print("[INFO] Status do projeto atualizado para 'Gerado' (generated) com sucesso.")
-                except Exception as e:
-                    print(f"[WARNING] Falha ao atualizar project.json: {e}")
-            
-            print("-" * 60)
-            print("✅ CÓDIGO DA AUTOMAÇÃO RPA GERADO COM SUCESSO!")
-            print(f"O robô resiliente está salvo e pronto para a Fase 5 (Execução).")
-            print("=" * 60 + "\n")
-            return True
-        except Exception as e:
-            print(f"[ERRO] Falha ao escrever bot_producao.py de fallback: {e}")
-            return False
 
 
 if __name__ == "__main__":

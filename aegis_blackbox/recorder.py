@@ -1108,12 +1108,16 @@ class AegisRecorder:
                 print("[AEGIS AUTO-SIMULATOR] Iniciando simulação automática de preenchimento do portal...")
                 sys.stdout.flush()
                 try:
-                    from aegis_blackbox.recorder import run_auto_simulation
-                    run_auto_simulation(self.page, self.update_scenario, self.record_annotation)
+                    import aegis_blackbox.recorder as ab_rec
+                    ab_rec.run_auto_simulation(self.page, self.update_scenario, self.record_annotation)
                 except Exception as sim_err:
-                    # Se não puder importar localmente, tenta do escopo global
+                    # Se não puder importar localmente, tenta do escopo global usando globals() para evitar UnboundLocalError
                     try:
-                        run_auto_simulation(self.page, self.update_scenario, self.record_annotation)
+                        fn_sim = globals().get('run_auto_simulation')
+                        if fn_sim:
+                            fn_sim(self.page, self.update_scenario, self.record_annotation)
+                        else:
+                            raise NameError("run_auto_simulation não foi encontrado no escopo global.")
                     except Exception as sim_err2:
                         print(f"[AEGIS AUTO-SIMULATOR ERROR] Erro na simulação: {sim_err2}")
                         sys.stdout.flush()
@@ -1230,7 +1234,7 @@ class AegisRecorder:
 
 # Simulação E2E mantida como função auxiliar legada para retrocompatibilidade
 def run_auto_simulation(page, update_scenario, record_annotation):
-    def fill_reactive_text_local(selector, text_val, delay_ms=10):
+    def fill_reactive_text_local(selector, text_val, delay_ms=35):
         if isinstance(selector, str):
             element = page.locator(selector).first
         else:
@@ -1372,67 +1376,131 @@ def run_auto_simulation(page, update_scenario, record_annotation):
             input_el.press("Enter")
         time.sleep(0.5)
 
+    # Bloco de Login no Portal de Exemplo (se necessário)
+    try:
+        if page.locator("#username").is_visible(timeout=2000):
+            print("[AEGIS SIMULATOR] Efetuando login no portal...")
+            sys.stdout.flush()
+            fill_reactive_text_local("#username", "admin@portalsegura.com")
+            fill_reactive_text_local("#password", "Segura@2026")
+            
+            # Clica no botão Entrar
+            btn_entrar = page.locator("#btn-login").first
+            btn_entrar.click()
+            time.sleep(1.5)
+            
+            # Se cair no painel inicial pós-login, clica em Nova Cotação
+            btn_nova = page.locator("#btn-new-quote").first
+            btn_nova.wait_for(state="visible", timeout=15000)
+            btn_nova.click()
+            time.sleep(1.5)
+    except Exception as log_err:
+        print(f"[AEGIS SIMULATOR WARNING] Ignorando etapa de login: {log_err}")
+        sys.stdout.flush()
+
     print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 1: Dados do Cliente...")
     sys.stdout.flush()
-    fill_reactive_text_local("input[data-testid='input-nome']", "Antigravity Dev")
-    fill_reactive_text_local("input[data-testid='input-email']", "anti_gravity@deepmind.com")
-    fill_reactive_text_local("input[data-testid='input-cpf']", "123.456.789-00")
-    
-    # Campo C2: Input de data com keydown listeners bloqueantes
-    fill_reactive_text_local("input[data-testid='input-data-nascimento']", "15/08/1990")
-    
-    select_dropdown_local(".form-row >> mat-form-field:has-text('Estado Civil')", "Solteiro")
+    fill_reactive_text_local("input[data-testid='client-document-input']", "123.456.789-00")
+    fill_reactive_text_local("input[data-testid='client-name-input']", "Antigravity Dev")
+    fill_reactive_text_local("input[data-testid='client-birth-input']", "15/08/1990")
+    fill_reactive_text_local("input[data-testid='client-email-input']", "anti_gravity@deepmind.com")
+    select_dropdown_local("mat-form-field:has-text('Estado Civil')", "Solteiro")
     click_next_step_local()
 
-    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 2: Endereço do Segurado...")
+    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 2: Dados do Veículo...")
     sys.stdout.flush()
-    fill_reactive_text_local("input[data-testid='input-cep']", "01311-200")
-    fill_reactive_text_local("input[data-testid='input-endereco']", "Avenida Paulista")
-    fill_reactive_text_local("input[data-testid='input-numero']", "2000")
-    fill_reactive_text_local("input[data-testid='input-cidade']", "São Paulo")
-    select_dropdown_local("mat-form-field:has-text('Estado')", "SP")
+    fill_reactive_text_local("input[data-testid='vehicle-plate-input']", "ABC1234")
+    fill_reactive_text_local("input[data-testid='vehicle-chassis-input']", "9BWZZZ99Z99999999")
     click_next_step_local()
 
-    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 3: Especificações do Risco...")
+    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 3: Perfil e Risco...")
     sys.stdout.flush()
-    select_dropdown_local("mat-form-field:has-text('Tipo de Residência')", "Apartamento")
-    select_dropdown_local("mat-form-field:has-text('Quantidade de Banheiros')", "2")
-    select_dropdown_local("mat-form-field:has-text('Presença de Segurança Privada')", "Sim")
+    fill_reactive_text_local("input[data-testid='risk-zipcode-input']", "01311-200")
     click_next_step_local()
 
-    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 4: Detalhes de Cobertura...")
+    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 4: Coberturas...")
     sys.stdout.flush()
-    fill_reactive_text_local("input[data-testid='input-cobertura-incendio']", "500000")
-    fill_reactive_text_local("input[data-testid='input-cobertura-roubo']", "150000")
-    fill_reactive_text_local("input[data-testid='input-cobertura-danos-eletricos']", "75000")
     click_next_step_local()
 
-    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 5: Resumo e Emissão da Proposta...")
+    print("[AEGIS SIMULATOR] Iniciando preenchimento da Etapa 5: Vistoria...")
     sys.stdout.flush()
     
-    # Campo do autocomplete do corretor parceiro
-    fill_autocomplete_local("mat-form-field:has-text('Corretor Parceiro') input", "Corretora", "Corretora de Exemplo")
-    time.sleep(1.0)
+    # Datepicker/Calendário
+    page.locator("#btn-open-datepicker").first.click(force=True)
+    time.sleep(0.5)
+    page.locator(".mat-calendar-day-cell:has-text('25')").first.evaluate("el => el.click()")
+    time.sleep(0.5)
+
+    # Upload de arquivo de vistoria
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(b"Aegis E2E validation upload file.")
+        temp_pdf_path = tmp.name
+    try:
+        page.set_input_files("#file-picker-input", temp_pdf_path)
+        time.sleep(0.8)
+    finally:
+        try:
+            os.remove(temp_pdf_path)
+        except Exception:
+            pass
+
+    # Finaliza e emite a proposta, indo para a tela de resultados
+    click_next_step_local()
+
+    print("[AEGIS SIMULATOR] Iniciando etapa de Pagamento...")
+    sys.stdout.flush()
+    btn_pagamento = page.locator("#btn-go-to-payment").first
+    btn_pagamento.wait_for(state="visible", timeout=15000)
+    btn_pagamento.click()
+    time.sleep(1.5)
+
+    # Confirmar Cobrança via PIX (Aba Padrão do Portal)
+    btn_emitir = page.locator("#btn-confirm-payment-progress").first
+    btn_emitir.wait_for(state="visible", timeout=15000)
     
-    update_scenario("fluxo_bifurcado_aceite")
+    print("[AEGIS SIMULATOR] Aguardando conciliação do PIX (6s)...")
+    sys.stdout.flush()
+    page.wait_for_function("() => !document.getElementById('btn-confirm-payment-progress').disabled", timeout=15000)
+    time.sleep(0.5)
     
-    # Clica no checkbox de termos de uso
-    page.locator("mat-checkbox[data-testid='checkbox-termos'] .mat-checkbox-inner-container").first.click(force=True)
-    time.sleep(0.4)
-    
-    # Clica em Transmitir Proposta
-    transmitir_btn = page.locator("button:has-text('Transmitir Proposta')").first
-    transmitir_btn.scroll_into_view_if_needed()
-    transmitir_btn.evaluate("el => el.click()")
-    print("[AEGIS SIMULATOR] Botão 'Transmitir Proposta' clicado.")
+    btn_emitir.click()
+    time.sleep(1.5)
+
+    print("[AEGIS SIMULATOR] Iniciando Validação SMS Token...")
+    sys.stdout.flush()
+    page.locator("#btn-send-sms").first.click()
     time.sleep(1.5)
     
-    # Aguarda o modal de sucesso com timeout dinâmico
-    sucesso_el = page.locator(".mat-dialog-title:has-text('Apólice Emitida com Sucesso')").first
-    sucesso_el.wait_for(state="visible", timeout=10000)
-    print(f"[AEGIS SIMULATOR] Emissão concluída com sucesso: {sucesso_el.inner_text().strip()}")
+    # Fecha dialog de confirmação de envio se abrir para liberar a tela
+    try:
+        page.locator("mat-dialog-container button:has-text('Entendi'), mat-dialog-container button:has-text('Fechar'), .mat-dialog-container button").first.click(force=True)
+        time.sleep(0.5)
+    except Exception:
+        pass
     
-    record_annotation("extract: .mat-dialog-title : Apólice Emitida")
+    fill_reactive_text_local("input[data-testid='sms-token-input']", "882091")
+    time.sleep(0.5)
+    
+    # 1ª Tentativa de Validação (Falha simulada na SPA)
+    print("[AEGIS SIMULATOR] Validando SMS - 1ª Tentativa...")
+    sys.stdout.flush()
+    page.locator("#btn-verify-sms").first.evaluate("el => el.click()")
+    time.sleep(2.0)
+    
+    # 2ª Tentativa de Validação (Sucesso na SPA)
+    print("[AEGIS SIMULATOR] Validando SMS - 2ª Tentativa...")
+    sys.stdout.flush()
+    page.locator("#btn-verify-sms").first.evaluate("el => el.click()")
+    time.sleep(2.0)
+    
+    # Aguarda o modal de sucesso final
+    sucesso_el = page.locator("h3.mat-dialog-title, .mat-dialog-container h3, .mat-dialog-title").first
+    sucesso_el.wait_for(state="visible", timeout=12000)
+    print(f"[AEGIS SIMULATOR] Emissão concluída com sucesso: {sucesso_el.inner_text().strip()}")
+    sys.stdout.flush()
+    
+    record_annotation("extract: .mat-dialog-title : Emissão Concluída")
     time.sleep(2.0)
 
 
