@@ -147,6 +147,14 @@
         }
         .project-card:hover .btn-delete-proj { opacity: 1; }
         .btn-delete-proj:hover { color: var(--error); }
+        .btn-clone-proj {
+            position: absolute; top: 8px; right: 28px;
+            background: none; border: none; color: var(--text-muted);
+            cursor: pointer; font-size: 12px; padding: 2px; line-height: 1;
+            opacity: 0; transition: opacity 0.15s;
+        }
+        .project-card:hover .btn-clone-proj, .proj-grid-card:hover .btn-clone-proj { opacity: 1; }
+        .btn-clone-proj:hover { color: var(--primary); }
 
         .no-projects { padding: 30px 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
 
@@ -352,6 +360,11 @@
             color: #fbbf24;
             border: 1px dashed rgba(245, 158, 11, 0.3);
         }
+        .status-step-bypassed {
+            background: rgba(156, 163, 175, 0.08);
+            color: #9ca3af;
+            border: 1px dashed rgba(156, 163, 175, 0.25);
+        }
         
         @keyframes pulse-border {
             0% { box-shadow: 0 0 2px rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); }
@@ -550,12 +563,12 @@
             background: rgba(124,58,237,0.05);
         }
 
-        .proj-grid-card .btn-delete-proj {
+        .proj-grid-card .btn-delete-proj, .proj-grid-card .btn-clone-proj {
             opacity: 0.5;
             transition: opacity 0.2s, color 0.2s;
             z-index: 10;
         }
-        .proj-grid-card:hover .btn-delete-proj {
+        .proj-grid-card:hover .btn-delete-proj, .proj-grid-card:hover .btn-clone-proj {
             opacity: 1;
         }
 
@@ -758,6 +771,23 @@
                 ⚠️ Nenhum projeto selecionado. Selecione ou crie um projeto na sidebar.
             </div>
 
+            <div id="scenario-version-bar" class="card" style="display: none; padding: 16px; margin-bottom: 16px; border: 1px solid rgba(124,58,237,0.3); background: rgba(124,58,237,0.03);">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-weight: 700; color: #fff; font-size: 13px;">🏷️ Versão do Cenário:</span>
+                        <select id="active-version-select" onchange="onVersionSelected(this.value)" style="background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 12px; outline: none; cursor: pointer; min-width: 180px;">
+                            <option value="">-- Selecione a Versão --</option>
+                            <option value="draft">Rascunho (Atual)</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-save-version" class="btn btn-sm" style="width: auto; padding: 6px 12px; font-size: 11px; background: rgba(16,185,129,0.2); border: 1px solid var(--success); color: #fff;" onclick="onSaveVersionClicked()" disabled>💾 Salvar Rascunho</button>
+                        <button id="btn-clone-version" class="btn btn-ghost btn-sm" style="width: auto; padding: 6px 12px; font-size: 11px;" onclick="openCloneVersionModal()" disabled>👯 Clonar</button>
+                        <button id="btn-create-clean-version" class="btn btn-ghost btn-sm" style="width: auto; padding: 6px 12px; font-size: 11px;" onclick="openNewVersionModal(true)" disabled>➕ Criar Limpa</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-title">🕹️ Painel de Operações</div>
 
@@ -788,7 +818,21 @@
                     <div>
                         <label>Fase 5: Aegis Runner</label>
                         <p style="font-size:10px;color:var(--text-muted);margin:3px 0 8px;">Executa o robô de produção em lote.</p>
-                        <button id="btn-run-bot" class="btn" style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);" disabled>🚀 Executar Robô</button>
+                        <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;">
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text-main); font-weight: normal; margin-bottom: 0;">
+                                <input type="checkbox" id="chk-run-headless" checked style="cursor: pointer;" />
+                                Executar Headless (Sem Janela)
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text-main); font-weight: normal; margin-bottom: 0;">
+                                <input type="checkbox" id="chk-run-screenshots" style="cursor: pointer;" />
+                                Capturar Screenshots dos Passos
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text-main); font-weight: normal; margin-bottom: 0;">
+                                <input type="checkbox" id="chk-run-realtime" checked style="cursor: pointer;" />
+                                Atualizar passos em tempo real
+                            </label>
+                        </div>
+                        <button id="btn-run-bot" class="btn" style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); width: 100%;" disabled>🚀 Executar Robô</button>
                     </div>
                 </div>
             </div>
@@ -805,14 +849,15 @@
             </div>
         </div>
 
-        <!-- ── Coluna Direita: Visualizadores ── -->
         <div class="col-right">
+
             <div class="tabs-header">
                 <button class="tab-btn active" onclick="switchTab(event,'tab-dict')">📋 Dicionário</button>
                 <button class="tab-btn" onclick="switchTab(event,'tab-dataset')">📊 Dataset</button>
                 <button class="tab-btn" onclick="switchTab(event,'tab-report')">📝 Relatório</button>
                 <button class="tab-btn" onclick="switchTab(event,'tab-validation')">🛡️ Firewall</button>
                 <button class="tab-btn" id="btn-tab-steps" onclick="switchTab(event,'tab-steps')">🤖 Passos</button>
+                <button class="tab-btn" onclick="switchTab(event,'tab-history')">📜 Histórico</button>
             </div>
 
             <div id="tab-dict" class="tab-content active"><div id="dict-view" class="empty-msg">Selecione um projeto para visualizar o dicionário.</div></div>
@@ -822,9 +867,84 @@
             <div id="tab-steps" class="tab-content">
                 <div class="steps-header-info">
                     <div id="steps-summary" class="steps-summary">Selecione um projeto para carregar os passos.</div>
-                    <button id="btn-reset-steps" class="btn btn-sm" style="display:none; background:rgba(239, 68, 68, 0.2); border: 1px solid var(--error); padding: 2px 8px; font-size: 10px;" onclick="resetStepsState()">Zerar Status</button>
+                    <div style="display: flex; gap: 6px;">
+                        <button id="btn-reset-steps" class="btn btn-sm" style="display:none; background:rgba(239, 68, 68, 0.2); border: 1px solid var(--error); padding: 2px 8px; font-size: 10px;" onclick="resetStepsState()">Zerar Status</button>
+                        <button id="btn-promote-skill" class="btn btn-sm" style="display:none; background:rgba(236, 72, 153, 0.2); border: 1px solid var(--accent); padding: 2px 8px; font-size: 10px;" onclick="openPromoteSkillModal()">Salvar como Skill</button>
+                    </div>
                 </div>
+                
+                <!-- Painel de Andamento e Status do Lote -->
+                <div id="batch-progress-panel" style="display: none; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; margin-bottom: 12px; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-main);">
+                        <span>📊 Progresso da Execução Lote:</span>
+                        <strong id="batch-progress-text">0 / 0 registros concluídos</strong>
+                    </div>
+                    <!-- Barra de progresso -->
+                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                        <div id="batch-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent) 0%, var(--success) 100%); transition: width 0.3s ease;"></div>
+                    </div>
+                    <!-- Grid horizontal de transações -->
+                    <div style="margin-top: 4px;">
+                        <label style="font-size: 10px; color: var(--text-muted); display: block; margin-bottom: 4px;">Grelha de Transações (Status Individual):</label>
+                        <div id="batch-tx-grid" style="display: flex; gap: 6px; flex-wrap: wrap;">
+                            <!-- Inserido dinamicamente via JS -->
+                        </div>
+                    </div>
+                </div>
+
                 <div id="steps-view" class="empty-msg">Selecione um projeto para visualizar os passos do robô.</div>
+            </div>
+            
+            <div id="tab-history" class="tab-content">
+                <div class="history-container" style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden; padding: 10px 0;">
+                    <div class="table-wrap" style="max-height: 180px; flex: 0 0 auto; overflow-y: auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID de Execução</th>
+                                    <th>Data / Hora</th>
+                                    <th>Versão</th>
+                                    <th>Duração (s)</th>
+                                    <th>Pass Rate</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-list-tbody">
+                                <tr><td colspan="5" class="empty-msg" style="text-align:center;">Nenhuma execução registrada.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div id="history-detail-panel" class="card" style="display: none; flex-direction: column; min-height: 0; padding: 12px; gap: 10px; border-color: rgba(124,58,237,0.15); background: rgba(18,18,38,0.85); flex: 1 1 auto;">
+                        <div class="steps-header-info" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 6px; flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center;">
+                            <div class="card-title" id="history-detail-title" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">🔍 Detalhes da Execução</div>
+                            <div id="history-detail-badge" class="status-badge status-idle" style="padding: 2px 8px; font-size: 8px;"><span class="badge-dot"></span>N/A</div>
+                        </div>
+                        
+                        <div style="flex: 1; display: grid; grid-template-columns: 1.2fr 1fr 1.2fr; gap: 12px; min-height: 0;">
+                            <!-- Passos Executados -->
+                            <div style="display: flex; flex-direction: column; min-height: 0;">
+                                <label id="history-steps-view-label" style="margin-bottom: 4px;">🤖 Transações Executadas</label>
+                                <div id="history-steps-view" style="flex: 1; overflow-y: auto; background: rgba(5,5,10,0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 8px;">
+                                    <div class="empty-msg">Nenhum passo registrado.</div>
+                                </div>
+                            </div>
+                            
+                            <!-- Logs do Terminal -->
+                            <div style="display: flex; flex-direction: column; min-height: 0;">
+                                <label style="margin-bottom: 4px;">📟 Log do Processo</label>
+                                <pre id="history-log-view" class="terminal-box" style="flex: 1; margin-top: 0; padding: 8px; font-size: 10px; overflow-y: auto; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; font-family: 'Fira Code', monospace;"></pre>
+                            </div>
+
+                            <!-- Evidência Visual (Screenshot) -->
+                            <div style="display: flex; flex-direction: column; min-height: 0;">
+                                <label style="margin-bottom: 4px;">🖼️ Evidência Visual do Passo</label>
+                                <div id="history-screenshot-view" style="flex: 1; display: flex; align-items: center; justify-content: center; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; overflow: hidden; position: relative;">
+                                    <div class="empty-msg" style="text-align: center;">Clique em um passo com 📸 para ver o screenshot correspondente.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -904,10 +1024,58 @@
         </div>
     </div>
 
+    <!-- ── Modal: Promover Skill ── -->
+    <div class="modal-overlay" id="modal-skill-overlay">
+        <div class="modal">
+            <h3>🛡️ Promover Cenário para Skill</h3>
+            <div class="form-group">
+                <label for="modal-skill-name">Nome da Skill</label>
+                <input type="text" id="modal-skill-name" placeholder="Ex: Login no Portal" />
+            </div>
+            <div class="form-group">
+                <label for="modal-skill-category">Categoria</label>
+                <input type="text" id="modal-skill-category" placeholder="Ex: Autenticação" value="Geral" />
+            </div>
+            <div class="form-group">
+                <label for="modal-skill-desc">Descrição</label>
+                <input type="text" id="modal-skill-desc" placeholder="Ex: Realiza login corporativo" />
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-close-skill-modal">Cancelar</button>
+                <button class="btn btn-accent btn-sm" id="btn-save-skill" style="width:auto;">Promover</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Nova Versão ── -->
+    <div class="modal-overlay" id="modal-version-overlay" onclick="if(event.target===this) this.classList.remove('open')">
+        <div class="modal">
+            <h3 id="modal-version-title">🏷️ Criar Nova Versão (Snapshot)</h3>
+            <div class="form-group">
+                <label for="modal-version-name">Nome da Versão</label>
+                <input type="text" id="modal-version-name" placeholder="Ex: Versão v1.0.0" />
+            </div>
+            <div class="form-group">
+                <label for="modal-version-desc">Descrição</label>
+                <input type="text" id="modal-version-desc" placeholder="Ex: Snapshot antes de alterar dados do cliente" />
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-close-version-modal" onclick="document.getElementById('modal-version-overlay').classList.remove('open')">Cancelar</button>
+                <button class="btn btn-accent btn-sm" id="modal-version-submit-btn" style="width:auto;" onclick="confirmCreateVersion()">Criar Versão</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // ── Estado ──
         let activeProjectSlug = localStorage.getItem('aegis_active_project') || null;
         let activeTestSlug = localStorage.getItem('aegis_active_test') || null;
+        let activeDataset = [];
+        let activeDictionary = {};
+        let selectedDatasetRowIds = [];
+        let activeHistorySteps = [];
+        let activeHistoryReport = [];
+        let activeHistoryExecutionId = null;
         let logsOffset = 0;
         let logsInterval = null;
         let allProjects = [];
@@ -915,6 +1083,8 @@
         let currentStepIndex = 0;
         let currentTransactionId = "";
         let justFinishedRun = false;
+        let dontOverwriteSteps = false;
+        let activeExecutionId = null;
 
         // ── Utilities ──
         function updateStatusBadge(status, isRunning) {
@@ -1013,9 +1183,12 @@
             const p = allProjects.find(proj => proj.slug === activeProjectSlug);
             if (!p) return;
 
+            const projFormattedId = String(p.project_id || p.id).padStart(3, '0');
+            const projDisplayName = `${projFormattedId}-${p.name}`;
+
             // Restaura e atualiza o header da sidebar
             sidebarHeader.innerHTML = `
-                <span class="sidebar-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; font-weight: 700;" title="${p.name}">📁 ${p.name}</span>
+                <span class="sidebar-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; font-weight: 700;" title="${projDisplayName}">📁 ${projDisplayName}</span>
                 <button class="btn btn-ghost btn-sm" style="padding: 2px 6px; font-size: 9px; width: auto;" onclick="event.stopPropagation(); openNewTestModal('${p.slug}')">+ Cenário</button>
             `;
 
@@ -1036,16 +1209,22 @@
                         </div>
                     ` : tests.map(t => {
                         const isTestActive = t.slug === activeTestSlug;
+                        const testFormattedId = String(t.test_id || t.id).padStart(3, '0');
+                        const testDisplayName = `${testFormattedId}-${t.name}`;
                         return `
                             <div class="test-item ${isTestActive ? 'active-test' : ''}" 
                                  style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; cursor: pointer; transition: all 0.2s;"
                                  onclick="event.stopPropagation(); selectTest('${p.slug}', '${t.slug}')">
                                 <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; width: 85%;">
-                                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;" title="${t.name}">${t.name}</span>
+                                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;" title="${testDisplayName}">${testDisplayName}</span>
                                     ${pillFor(t.status)}
                                 </div>
-                                <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
-                                        onclick="event.stopPropagation(); confirmDeleteTest('${p.slug}', '${t.slug}')" title="Remover cenário">🗑</button>
+                                <div style="display: flex; gap: 4px; align-items: center;">
+                                    <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
+                                            onclick="event.stopPropagation(); cloneTestPrompt('${p.slug}', '${t.slug}')" title="Clonar cenário">👯</button>
+                                    <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
+                                            onclick="event.stopPropagation(); confirmDeleteTest('${p.slug}', '${t.slug}')" title="Remover cenário">🗑</button>
+                                </div>
                             </div>
                         `;
                     }).join('')}
@@ -1082,11 +1261,14 @@
 
             let html = filtered.map(p => {
                 const testCount = p.tests ? p.tests.length : 0;
+                const projFormattedId = String(p.project_id || p.id).padStart(3, '0');
+                const projDisplayName = `${projFormattedId}-${p.name}`;
                 return `
                     <div class="proj-grid-card" onclick="selectProject('${p.slug}')">
                         <div>
-                            <button class="btn-delete-proj" onclick="event.stopPropagation(); confirmDeleteProject('${p.slug}')">🗑</button>
-                            <div class="proj-name" title="${p.name}">📁 ${p.name}</div>
+                            <button class="btn-delete-proj" onclick="event.stopPropagation(); confirmDeleteProject('${p.slug}')" title="Excluir Projeto">🗑</button>
+                            <button class="btn-clone-proj" onclick="event.stopPropagation(); cloneProjectPrompt('${p.slug}')" title="Clonar Projeto">👯</button>
+                            <div class="proj-name" title="${p.name}">📁 ${projDisplayName}</div>
                             <div class="proj-url" title="${p.url || 'Sem URL de gravação configurada'}">
                                 🔗 ${p.url || '—'}
                             </div>
@@ -1129,6 +1311,9 @@
         }
 
         function loadProjects(cb) {
+            const select = document.getElementById('active-version-select');
+            const currentSelectedVersion = select ? select.value : '';
+
             fetch('/api/projects')
                 .then(r => r.json())
                 .then(data => {
@@ -1152,8 +1337,12 @@
                     updateLayoutState();
                     updateActiveUI();
                     
+                    const badge = document.getElementById('badge-status');
+                    const isRunning = badge && badge.classList.contains('status-active');
+                    
                     if (activeProjectSlug && activeTestSlug) {
-                        loadTelemetryData(activeProjectSlug);
+                        loadTelemetryData(activeProjectSlug, isRunning || dontOverwriteSteps, currentSelectedVersion || null);
+                        dontOverwriteSteps = false; // Reset flag after use
                     } else {
                         clearVisualizers();
                     }
@@ -1217,14 +1406,16 @@
             
             if (activeProjectSlug) {
                 const proj = allProjects.find(p => p.slug === activeProjectSlug);
-                const name = proj ? proj.name : activeProjectSlug;
+                const projFormattedId = proj ? String(proj.project_id || proj.id).padStart(3, '0') : '';
+                const name = proj ? `${projFormattedId}-${proj.name}` : activeProjectSlug;
                 
                 let testName = "";
                 let url = "";
                 if (activeTestSlug && proj && proj.tests) {
                     const test = proj.tests.find(t => t.slug === activeTestSlug);
                     if (test) {
-                        testName = test.name;
+                        const testFormattedId = String(test.test_id || test.id).padStart(3, '0');
+                        testName = `${testFormattedId}-${test.name}`;
                         url = test.url || proj.url || '';
                     }
                 }
@@ -1244,16 +1435,20 @@
                 
                 const hasTest = !!activeTestSlug;
                 urlInput.readOnly = !hasTest;
-                btns.forEach(b => b.disabled = !hasTest);
-                if (runBotBtn) runBotBtn.disabled = true; // Será atualizado por loadTelemetryData
             } else {
                 banner.className = 'active-project-banner banner-no-project';
                 banner.innerHTML = '⚠️ Nenhum projeto selecionado. Selecione ou crie um projeto na sidebar.';
                 urlInput.value = '';
                 urlInput.readOnly = true;
-                btns.forEach(b => b.disabled = true);
-                if (runBotBtn) runBotBtn.disabled = true;
             }
+            
+            const versionBar = document.getElementById('scenario-version-bar');
+            if (activeProjectSlug && activeTestSlug) {
+                if (versionBar) versionBar.style.display = 'block';
+            } else {
+                if (versionBar) versionBar.style.display = 'none';
+            }
+            updateVersionAndOpsPanel();
         }
 
         function confirmDeleteProject(slug) {
@@ -1277,6 +1472,62 @@
                         }
                     });
             }
+        }
+
+        function cloneProjectPrompt(slug) {
+            const proj = allProjects.find(p => p.slug === slug);
+            const name = proj ? proj.name : slug;
+            const newName = prompt(`Digite o nome para o novo projeto (cópia de "${name}"):`, `${name} - Cópia`);
+            if (!newName || !newName.trim()) return;
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/clone`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_project_name: newName.trim() })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Projeto clonado com sucesso!');
+                    loadProjects();
+                } else {
+                    alert('Erro ao clonar projeto: ' + data.message);
+                }
+            })
+            .catch(err => console.error('Erro ao clonar projeto:', err));
+        }
+
+        function cloneTestPrompt(projectSlug, testSlug) {
+            const proj = allProjects.find(p => p.slug === projectSlug);
+            let name = testSlug;
+            if (proj && proj.tests) {
+                const test = proj.tests.find(t => t.slug === testSlug);
+                if (test) name = test.name;
+            }
+            const newName = prompt(`Digite o nome para o novo cenário (cópia de "${name}"):`, `${name} - Cópia`);
+            if (!newName || !newName.trim()) return;
+            
+            fetch(`/api/projects/${encodeURIComponent(projectSlug)}/tests/${encodeURIComponent(testSlug)}/clone`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_test_name: newName.trim() })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Cenário clonado com sucesso!');
+                    loadProjects(() => {
+                        if (data.test && data.test.slug) {
+                            selectTest(projectSlug, data.test.slug);
+                        } else {
+                            loadTelemetryData(activeProjectSlug);
+                        }
+                    });
+                } else {
+                    alert('Erro ao clonar cenário: ' + data.message);
+                }
+            })
+            .catch(err => console.error('Erro ao clonar cenário:', err));
         }
 
         function confirmDeleteTest(projectSlug, testSlug) {
@@ -1441,10 +1692,13 @@
                         if (status === 'START') {
                             summaryDiv.innerHTML = `⚙️ Executando Transação: <strong>#${txId}</strong> &nbsp;|&nbsp; Cenário: <strong>${scenario}</strong>`;
                             resetStepsState();
+                            updateTxStatus(txId, 'RUNNING');
                         } else if (status === 'SUCCESS') {
                             summaryDiv.innerHTML = `✅ Transação <strong>#${txId}</strong> Concluída com Sucesso!`;
+                            updateTxStatus(txId, 'SUCCESS');
                         } else if (status === 'FAILED') {
                             summaryDiv.innerHTML = `❌ Transação <strong>#${txId}</strong> Falhou!`;
+                            updateTxStatus(txId, 'FAILED');
                         }
                     }
                     
@@ -1457,8 +1711,10 @@
                             const selector = parts[2];
                             const desc = parts[3];
                             const errorMsg = parts[4] || '';
+                            const screenshot = parts[5] || '';
+                            const rowId = parts[6] || '';
                             
-                            updateRobotStep(status, type, selector, desc, errorMsg);
+                            updateRobotStep(status, type, selector, desc, errorMsg, screenshot, rowId);
                         }
                     }
                 });
@@ -1481,37 +1737,65 @@
                         if (justFinishedRun) {
                             justFinishedRun = false;
                             keepSteps = true;
-                            // Mark running steps as stopped
+                            dontOverwriteSteps = true;
+                            
+                            // Verifica se o processo terminou com erro
+                            let runSucceeded = true;
+                            let errCode = 0;
+                            const termText = document.getElementById('terminal').innerText;
+                            const matchCode = termText.match(/\[AEGIS COCKPIT\] Processo concluído com código:\s*([0-9]+)/);
+                            if (matchCode) {
+                                errCode = parseInt(matchCode[1], 10);
+                                if (errCode !== 0) {
+                                    runSucceeded = false;
+                                }
+                            }
+
+                            // Classifica os passos remanescentes de acordo com o resultado da execução
+                            // Se a execução teve sucesso: passos PENDING sem log correspondente foram
+                            // executados normalmente — o robô simplesmente não emitiu evento para eles.
+                            // Marcá-los como BYPASSED seria enganoso. Usar SUCCESS nesses casos.
+                            // STOPPED é reservado para execuções que falharam antes de chegar ao passo.
                             robotSteps.forEach(step => {
                                 if (step.status === 'RUNNING') {
-                                    step.status = 'STOPPED';
+                                    step.status = runSucceeded ? 'SUCCESS' : 'FAILED';
+                                }
+                                if (step.status === 'PENDING') {
+                                    step.status = runSucceeded ? 'SUCCESS' : 'STOPPED';
                                 }
                             });
                             updateStepsUI();
                             
-                            // Grava o histórico final no backend de forma assíncrona
-                            if (activeProjectSlug && activeTestSlug) {
+                            // Exibe alerta visual se terminou com erro
+                            if (!runSucceeded) {
+                                alert(`❌ Falha na execução da tarefa. O processo terminou com código de erro ${errCode}. Verifique o log para detalhes.`);
+                            }
+                            
+                            // Grava o histórico final no backend de forma assíncrona.
+                            // IMPORTANTE: em execução em lote (activeExecutionId definido), o runner.py já
+                            // grava o historico_passos.json completo com todos os registros de todas as
+                            // transações. Sobrescrever aqui apagaria os passos das transações anteriores,
+                            // pois robotSteps reflete apenas o roteiro do cenário (atualizado com o último row_id).
+                            if (activeProjectSlug && activeTestSlug && !activeExecutionId) {
                                 fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/steps-history`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
                                         test_slug: activeTestSlug,
+                                        execution_id: activeExecutionId,
                                         steps: robotSteps
                                     })
                                 }).catch(e => console.error('Erro ao salvar historico:', e));
                             }
+                            // Reseta execution ID para não bloquear salvamentos futuros de gravação de cenário
+                            activeExecutionId = null;
                         }
                         
-                        // Verifica se o processo terminou com erro (código diferente de 0)
-                        const termText = document.getElementById('terminal').innerText;
-                        const match = termText.match(/\[AEGIS COCKPIT\] Processo concluído com código:\s*([1-9]\d*)/);
-                        if (match) {
-                            const errCode = match[1];
-                            alert(`❌ Falha na execução da tarefa. O processo terminou com código de erro ${errCode}. Verifique o log para detalhes.`);
-                        }
-                        
-                        if (activeProjectSlug) loadTelemetryData(activeProjectSlug, keepSteps);
+                        const select = document.getElementById('active-version-select');
+                        const currentSelectedVersion = select ? select.value : '';
+                        if (activeProjectSlug) loadTelemetryData(activeProjectSlug, keepSteps, currentSelectedVersion || null);
                         loadProjects(); // Atualiza status pills
+                        loadExecutions();
                     }
                 })
                 .catch(err => console.error('Polling error:', err));
@@ -1594,14 +1878,34 @@
             justFinishedRun = true;
             document.getElementById('steps-summary').innerHTML = '⚙️ Preparando execução do robô...';
             switchTab(null, 'tab-steps');
+            document.getElementById('batch-progress-panel').style.display = 'flex';
+            initBatchProgressUI();
+            
+            const runHeadless = document.getElementById('chk-run-headless').checked;
+            const runScreenshots = document.getElementById('chk-run-screenshots').checked;
+            const runRealtime = document.getElementById('chk-run-realtime').checked;
             
             fetch('/api/run-bot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project_slug: activeProjectSlug, test_slug: activeTestSlug })
+                body: JSON.stringify({ 
+                    project_slug: activeProjectSlug, 
+                    test_slug: activeTestSlug,
+                    headless: runHeadless,
+                    screenshots: runScreenshots,
+                    realtime_logs: runRealtime,
+                    selected_ids: selectedDatasetRowIds
+                })
             })
             .then(r => r.json())
-            .then(data => { if (data.success) startPolling(); else alert(data.message); });
+            .then(data => { 
+                if (data.success) {
+                    activeExecutionId = data.execution_id;
+                    startPolling(); 
+                } else {
+                    alert(data.message); 
+                }
+            });
         });
 
         document.getElementById('btn-stop-proc').addEventListener('click', () => {
@@ -1633,14 +1937,27 @@
             document.getElementById('report-view').innerHTML = msg;
             document.getElementById('validation-view').innerHTML = msg;
             
+            document.getElementById('batch-progress-panel').style.display = 'none';
             document.getElementById('steps-view').innerHTML = '<div class="empty-msg">Selecione um projeto para visualizar os passos do robô.</div>';
             document.getElementById('steps-summary').innerHTML = 'Selecione um projeto para carregar os passos.';
             document.getElementById('btn-reset-steps').style.display = 'none';
+            if (document.getElementById('btn-promote-skill')) {
+                 document.getElementById('btn-promote-skill').style.display = 'none';
+             }
             robotSteps = [];
             currentStepIndex = 0;
+            
+            document.getElementById('history-list-tbody').innerHTML = '<tr><td colspan="5" class="empty-msg" style="text-align:center;">Nenhuma execução registrada.</td></tr>';
+            document.getElementById('history-detail-panel').style.display = 'none';
+            const select = document.getElementById('active-version-select');
+            if (select) {
+                select.innerHTML = '<option value="">-- Selecione a Versão --</option><option value="draft">Rascunho (Atual)</option>';
+                select.value = '';
+            }
+            updateVersionAndOpsPanel();
         }
 
-        function loadTelemetryData(slug, keepStepsState = false) {
+        function loadTelemetryData(slug, keepStepsState = false, selectedVersionId = null) {
             if (!activeTestSlug) {
                 clearVisualizers();
                 return;
@@ -1648,18 +1965,28 @@
             fetch('/api/projects/' + encodeURIComponent(slug) + '/telemetry-files?test_slug=' + encodeURIComponent(activeTestSlug))
                 .then(r => r.json())
                 .then(data => {
+                    activeDataset = data.dataset || [];
+                    activeDictionary = data.dictionary || {};
+                    selectedDatasetRowIds = activeDataset.map(r => (r.id !== undefined && r.id !== null) ? r.id.toString() : '');
                     renderDict(data.dictionary);
                     renderDataset(data.dataset);
                     renderReport(data.report);
                     renderValidation(data.validation);
                     if (!keepStepsState) {
-                        renderSteps(data.recording, data.steps_history);
+                        renderSteps(data.recording, data.steps_history, data.skills_recordings);
                     }
                     
                     const runBotBtn = document.getElementById('btn-run-bot');
                     if (runBotBtn) {
-                        runBotBtn.disabled = !data.has_bot;
+                        if (data.has_bot) {
+                            runBotBtn.dataset.hasBot = "true";
+                        } else {
+                            delete runBotBtn.dataset.hasBot;
+                        }
                     }
+                    
+                    loadExecutions();
+                    loadVersions(selectedVersionId);
                 })
                 .catch(() => clearVisualizers());
         }
@@ -1709,6 +2036,65 @@
             });
         });
 
+        // ── Modal Promover Skill Event Listeners ──
+        function openPromoteSkillModal() {
+            const proj = allProjects.find(p => p.slug === activeProjectSlug);
+            let testName = "";
+            if (proj && proj.tests && activeTestSlug) {
+                const test = proj.tests.find(t => t.slug === activeTestSlug);
+                if (test) testName = test.name;
+            }
+            document.getElementById('modal-skill-name').value = testName || "Minha Skill";
+            document.getElementById('modal-skill-category').value = "Geral";
+            document.getElementById('modal-skill-desc').value = "";
+            document.getElementById('modal-skill-overlay').classList.add('open');
+            document.getElementById('modal-skill-name').focus();
+        }
+        
+        document.getElementById('btn-close-skill-modal').addEventListener('click', () => {
+            document.getElementById('modal-skill-overlay').classList.remove('open');
+        });
+        
+        document.getElementById('modal-skill-overlay').addEventListener('click', e => {
+            if (e.target === document.getElementById('modal-skill-overlay'))
+                document.getElementById('modal-skill-overlay').classList.remove('open');
+        });
+        
+        document.getElementById('btn-save-skill').addEventListener('click', () => {
+            const skillName = document.getElementById('modal-skill-name').value.trim();
+            const category = document.getElementById('modal-skill-category').value.trim() || 'Geral';
+            const description = document.getElementById('modal-skill-desc').value.trim();
+            
+            if (!skillName) {
+                alert("Por favor, informe o nome da Skill.");
+                return;
+            }
+            
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/skills/promote`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    test_slug: activeTestSlug,
+                    skill_name: skillName,
+                    category: category,
+                    description: description
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Skill "${data.skill.name}" criada com sucesso!`);
+                    document.getElementById('modal-skill-overlay').classList.remove('open');
+                    loadProjects();
+                } else {
+                    alert("Falha ao criar a Skill: " + data.message);
+                }
+            })
+            .catch(err => {
+                alert("Erro na requisição: " + err);
+            });
+        });
+
         function renderDict(dictionary) {
             const div = document.getElementById('dict-view');
             if (!dictionary || !dictionary.fields || !Object.keys(dictionary.fields).length) {
@@ -1730,26 +2116,374 @@
         }
 
         function renderDataset(dataset) {
+            activeDataset = dataset || [];
             const div = document.getElementById('dataset-view');
-            if (!dataset || !dataset.length) {
-                div.innerHTML = '<div class="empty-msg">Nenhum dataset gerado ainda.</div>';
+            
+            // Determina colunas
+            let keys = [];
+            if (activeDataset && activeDataset.length) {
+                keys = Object.keys(activeDataset[0]);
+            } else {
+                keys = ['id', 'aegis_scenario', 'expected_result', 'expected_error_token'];
+                if (activeDictionary && activeDictionary.fields) {
+                    keys = keys.concat(Object.keys(activeDictionary.fields));
+                }
+            }
+            
+            // Barra de ações (Adicionar linha, salvar dataset, importar CSV)
+            let html = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px; flex-wrap:wrap; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-sm" style="background:#374151;" onclick="addDatasetRow()">➕ Adicionar Linha</button>
+                    <button class="btn btn-sm btn-success" style="background:rgba(16,185,129,0.2); border:1px solid var(--success); color:#fff; width:auto;" onclick="saveDataset()">💾 Salvar Dataset</button>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <span style="font-size:11px; color:var(--text-muted);">Importar CSV:</span>
+                    <input type="file" id="input-ds-csv" accept=".csv" style="display:none;" onchange="importDatasetCSV(event)" />
+                    <button class="btn btn-sm btn-blue" style="width:auto;" onclick="document.getElementById('input-ds-csv').click()">📥 Escolher CSV</button>
+                </div>
+            </div>
+            `;
+            
+            if (!activeDataset.length) {
+                html += '<div class="empty-msg" style="text-align:center; padding: 20px;">Nenhum registro no dataset. Use os botões acima para adicionar ou importar registros.</div>';
+                div.innerHTML = html;
                 return;
             }
-            const keys = Object.keys(dataset[0]);
-            let html = '<div class="table-wrap"><table><tr>' + keys.map(k => `<th>${k}</th>`).join('') + '</tr>';
-            dataset.forEach(row => {
-                html += '<tr>' + keys.map(k => {
-                    const v = row[k] === null ? '<em style="color:var(--text-muted)">null</em>' : row[k];
-                    return `<td>${v}</td>`;
-                }).join('') + '</tr>';
+            
+            const allSelected = activeDataset.length > 0 && activeDataset.every(r => {
+                const rid = (r.id !== undefined && r.id !== null) ? r.id.toString() : '';
+                return selectedDatasetRowIds.includes(rid);
             });
+            
+            html += '<div class="table-wrap"><table style="width:100%;"><tr>';
+            html += `<th style="width: 40px; text-align: center;"><input type="checkbox" id="chk-ds-select-all" onchange="toggleSelectAllDataset(this)" ${allSelected ? 'checked' : ''} style="cursor:pointer;" /></th>`;
+            keys.forEach(k => {
+                html += `<th>${k}</th>`;
+            });
+            html += '<th style="width:50px; text-align:center;">Ações</th></tr>';
+            
+            activeDataset.forEach((row, rowIdx) => {
+                const rid = (row.id !== undefined && row.id !== null) ? row.id.toString() : '';
+                const isSelected = selectedDatasetRowIds.includes(rid);
+                html += '<tr>';
+                html += `<td style="text-align: center;"><input type="checkbox" class="chk-ds-row" data-row-id="${rid}" onchange="toggleSelectDatasetRow(this)" ${isSelected ? 'checked' : ''} style="cursor:pointer;" /></td>`;
+                keys.forEach(k => {
+                    let v = row[k];
+                    if (v === null || v === undefined) {
+                        v = '';
+                    }
+                    html += `<td contenteditable="true" class="ds-cell" data-row-idx="${rowIdx}" data-key="${k}" onblur="updateDatasetCell(this)" style="outline:none; cursor:text; min-width:80px;">${v}</td>`;
+                });
+                html += `<td style="text-align:center; white-space:nowrap;">
+                    <button class="btn btn-sm btn-ghost" style="padding:2px 6px; color:var(--accent); margin-right:4px;" onclick="cloneDatasetRow(${rowIdx})" title="Clonar Registro">📋</button>
+                    <button class="btn btn-sm btn-ghost" style="padding:2px 6px; color:var(--error);" onclick="deleteDatasetRow(${rowIdx})" title="Excluir Linha">🗑️</button>
+                </td>`;
+                html += '</tr>';
+            });
+            
             html += '</table></div>';
             div.innerHTML = html;
         }
 
-        function renderSteps(recording, stepsHistory = null) {
+        function toggleSelectAllDataset(element) {
+            if (element.checked) {
+                selectedDatasetRowIds = activeDataset.map(r => (r.id !== undefined && r.id !== null) ? r.id.toString() : '');
+            } else {
+                selectedDatasetRowIds = [];
+            }
+            // Atualiza os checkboxes individuais
+            const checkboxes = document.querySelectorAll('.chk-ds-row');
+            checkboxes.forEach(cb => {
+                cb.checked = element.checked;
+            });
+        }
+
+        function toggleSelectDatasetRow(element) {
+            const rid = element.getAttribute('data-row-id');
+            if (element.checked) {
+                if (!selectedDatasetRowIds.includes(rid)) {
+                    selectedDatasetRowIds.push(rid);
+                }
+            } else {
+                selectedDatasetRowIds = selectedDatasetRowIds.filter(x => x !== rid);
+            }
+            
+            // Atualiza o select all se necessário
+            const selectAll = document.getElementById('chk-ds-select-all');
+            if (selectAll) {
+                const allSelected = activeDataset.length > 0 && activeDataset.every(r => {
+                    const idStr = (r.id !== undefined && r.id !== null) ? r.id.toString() : '';
+                    return selectedDatasetRowIds.includes(idStr);
+                });
+                selectAll.checked = allSelected;
+            }
+        }
+
+        let activeExecutionTxStates = {};
+
+        function initBatchProgressUI() {
+            const grid = document.getElementById('batch-tx-grid');
+            grid.innerHTML = '';
+            activeExecutionTxStates = {};
+            
+            // Determina quais registros estão sendo executados
+            const listToRun = selectedDatasetRowIds.length > 0 
+                ? activeDataset.filter(r => selectedDatasetRowIds.includes(r.id ? r.id.toString() : ''))
+                : activeDataset;
+                
+            if (!listToRun || listToRun.length === 0) {
+                document.getElementById('batch-progress-panel').style.display = 'none';
+                return;
+            }
+            
+            listToRun.forEach(row => {
+                const rid = row.id ? row.id.toString() : '';
+                activeExecutionTxStates[rid] = 'PENDING';
+                
+                const block = document.createElement('div');
+                block.id = `tx-block-${rid}`;
+                block.className = 'tx-status-block';
+                block.style = 'padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: default;';
+                block.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background: #6b7280; display: inline-block;"></span> Reg ${rid}`;
+                grid.appendChild(block);
+            });
+            
+            updateBatchProgressUI();
+        }
+
+        function updateBatchProgressUI() {
+            const states = Object.values(activeExecutionTxStates);
+            const total = states.length;
+            if (total === 0) return;
+            
+            const completed = states.filter(s => s === 'SUCCESS' || s === 'FAILED').length;
+            const percent = Math.round((completed / total) * 100);
+            
+            document.getElementById('batch-progress-text').innerText = `${completed} / ${total} concluídos (${percent}%)`;
+            document.getElementById('batch-progress-bar').style.width = `${percent}%`;
+        }
+
+        function updateTxStatus(txId, status) {
+            txId = txId.toString();
+            if (activeExecutionTxStates[txId] === undefined) return;
+            
+            activeExecutionTxStates[txId] = status;
+            const block = document.getElementById(`tx-block-${txId}`);
+            if (block) {
+                let dotColor = '#6b7280';
+                let bgColor = 'rgba(255,255,255,0.05)';
+                let borderColor = 'rgba(255,255,255,0.1)';
+                let textColor = 'var(--text-muted)';
+                
+                if (status === 'RUNNING') {
+                    dotColor = '#3b82f6';
+                    bgColor = 'rgba(59, 130, 246, 0.15)';
+                    borderColor = 'rgba(59, 130, 246, 0.3)';
+                    textColor = '#93c5fd';
+                    block.title = 'Executando esta transação no momento...';
+                } else if (status === 'SUCCESS') {
+                    dotColor = '#10b981';
+                    bgColor = 'rgba(16, 185, 129, 0.15)';
+                    borderColor = 'rgba(16, 185, 129, 0.3)';
+                    textColor = '#a7f3d0';
+                    block.title = 'Transação concluída com sucesso!';
+                } else if (status === 'FAILED') {
+                    dotColor = '#ef4444';
+                    bgColor = 'rgba(239, 68, 68, 0.15)';
+                    borderColor = 'rgba(239, 68, 68, 0.3)';
+                    textColor = '#fca5a5';
+                    block.title = 'Transação falhou!';
+                }
+                
+                block.style.background = bgColor;
+                block.style.borderColor = borderColor;
+                block.style.color = textColor;
+                block.querySelector('span').style.background = dotColor;
+            }
+            
+            updateBatchProgressUI();
+        }
+
+        function updateDatasetCell(element) {
+            const rowIdx = parseInt(element.getAttribute('data-row-idx'), 10);
+            const key = element.getAttribute('data-key');
+            let val = element.innerText.trim();
+            
+            if (val === '') {
+                val = null;
+            } else if (val.toLowerCase() === 'true') {
+                val = true;
+            } else if (val.toLowerCase() === 'false') {
+                val = false;
+            }
+            
+            if (activeDataset[rowIdx]) {
+                activeDataset[rowIdx][key] = val;
+            }
+        }
+
+        function addDatasetRow() {
+            let keys = [];
+            if (activeDataset && activeDataset.length) {
+                keys = Object.keys(activeDataset[0]);
+            } else {
+                keys = ['id', 'aegis_scenario', 'expected_result', 'expected_error_token'];
+                if (activeDictionary && activeDictionary.fields) {
+                    keys = keys.concat(Object.keys(activeDictionary.fields));
+                }
+            }
+            
+            const newRow = {};
+            keys.forEach(k => {
+                if (k === 'id') {
+                    newRow[k] = (activeDataset.length + 1).toString();
+                } else if (k === 'aegis_scenario') {
+                    newRow[k] = 'default';
+                } else if (k === 'expected_result') {
+                    newRow[k] = 'SUCCESS';
+                } else {
+                    newRow[k] = null;
+                }
+            });
+            
+            activeDataset.push(newRow);
+            renderDataset(activeDataset);
+        }
+
+        function deleteDatasetRow(rowIdx) {
+            activeDataset.splice(rowIdx, 1);
+            renderDataset(activeDataset);
+        }
+
+        function cloneDatasetRow(rowIdx) {
+            const sourceRow = activeDataset[rowIdx];
+            if (!sourceRow) return;
+            
+            // Cópia profunda
+            const newRow = JSON.parse(JSON.stringify(sourceRow));
+            
+            // Determina ID numérico sequencial único
+            let maxId = 0;
+            activeDataset.forEach(row => {
+                const num = parseInt(row.id);
+                if (!isNaN(num) && num > maxId) {
+                    maxId = num;
+                }
+            });
+            newRow.id = (maxId + 1).toString();
+            
+            // Adiciona após o registro de origem
+            activeDataset.splice(rowIdx + 1, 0, newRow);
+            renderDataset(activeDataset);
+        }
+
+        function saveDataset() {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/dataset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(activeDataset)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Dataset salvo com sucesso!');
+                    const select = document.getElementById('active-version-select');
+                    const currentSelectedVersion = select ? select.value : '';
+                    loadTelemetryData(activeProjectSlug, true, currentSelectedVersion || null);
+                } else {
+                    alert('Falha ao salvar dataset: ' + data.message);
+                }
+            })
+            .catch(err => alert('Erro ao salvar dataset: ' + err));
+        }
+
+        function parseCSV(text) {
+            const lines = text.split(/\r?\n/);
+            if (lines.length < 2) return [];
+            
+            const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+            const results = [];
+            
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                const values = [];
+                let current = '';
+                let inQuotes = false;
+                for (let c = 0; c < line.length; c++) {
+                    const char = line[c];
+                    if (char === '"' || char === "'") {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        values.push(current.trim().replace(/^["']|["']$/g, ''));
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                values.push(current.trim().replace(/^["']|["']$/g, ''));
+                
+                const row = {};
+                headers.forEach((h, idx) => {
+                    let val = values[idx] !== undefined ? values[idx] : null;
+                    if (val === 'null' || val === '') {
+                        val = null;
+                    } else if (val === 'true') {
+                        val = true;
+                    } else if (val === 'false') {
+                        val = false;
+                    }
+                    row[h] = val;
+                });
+                results.push(row);
+            }
+            return results;
+        }
+
+        function importDatasetCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const importedRecords = parseCSV(text);
+                if (importedRecords.length === 0) {
+                    alert('Nenhum registro válido encontrado no CSV.');
+                    return;
+                }
+                
+                if (activeDataset.length > 0) {
+                    const confirmReplace = confirm(
+                        `Foram encontrados ${importedRecords.length} registros no CSV.\n\n` +
+                        `Clique em OK para SUBSTITUIR o dataset atual.\n` +
+                        `Clique em Cancelar para ANEXAR os registros ao dataset atual.`
+                    );
+                    
+                    if (confirmReplace) {
+                        activeDataset = importedRecords;
+                    } else {
+                        activeDataset = activeDataset.concat(importedRecords);
+                    }
+                } else {
+                    activeDataset = importedRecords;
+                }
+                
+                renderDataset(activeDataset);
+                alert('CSV importado com sucesso! Lembre-se de clicar em "Salvar Dataset" para persistir as alterações.');
+                event.target.value = '';
+            };
+            reader.readAsText(file, 'UTF-8');
+        }
+
+        function renderSteps(recording, stepsHistory = null, skillsRecordings = null) {
             const div = document.getElementById('steps-view');
             const btnReset = document.getElementById('btn-reset-steps');
+            const btnPromote = document.getElementById('btn-promote-skill');
             const summary = document.getElementById('steps-summary');
             
             // Se houver histórico salvo da última execução, use-o!
@@ -1765,6 +2499,7 @@
                 
                 summary.innerHTML = `📋 Histórico da Última Execução | Total: <strong>${total}</strong> &nbsp;|&nbsp; Sucesso: <strong style="color:var(--success);">${success}</strong> &nbsp;|&nbsp; Falhas/Parados: <strong style="color:var(--error);">${failed}</strong> &nbsp;|&nbsp; Healed: <strong style="color:var(--accent);">${healed}</strong>`;
                 btnReset.style.display = 'inline-block';
+                if (btnPromote) btnPromote.style.display = 'inline-block';
                 updateStepsUI();
                 return;
             }
@@ -1773,27 +2508,68 @@
                 div.innerHTML = '<div class="empty-msg">Nenhum passo gravado para este cenário.</div>';
                 summary.innerText = 'Passos do robô não gravados.';
                 btnReset.style.display = 'none';
+                if (btnPromote) btnPromote.style.display = 'none';
                 robotSteps = [];
                 currentStepIndex = 0;
                 return;
             }
             
-            // Map recorded events to robotSteps
-            robotSteps = recording.events.filter(evt => evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select').map((evt, idx) => {
-                let actionDesc = '';
-                if (evt.type === 'fill' || evt.type === 'change') {
-                    actionDesc = evt.value ? `Preencher: "${evt.value}"` : 'Preencher campo';
-                } else if (evt.type === 'click') {
-                    actionDesc = evt.text ? `Clicar em: "${evt.text}"` : 'Clique físico';
-                } else {
-                    actionDesc = evt.text || evt.value || 'Interação';
+            // Map recorded events to robotSteps (expanding skills inline if available)
+            const steps = [];
+            const events = recording.events || [];
+            
+            events.forEach(evt => {
+                if (evt.type === 'call_skill') {
+                    const skillSlug = evt.skill_slug;
+                    const skillRec = skillsRecordings ? skillsRecordings[skillSlug] : null;
+                    if (skillRec && skillRec.events) {
+                        skillRec.events.forEach(sev => {
+                            if (sev.type === 'click' || sev.type === 'fill' || sev.type === 'change' || sev.type === 'select') {
+                                let actionDesc = '';
+                                if (sev.type === 'fill' || sev.type === 'change') {
+                                    actionDesc = sev.value ? `Preencher: "${sev.value}"` : 'Preencher campo';
+                                } else if (sev.type === 'click') {
+                                    actionDesc = sev.text ? `Clicar em: "${sev.text}"` : 'Clique físico';
+                                } else {
+                                    actionDesc = sev.text || sev.value || 'Interação';
+                                }
+                                steps.push({
+                                    type: sev.type,
+                                    selector: sev.selector || '',
+                                    desc: `[Skill: ${skillSlug}] ${actionDesc}`
+                                });
+                            }
+                        });
+                    } else {
+                        steps.push({
+                            type: 'click',
+                            selector: '',
+                            desc: `Executar Skill: ${skillSlug}`
+                        });
+                    }
+                } else if (evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select') {
+                    let actionDesc = '';
+                    if (evt.type === 'fill' || evt.type === 'change') {
+                        actionDesc = evt.value ? `Preencher: "${evt.value}"` : 'Preencher campo';
+                    } else if (evt.type === 'click') {
+                        actionDesc = evt.text ? `Clicar em: "${evt.text}"` : 'Clique físico';
+                    } else {
+                        actionDesc = evt.text || evt.value || 'Interação';
+                    }
+                    steps.push({
+                        type: evt.type,
+                        selector: evt.selector || '',
+                        desc: actionDesc
+                    });
                 }
-                
+            });
+
+            robotSteps = steps.map((s, idx) => {
                 return {
                     index: idx + 1,
-                    type: evt.type,
-                    selector: evt.selector || '',
-                    desc: actionDesc,
+                    type: s.type,
+                    selector: s.selector,
+                    desc: s.desc,
                     status: 'PENDING',
                     error: '',
                     usedHealing: false
@@ -1803,6 +2579,7 @@
             currentStepIndex = 0;
             summary.innerHTML = `📋 Total de Passos Mapeados: <strong>${robotSteps.length}</strong>`;
             btnReset.style.display = 'inline-block';
+            if (btnPromote) btnPromote.style.display = 'inline-block';
             updateStepsUI();
         }
 
@@ -1814,7 +2591,7 @@
             }
             
             let html = '<div class="table-wrap"><table>';
-            html += '<tr><th style="width:7%">#</th><th style="width:15%">Tipo</th><th style="width:40%">Seletor Físico</th><th style="width:23%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
+            html += '<tr><th style="width:7%">#</th><th style="width:12%">Registro</th><th style="width:13%">Tipo</th><th style="width:33%">Seletor Físico</th><th style="width:20%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
             
             robotSteps.forEach(step => {
                 let statusClass = 'status-step-pending';
@@ -1835,6 +2612,9 @@
                 } else if (step.status === 'STOPPED') {
                     statusClass = 'status-step-stopped';
                     statusText = '⏹ Parado';
+                } else if (step.status === 'BYPASSED') {
+                    statusClass = 'status-step-bypassed';
+                    statusText = '⏭ Ignorado';
                 }
                 
                 let typeClass = 'type-other';
@@ -1846,8 +2626,11 @@
                 
                 const selectorDisplay = step.selector.length > 60 ? step.selector.substring(0, 57) + '...' : step.selector;
                 
+                const rowIdDisplay = step.row_id ? `Reg ${step.row_id}` : 'N/A';
+                
                 html += `<tr>
                     <td><strong>${step.index}</strong></td>
+                    <td><span style="font-size: 10px; font-weight: bold; color: var(--accent);">${rowIdDisplay}</span></td>
                     <td><span class="type-badge ${typeClass}">${step.type}</span></td>
                     <td style="font-family:monospace;font-size:10px;" title="${step.selector}">${selectorDisplay}</td>
                     <td ${titleAttr} ${styleErr}>${step.desc}</td>
@@ -1876,31 +2659,49 @@
             }
         }
 
-        function updateRobotStep(status, type, selector, desc, errorMsg) {
+        function normalizeSelector(sel) {
+            if (!sel) return '';
+            // Substitui aspas simples por duplas e normaliza múltiplos espaços
+            return sel.replace(/'/g, '"').replace(/\s+/g, ' ').trim();
+        }
+
+        function updateRobotStep(status, type, selector, desc, errorMsg, screenshot, rowId) {
             let foundIdx = -1;
+            const normSel = normalizeSelector(selector);
             
-            // 1. Procura primeiro a partir do currentStepIndex atual buscando match EXATO de seletor
-            for (let i = currentStepIndex; i < robotSteps.length; i++) {
-                if (robotSteps[i].selector === selector) {
-                    foundIdx = i;
-                    break;
+            // Se for um log de conclusão (SUCCESS, HEALED, FAILED), e o passo atual no currentStepIndex
+            // estiver no estado RUNNING, podemos assumir que é a conclusão desse mesmo passo!
+            if (status !== 'START' && currentStepIndex >= 0 && currentStepIndex < robotSteps.length) {
+                const currentStep = robotSteps[currentStepIndex];
+                if (currentStep.status === 'RUNNING' && currentStep.type === type) {
+                    foundIdx = currentStepIndex;
                 }
             }
-            
-            // 2. Se não achou por seletor exato, busca o próximo passo PENDENTE do mesmo tipo (clique ou fill)
+
+            // 1. Procura primeiro a partir do currentStepIndex atual buscando match de seletor normalizado e tipo correspondente
             if (foundIdx === -1) {
                 for (let i = currentStepIndex; i < robotSteps.length; i++) {
-                    if (robotSteps[i].type === type && robotSteps[i].status === 'PENDING') {
+                    if (normalizeSelector(robotSteps[i].selector) === normSel && robotSteps[i].type === type) {
                         foundIdx = i;
                         break;
                     }
                 }
             }
             
-            // 3. Se ainda assim não achou, busca em toda a lista por um passo PENDENTE com o mesmo seletor
+            // 2. Se não achou, busca em toda a lista por um passo PENDENTE com o mesmo seletor normalizado e tipo
             if (foundIdx === -1) {
                 for (let i = 0; i < robotSteps.length; i++) {
-                    if (robotSteps[i].selector === selector && robotSteps[i].status === 'PENDING') {
+                    if (normalizeSelector(robotSteps[i].selector) === normSel && robotSteps[i].type === type && robotSteps[i].status === 'PENDING') {
+                        foundIdx = i;
+                        break;
+                    }
+                }
+            }
+
+            // 3. Se AINDA não achou (por causa de seletores gerados/re-escritos/healed), busca pelo primeiro passo PENDENTE do mesmo tipo na lista inteira
+            if (foundIdx === -1 && status === 'START') {
+                for (let i = 0; i < robotSteps.length; i++) {
+                    if (robotSteps[i].type === type && robotSteps[i].status === 'PENDING') {
                         foundIdx = i;
                         break;
                     }
@@ -1910,9 +2711,18 @@
             if (foundIdx !== -1) {
                 if (status === 'START') {
                     robotSteps[foundIdx].status = 'RUNNING';
+                    if (rowId) {
+                        robotSteps[foundIdx].row_id = rowId;
+                    }
                     currentStepIndex = foundIdx;
                 } else {
                     robotSteps[foundIdx].status = status;
+                    if (screenshot) {
+                        robotSteps[foundIdx].screenshot = screenshot;
+                    }
+                    if (rowId) {
+                        robotSteps[foundIdx].row_id = rowId;
+                    }
                     if (status === 'HEALED') {
                         robotSteps[foundIdx].usedHealing = true;
                     } else if (status === 'FAILED') {
@@ -1928,7 +2738,9 @@
                     desc: desc || 'Passo dinâmico',
                     status: status === 'START' ? 'RUNNING' : status,
                     error: errorMsg,
-                    usedHealing: status === 'HEALED'
+                    usedHealing: status === 'HEALED',
+                    screenshot: screenshot || null,
+                    row_id: rowId || null
                 };
                 robotSteps.push(newStep);
                 currentStepIndex = robotSteps.length - 1;
@@ -2105,6 +2917,532 @@
                 html += '</div>';
             }
             div.innerHTML = html;
+        }
+
+        function renderHistoryTransactions() {
+            document.getElementById('history-steps-view-label').innerText = '🤖 Transações Executadas';
+            const div = document.getElementById('history-steps-view');
+            
+            if (!activeHistoryReport || activeHistoryReport.length === 0) {
+                // Se não houver relatório de transações, renderiza todos os passos de uma vez (retrocompatibilidade)
+                document.getElementById('history-steps-view-label').innerText = '🤖 Passos Auditados';
+                renderLegacyHistorySteps();
+                return;
+            }
+            
+            let html = '<div class="table-wrap"><table style="width:100%;">';
+            html += '<tr><th style="width:25%">Registro</th><th style="width:25%">Cenário</th><th style="width:25%">Duração</th><th style="width:25%">Status</th></tr>';
+            
+            activeHistoryReport.forEach(row => {
+                let statusClass = 'status-step-pending';
+                let statusText = row.status;
+                
+                if (row.status === 'SUCCESS' || row.status === 'SUCCESS_BLOCKED') {
+                    statusClass = 'status-step-success';
+                    statusText = '✓ Sucesso';
+                } else {
+                    statusClass = 'status-step-failed';
+                    statusText = '❌ Falhou';
+                }
+                
+                const duration = parseFloat(row.duration_seconds || 0).toFixed(2);
+                
+                html += `<tr onclick="showHistoryTransactionSteps('${row.id}')" style="cursor:pointer;" class="proj-grid-card-row">
+                    <td><strong>Reg #${row.id}</strong></td>
+                    <td style="font-size:10px;">${row.aegis_scenario}</td>
+                    <td style="font-size:10px;">${duration}s</td>
+                    <td><span class="status-badge-step ${statusClass}" style="font-size:9px;padding:1px 4px;">${statusText}</span></td>
+                </tr>`;
+            });
+            
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function showHistoryTransactionSteps(rowId) {
+            document.getElementById('history-steps-view-label').innerHTML = `🤖 Passos Auditados <button onclick="renderHistoryTransactions()" class="btn btn-sm btn-ghost" style="padding:1px 6px; font-size:10px; margin-left:10px; border:1px solid rgba(255,255,255,0.1); width:auto; display:inline-block;">⬅ Voltar</button>`;
+            
+            const filteredSteps = activeHistorySteps.filter(s => s.row_id && s.row_id.toString() === rowId.toString());
+            
+            const div = document.getElementById('history-steps-view');
+            if (filteredSteps.length === 0) {
+                div.innerHTML = `
+                    <div style="margin-bottom:8px;">
+                        <button onclick="renderHistoryTransactions()" class="btn btn-sm btn-ghost" style="font-size:10px; border:1px solid rgba(255,255,255,0.1); width:auto;">⬅ Voltar para Transações</button>
+                    </div>
+                    <div class="empty-msg">Nenhum passo gravado para o Registro #${rowId}.</div>
+                `;
+                return;
+            }
+            
+            let html = '<div class="table-wrap"><table>';
+            html += '<tr><th style="width:7%">#</th><th style="width:15%">Tipo</th><th style="width:40%">Seletor Físico</th><th style="width:23%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
+            
+            filteredSteps.forEach(step => {
+                let statusClass = 'status-step-pending';
+                let statusText = 'Pendente';
+                
+                if (step.status === 'RUNNING') {
+                    statusClass = 'status-step-running';
+                    statusText = '⏳ Executando';
+                } else if (step.status === 'SUCCESS') {
+                    statusClass = 'status-step-success';
+                    statusText = '✓ Sucesso';
+                } else if (step.status === 'HEALED') {
+                    statusClass = 'status-step-healed';
+                    statusText = '✨ Healed';
+                } else if (step.status === 'FAILED') {
+                    statusClass = 'status-step-failed';
+                    statusText = '❌ Falhou';
+                } else if (step.status === 'STOPPED') {
+                    statusClass = 'status-step-stopped';
+                    statusText = '⏹ Parado';
+                } else if (step.status === 'BYPASSED') {
+                    statusClass = 'status-step-bypassed';
+                    statusText = '⏭ Ignorado';
+                }
+                
+                let typeClass = 'type-other';
+                if (step.type === 'click') typeClass = 'type-click';
+                else if (step.type === 'fill') typeClass = 'type-fill';
+                
+                const titleAttr = step.error ? `title="${step.error.replace(/"/g, '&quot;')}"` : '';
+                const styleErr = step.error ? 'style="cursor:help; border-bottom: 1px dotted var(--error);"' : '';
+                
+                const selectorDisplay = step.selector.length > 40 ? step.selector.substring(0, 37) + '...' : step.selector;
+                
+                let screenshotBtn = '';
+                if (step.screenshot) {
+                    screenshotBtn = `<button onclick="event.stopPropagation(); showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')" class="btn btn-sm btn-ghost" style="padding: 1px 4px; margin-left: 6px; font-size: 10px;" title="Ver screenshot">📸</button>`;
+                }
+                
+                const clickHandler = step.screenshot ? `onclick="showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')"` : '';
+                const pointerStyle = step.screenshot ? 'style="cursor:pointer;"' : '';
+                
+                html += `<tr ${clickHandler} ${pointerStyle} class="proj-grid-card-row">
+                    <td><strong>${step.index}</strong></td>
+                    <td><span class="type-badge ${typeClass}">${step.type}</span></td>
+                    <td style="font-family:monospace;font-size:9px;" title="${step.selector}">${selectorDisplay}</td>
+                    <td ${titleAttr} ${styleErr} style="font-size:10px;">${step.desc}${screenshotBtn}</td>
+                    <td><span class="status-badge-step ${statusClass}" style="font-size:9px;padding:1px 4px;">${statusText}</span></td>
+                </tr>`;
+            });
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function renderLegacyHistorySteps() {
+            const div = document.getElementById('history-steps-view');
+            if (!activeHistorySteps || activeHistorySteps.length === 0) {
+                div.innerHTML = '<div class="empty-msg">Nenhum passo gravado para esta execução.</div>';
+                return;
+            }
+            let html = '<div class="table-wrap"><table>';
+            html += '<tr><th style="width:7%">#</th><th style="width:15%">Tipo</th><th style="width:40%">Seletor Físico</th><th style="width:23%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
+            activeHistorySteps.forEach(step => {
+                let statusClass = 'status-step-pending';
+                let statusText = 'Pendente';
+                if (step.status === 'RUNNING') {
+                    statusClass = 'status-step-running';
+                    statusText = '⏳ Executando';
+                } else if (step.status === 'SUCCESS') {
+                    statusClass = 'status-step-success';
+                    statusText = '✓ Sucesso';
+                } else if (step.status === 'HEALED') {
+                    statusClass = 'status-step-healed';
+                    statusText = '✨ Healed';
+                } else if (step.status === 'FAILED') {
+                    statusClass = 'status-step-failed';
+                    statusText = '❌ Falhou';
+                }
+                
+                let typeClass = 'type-other';
+                if (step.type === 'click') typeClass = 'type-click';
+                else if (step.type === 'fill') typeClass = 'type-fill';
+                
+                const selectorDisplay = step.selector.length > 40 ? step.selector.substring(0, 37) + '...' : step.selector;
+                let screenshotBtn = '';
+                if (step.screenshot) {
+                    screenshotBtn = `<button onclick="event.stopPropagation(); showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')" class="btn btn-sm btn-ghost" style="padding: 1px 4px; margin-left: 6px; font-size: 10px;" title="Ver screenshot">📸</button>`;
+                }
+                const clickHandler = step.screenshot ? `onclick="showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')"` : '';
+                html += `<tr ${clickHandler} class="proj-grid-card-row" style="${step.screenshot ? 'cursor:pointer;' : ''}">
+                    <td><strong>${step.index}</strong></td>
+                    <td><span class="type-badge ${typeClass}">${step.type}</span></td>
+                    <td style="font-family:monospace;font-size:9px;" title="${step.selector}">${selectorDisplay}</td>
+                    <td style="font-size:10px;">${step.desc}${screenshotBtn}</td>
+                    <td><span class="status-badge-step ${statusClass}" style="font-size:9px;padding:1px 4px;">${statusText}</span></td>
+                </tr>`;
+            });
+            html += '</table></div>';
+            div.innerHTML = html;
+        }
+
+        function loadExecutions() {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/tests/' + encodeURIComponent(activeTestSlug) + '/executions')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('history-list-tbody');
+                    if (!data.executions || data.executions.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="empty-msg" style="text-align:center;">Nenhuma execução registrada.</td></tr>';
+                        document.getElementById('history-detail-panel').style.display = 'none';
+                        return;
+                    }
+                    
+                    let html = '';
+                    data.executions.slice().reverse().forEach(ex => {
+                        let rateText = '';
+                        let statusClass = 'pill-empty';
+                        let statusStyle = '';
+                        
+                        if (ex.status === 'RUNNING') {
+                            statusClass = 'pill-recorded';
+                            rateText = 'RUNNING';
+                        } else {
+                            let total = ex.total_runs !== undefined && ex.total_runs !== null ? ex.total_runs : 0;
+                            let passed = ex.passed_runs !== undefined && ex.passed_runs !== null ? ex.passed_runs : 0;
+                            
+                            if (total === 0) {
+                                // Fallback para compatibilidade com execuções antigas
+                                if (ex.status === 'SUCCESS') {
+                                    total = 1;
+                                    passed = 1;
+                                } else {
+                                    total = 1;
+                                    passed = 0;
+                                }
+                            }
+                            
+                            const percent = Math.round((passed / total) * 100);
+                            rateText = `${percent}% (${passed}/${total})`;
+                            
+                            if (percent === 100) {
+                                statusClass = 'pill-executed';
+                            } else if (percent > 0) {
+                                statusClass = 'pill-recorded';
+                                statusStyle = 'background: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3);';
+                            } else {
+                                statusClass = 'pill-empty';
+                                statusStyle = 'background: rgba(239, 68, 68, 0.2); color: var(--error); border: 1px solid rgba(239, 68, 68, 0.4);';
+                            }
+                        }
+                        
+                        html += `<tr onclick="showExecutionDetails('${ex.id}')" style="cursor:pointer;" class="proj-grid-card-row">
+                            <td><strong>${ex.id}</strong></td>
+                            <td style="font-size:11px;">${fmtDate(ex.timestamp)}</td>
+                            <td><span style="font-size:10px; font-weight:bold; color:var(--accent);">${ex.scenario_version}</span></td>
+                            <td>${ex.duration_seconds.toFixed(2)}s</td>
+                            <td><span class="status-pill ${statusClass}" style="${statusStyle}">${rateText}</span></td>
+                        </tr>`;
+                    });
+                    tbody.innerHTML = html;
+                })
+                .catch(err => console.error('Erro ao buscar execuções:', err));
+        }
+
+        function showStepScreenshot(executionId, screenshotFile) {
+            const view = document.getElementById('history-screenshot-view');
+            if (!screenshotFile) {
+                view.innerHTML = '<div class="empty-msg" style="text-align: center;">Sem screenshot disponível para este passo.</div>';
+                return;
+            }
+            const url = `/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/executions/${encodeURIComponent(executionId)}/files/${encodeURIComponent(screenshotFile)}`;
+            view.innerHTML = `
+                <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
+                    <a href="${url}" target="_blank" title="Clique para abrir em tamanho real" style="display: block; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                        <img src="${url}" style="max-width: 100%; max-height: 100%; border-radius: 4px; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); cursor: zoom-in;" />
+                    </a>
+                    <span style="position: absolute; bottom: 4px; left: 4px; font-size: 9px; color: var(--text-muted); background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 3px;">
+                        ${screenshotFile}
+                    </span>
+                </div>
+            `;
+        }
+
+        function showExecutionDetails(executionId) {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/tests/' + encodeURIComponent(activeTestSlug) + '/executions/' + encodeURIComponent(executionId))
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('history-detail-title').innerText = `🔍 Detalhes da Execução: ${executionId}`;
+                    
+                    const logBox = document.getElementById('history-log-view');
+                    logBox.innerText = data.log || 'Nenhum log gravado.';
+                    logBox.scrollTop = logBox.scrollHeight;
+                    
+                    // Reseta painel de evidências visuais
+                    document.getElementById('history-screenshot-view').innerHTML = '<div class="empty-msg" style="text-align: center;">Clique em um passo com 📸 para ver o screenshot correspondente.</div>';
+                    
+                    activeHistorySteps = data.steps_history || [];
+                    activeHistoryReport = data.report || [];
+                    activeHistoryExecutionId = executionId;
+                    renderHistoryTransactions();
+                    
+                    const badge = document.getElementById('history-detail-badge');
+                    let status = 'SUCCESS';
+                    if (data.report && data.report.length > 0) {
+                        const anyFail = data.report.some(r => r.status === 'SYSTEM_FAILED' || r.status === 'FAILED_WRONG_BUSINESS_ERROR');
+                        status = anyFail ? 'FAILED' : 'SUCCESS';
+                    }
+                    
+                    if (status === 'SUCCESS') {
+                        badge.className = 'status-badge status-idle';
+                        badge.style = '';
+                        badge.innerHTML = '<span class="badge-dot" style="background:var(--success);"></span>CONCLUÍDO';
+                    } else {
+                        badge.className = 'status-badge';
+                        badge.style = 'background:rgba(239,68,68,0.1); color:var(--error); border:1px solid rgba(239,68,68,0.3);';
+                        badge.innerHTML = '<span class="badge-dot" style="background:var(--error);"></span>FALHOU';
+                    }
+                    
+                    document.getElementById('history-detail-panel').style.display = 'flex';
+                })
+                .catch(err => console.error('Erro ao buscar detalhes da execução:', err));
+        }
+
+        function updateVersionAndOpsPanel() {
+            const select = document.getElementById('active-version-select');
+            const versionId = select ? select.value : '';
+            const versionSelected = versionId !== '';
+            
+            const hasTest = !!activeProjectSlug && !!activeTestSlug;
+            
+            const btns = [
+                document.getElementById('btn-start-record'),
+                document.getElementById('btn-run-sanitizer'),
+                document.getElementById('btn-run-validator'),
+                document.getElementById('btn-run-generator'),
+            ];
+            const runBotBtn = document.getElementById('btn-run-bot');
+            
+            btns.forEach(b => {
+                if (b) b.disabled = !hasTest || !versionSelected;
+            });
+            if (runBotBtn) {
+                runBotBtn.disabled = !hasTest || !versionSelected || !runBotBtn.dataset.hasBot;
+            }
+            
+            // Atualiza os botões de ação de versão
+            const saveBtn = document.getElementById('btn-save-version');
+            const cloneBtn = document.getElementById('btn-clone-version');
+            const createCleanBtn = document.getElementById('btn-create-clean-version');
+            
+            if (saveBtn) {
+                saveBtn.disabled = !hasTest || !versionSelected;
+                if (versionId === 'draft') {
+                    saveBtn.innerHTML = '💾 Salvar Rascunho';
+                    saveBtn.style.background = 'rgba(16,185,129,0.2)';
+                    saveBtn.style.borderColor = 'var(--success)';
+                } else {
+                    saveBtn.innerHTML = '💾 Salvar Alterações';
+                    saveBtn.style.background = 'rgba(59,130,246,0.2)';
+                    saveBtn.style.borderColor = 'var(--info)';
+                }
+            }
+            if (cloneBtn) {
+                cloneBtn.disabled = !hasTest || !versionSelected || versionId === 'draft';
+            }
+            if (createCleanBtn) {
+                createCleanBtn.disabled = !hasTest;
+            }
+            
+            const colRight = document.querySelector('.col-right');
+            const layout = document.getElementById('main-layout');
+            
+            if (hasTest && versionSelected) {
+                if (colRight) colRight.style.display = 'flex';
+                if (layout) layout.style.gridTemplateColumns = 'var(--sidebar-w) 1fr 1.4fr';
+            } else {
+                if (colRight) colRight.style.display = 'none';
+                if (layout) {
+                    if (hasTest) {
+                        layout.style.gridTemplateColumns = 'var(--sidebar-w) 1fr';
+                    } else {
+                        layout.style.gridTemplateColumns = '1fr';
+                    }
+                }
+            }
+        }
+
+        function onSaveVersionClicked() {
+            const select = document.getElementById('active-version-select');
+            const versionId = select ? select.value : '';
+            if (versionId === 'draft') {
+                openNewVersionModal(false);
+            } else {
+                saveCurrentVersion();
+            }
+        }
+
+        function loadVersions(selectedVersionId = null) {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/tests/' + encodeURIComponent(activeTestSlug) + '/versions')
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('active-version-select');
+                    if (!select) return;
+                    
+                    let html = '<option value="">-- Selecione a Versão --</option>';
+                    html += '<option value="draft">Rascunho (Atual)</option>';
+                    
+                    const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                    let activeVersion = 'draft';
+                    if (proj && proj.tests) {
+                        const test = proj.tests.find(t => t.slug === activeTestSlug);
+                        if (test && test.active_version) {
+                            activeVersion = test.active_version;
+                        }
+                    }
+                    
+                    if (data.versions && data.versions.length > 0) {
+                        data.versions.forEach(v => {
+                            html += `<option value="${v.id}">${v.id} - ${v.name}</option>`;
+                        });
+                    }
+                    
+                    select.innerHTML = html;
+                    
+                    if (selectedVersionId !== null) {
+                        select.value = selectedVersionId;
+                    } else if (activeVersion && activeVersion !== 'draft') {
+                        select.value = activeVersion;
+                    } else {
+                        select.value = "";
+                    }
+                    updateVersionAndOpsPanel();
+                })
+                .catch(err => console.error('Erro ao buscar versões:', err));
+        }
+
+        function onVersionSelected(versionId) {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            if (versionId === "") {
+                updateVersionAndOpsPanel();
+                return;
+            }
+            
+            if (versionId === 'draft') {
+                loadTelemetryData(activeProjectSlug, false, 'draft');
+            } else {
+                fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/tests/' + encodeURIComponent(activeTestSlug) + '/versions/' + encodeURIComponent(versionId) + '/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        loadProjects(() => {
+                            loadTelemetryData(activeProjectSlug, false, versionId);
+                        });
+                    } else {
+                        alert('Erro ao carregar versão: ' + data.message);
+                    }
+                })
+                .catch(err => console.error('Erro ao restaurar versão:', err));
+            }
+        }
+
+        let versionModalMode = 'create'; 
+        let versionModalClean = false;
+
+        function openNewVersionModal(clean = false) {
+            versionModalClean = clean;
+            versionModalMode = clean ? 'create' : 'save';
+            
+            const title = document.getElementById('modal-version-title');
+            const submitBtn = document.getElementById('modal-version-submit-btn');
+            
+            if (title) title.innerText = clean ? '➕ Criar Versão Limpa' : '💾 Salvar Rascunho como Versão';
+            if (submitBtn) submitBtn.innerText = clean ? 'Criar Versão Limpa' : 'Salvar Versão';
+            
+            document.getElementById('modal-version-name').value = '';
+            document.getElementById('modal-version-desc').value = '';
+            document.getElementById('modal-version-overlay').classList.add('open');
+            document.getElementById('modal-version-name').focus();
+        }
+
+        function openCloneVersionModal() {
+            versionModalMode = 'clone';
+            versionModalClean = false;
+            
+            const title = document.getElementById('modal-version-title');
+            const submitBtn = document.getElementById('modal-version-submit-btn');
+            
+            if (title) title.innerText = '👯 Clonar Versão';
+            if (submitBtn) submitBtn.innerText = 'Clonar Versão';
+            
+            const select = document.getElementById('active-version-select');
+            const activeVer = select ? select.value : '';
+            
+            document.getElementById('modal-version-name').value = `Clone de ${activeVer}`;
+            document.getElementById('modal-version-desc').value = `Clonada a partir da versão ${activeVer}`;
+            document.getElementById('modal-version-overlay').classList.add('open');
+            document.getElementById('modal-version-name').focus();
+        }
+
+        function saveCurrentVersion() {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            const select = document.getElementById('active-version-select');
+            const activeVer = select ? select.value : '';
+            if (activeVer === 'draft' || activeVer === '') return;
+            
+            if (!confirm(`Deseja salvar as alterações locais atuais de volta na Versão ${activeVer}?`)) return;
+            
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Alterações salvas com sucesso na Versão ${activeVer}!`);
+                    loadTelemetryData(activeProjectSlug, false, activeVer);
+                } else {
+                    alert('Erro ao salvar alterações na versão: ' + data.message);
+                }
+            })
+            .catch(err => console.error('Erro ao salvar alterações:', err));
+        }
+
+        function confirmCreateVersion() {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            const name = document.getElementById('modal-version-name').value.trim();
+            const description = document.getElementById('modal-version-desc').value.trim();
+            if (!name) return alert('Por favor, informe o nome da versão.');
+            
+            let url = '';
+            let payload = { name, description };
+            
+            if (versionModalMode === 'clone') {
+                const select = document.getElementById('active-version-select');
+                const srcVer = select ? select.value : '';
+                url = `/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/versions/${encodeURIComponent(srcVer)}/clone`;
+            } else {
+                url = `/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/versions`;
+                payload.clean = versionModalClean;
+            }
+            
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('modal-version-overlay').classList.remove('open');
+                    loadProjects(() => {
+                        const newVerId = data.version ? data.version.id : 'draft';
+                        loadTelemetryData(activeProjectSlug, false, newVerId);
+                    });
+                } else {
+                    alert('Erro ao processar ação de versão: ' + data.message);
+                }
+            })
+            .catch(err => console.error('Erro ao processar ação de versão:', err));
         }
 
         // ── Init ──

@@ -61,6 +61,57 @@ class SanitizerService:
 
         initial_url = raw_data.get("initial_url", "")
         events = raw_data.get("events", [])
+        
+        # Saneamento de eventos duplicados e ruídos de gravação
+        cleaned_events = []
+        seen_fills = {}
+        last_fill_selector = None
+        for ev in events:
+            ev_type = ev.get("type", "").lower()
+            selector = ev.get("selector", "")
+            scenario = ev.get("scenario", "default")
+            
+            # 1. Ignora cliques consecutivos no mesmo seletor
+            if cleaned_events:
+                last = cleaned_events[-1]
+                if ev_type == "click" and last.get("type") == "click" and selector == last.get("selector"):
+                    continue
+            
+            # 2. Ignora cliques em overlays genéricos de CDK ou placeholder "Nenhum resultado"
+            if ev_type == "click" and ("cdk-overlay-container" in selector or "backdrop" in selector or "Nenhum resultado" in selector or "Nenhum resultado" in ev.get("text", "")):
+                continue
+                
+            # 3. Ignora cliques em autocomplete que não seguem o preenchimento do input correspondente
+            if ev_type == "click" and "mat-autocomplete-panel-" in selector:
+                panel_name = selector.split("mat-autocomplete-panel-")[1].split(" ")[0]
+                if last_fill_selector:
+                    if panel_name == "marca" and "brand" not in last_fill_selector:
+                        continue
+                    if panel_name == "modelo" and "model" not in last_fill_selector:
+                        continue
+                    if panel_name == "versao" and "version" not in last_fill_selector:
+                        continue
+                else:
+                    continue
+                
+            # 4. Trata preenchimentos duplicados (mesmo seletor e mesmo valor no mesmo cenário)
+            if ev_type in ["fill", "change"]:
+                key = (scenario, selector)
+                val = ev.get("value", "")
+                if key in seen_fills and seen_fills[key] == val:
+                    continue
+                seen_fills[key] = val
+                last_fill_selector = selector
+                
+            cleaned_events.append(ev)
+            
+        events = cleaned_events
+        raw_data["events"] = cleaned_events
+        
+        # Salva o arquivo de gravação devidamente sanitizado
+        with open(self.telemetry_file, "w", encoding="utf-8") as f:
+            json.dump(raw_data, f, indent=4, ensure_ascii=False)
+
         network = raw_data.get("network_payloads", {})
         anti_bot_fields = raw_data.get("anti_bot_fields", [])
 
@@ -147,6 +198,62 @@ class SanitizerService:
 
                 if ev_type == "ANNOTATION":
                     markdown.append(f"| **📝 REGRA** | **VALIDAÇÃO** | `-` | *N/A (Nota de Negócio)* | **\"{ev.get('text', '')}\"** |")
+                elif ev_type == "CALL_SKILL":
+                    skill_slug = ev.get("skill_slug", "")
+                    params_str = ", ".join([f"{k}={v}" for k, v in ev.get("parameters", {}).items()])
+                    markdown.append(f"| **👉 CALL** | **SKILL** | `{skill_slug}` | *Parâmetros:* | `{params_str}` |")
+                    
+                    # Tenta ler passos internos da Skill para expor no relatório (para a LLM)
+                    project_dir = os.path.dirname(os.path.dirname(self.telemetry_dir))
+                    skill_recording_path = os.path.join(project_dir, "skills", skill_slug, "gravacao.json")
+                    if os.path.exists(skill_recording_path):
+                        try:
+                            with open(skill_recording_path, "r", encoding="utf-8") as sf:
+                                s_data = json.load(sf)
+                            s_events = s_data.get("events", [])
+                            
+                            # Adiciona quebra e bloco details
+                            markdown.append("\n<details>")
+                            markdown.append(f"<summary>Visualizar passos internos da Skill: {skill_slug}</summary>\n")
+                            markdown.append("| Passo | Tipo | Elemento | Seletor Resiliente | Valor Mapeado |")
+                            markdown.append("| :---: | :---: | :---: | :--- | :--- |")
+                            
+                            s_step = 1
+                            s_prev = None
+                            for sev in s_events:
+                                sev_type = sev.get("type", "").upper()
+                                if s_prev:
+                                    if sev_type == "CLICK" and s_prev.get("type") == "click" and sev.get("selector") == s_prev.get("selector"):
+                                        continue
+                                    if sev_type == "FILL" and s_prev.get("type") == "fill" and sev.get("selector") == s_prev.get("selector"):
+                                        s_prev = sev
+                                        continue
+                                        
+                                if sev_type == "ANNOTATION":
+                                    markdown.append(f"| **📝 REGRA** | **VALIDAÇÃO** | `-` | *N/A (Nota)* | **\"{sev.get('text', '')}\"** |")
+                                else:
+                                    s_tag = sev.get("tag", "").lower()
+                                    if sev.get("is_date"): s_tag = "input (data)"
+                                    s_sel = sev.get("selector", "")
+                                    s_val = ""
+                                    if sev_type == "CLICK":
+                                        sx = sev.get("x_percent")
+                                        sy = sev.get("y_percent")
+                                        scoords = f" [coords: ({sx:.4f}, {sy:.4f})]" if (sx is not None and sy is not None) else ""
+                                        s_val = f"Clique em: '{sev.get('text', '')}'{scoords}"
+                                    elif sev_type == "FILL":
+                                        s_val = f"Preencheu com: '{sev.get('value', '')}'"
+                                        
+                                    if " >> " in s_sel:
+                                        s_sel = f"🧬 **Shadow DOM:** `{s_sel}`"
+                                    else:
+                                        s_sel = f"`{s_sel}`"
+                                    markdown.append(f"| {s_step} | `{sev_type}` | `{s_tag}` | {s_sel} | {s_val} |")
+                                    s_step += 1
+                                    s_prev = sev
+                            markdown.append("</details>\n")
+                        except Exception as e:
+                            markdown.append(f"\n*Falha ao carregar passos detalhados da Skill {skill_slug}: {str(e)}*\n")
                 else:
                     tag = ev.get("tag", "").lower()
                     if ev.get("is_date"):

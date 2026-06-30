@@ -957,8 +957,12 @@ class AegisRecorder:
                             last_scan_time = time.time()
 
                     except Exception as loop_ex:
-                        print(f"[AEGIS RECORDER ERROR] Erro no loop cooperativo: {loop_ex}")
-                        sys.stdout.flush()
+                        err_str = str(loop_ex)
+                        if "closed" in err_str.lower() or self.browser_closed:
+                            self.browser_closed = True
+                        else:
+                            print(f"[AEGIS RECORDER ERROR] Erro no loop cooperativo: {loop_ex}")
+                            sys.stdout.flush()
 
             print("\nFinalizando gravação de forma limpa e compilando telemetrias...")
             sys.stdout.flush()

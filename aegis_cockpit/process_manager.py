@@ -14,7 +14,7 @@ class ProcessManager:
         self.logs_lock = threading.Lock()
         self.get_project_dir_fn = get_project_dir_fn
 
-    def run_command_in_background(self, cmd: list, status_name: str, cwd: str, project_slug: str = None, test_slug: str = None):
+    def run_command_in_background(self, cmd: list, status_name: str, cwd: str, project_slug: str = None, test_slug: str = None, env_vars: dict = None, execution_id: str = None):
         """Executa um comando em background e captura seus logs em tempo real de forma assíncrona."""
         with self.logs_lock:
             self.global_logs.clear()
@@ -24,6 +24,15 @@ class ProcessManager:
         self.current_status = status_name
 
         try:
+            env = os.environ.copy()
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if "PYTHONPATH" in env:
+                env["PYTHONPATH"] = project_root + os.pathsep + env["PYTHONPATH"]
+            else:
+                env["PYTHONPATH"] = project_root
+            if env_vars:
+                env.update(env_vars)
+
             self.active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -32,7 +41,8 @@ class ProcessManager:
                 encoding="utf-8",
                 errors="ignore",
                 bufsize=1,
-                cwd=cwd
+                cwd=cwd,
+                env=env
             )
 
             def log_reader():
@@ -52,6 +62,26 @@ class ProcessManager:
                             self.global_logs.append("-" * 70 + "\n")
                             self.global_logs.append(f"[AEGIS COCKPIT] Processo concluído com código: {exit_code}\n")
                         
+                        # Se era gravação, executa auto_create_version_after_recording
+                        if status_name == "GRAVAÇÃO" and project_slug and test_slug is not None:
+                            try:
+                                from aegis_cockpit.project_manager import ProjectManager
+                                pm = ProjectManager(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                                pm.auto_create_version_after_recording(project_slug, test_slug)
+                                print(f"[AEGIS COCKPIT] Versão automática criada após finalizar gravação para o cenário: {test_slug}")
+                            except Exception as ex:
+                                print(f"[WARNING] Erro ao criar versão automática pós-gravação: {ex}")
+
+                        # Finaliza e grava logs da execução do robô
+                        if status_name == "EXECUÇÃO_ROBÔ" and project_slug and test_slug is not None and execution_id:
+                            try:
+                                from aegis_cockpit.project_manager import ProjectManager
+                                pm = ProjectManager(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                                log_content = "".join(self.global_logs)
+                                pm.finalize_execution(project_slug, test_slug, execution_id, exit_code, log_content)
+                            except Exception as ex:
+                                print(f"[WARNING] Erro ao finalizar a execução no process_manager: {ex}")
+
                         # Atualiza o status do projeto se a execução do robô terminar com sucesso
                         if status_name == "EXECUÇÃO_ROBÔ" and exit_code == 0 and project_slug and self.get_project_dir_fn:
                             proj_dir = self.get_project_dir_fn(project_slug)

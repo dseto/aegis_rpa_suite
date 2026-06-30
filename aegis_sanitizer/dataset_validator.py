@@ -20,7 +20,13 @@ class DatasetValidatorService:
         ext = os.path.splitext(self.dataset_path)[1].lower()
         if ext == ".json":
             with open(self.dataset_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+                elif isinstance(data, dict):
+                    return [data]
+                else:
+                    return []
         elif ext == ".csv":
             records = []
             with open(self.dataset_path, "r", encoding="utf-8") as f:

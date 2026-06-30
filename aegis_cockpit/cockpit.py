@@ -99,6 +99,11 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
         elif path == '/api/projects':
             self._json({'projects': project_manager.list_projects()})
 
+        elif path.startswith('/api/projects/') and path.endswith('/skills'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            self._json({'skills': project_manager.list_skills(slug)})
+
         elif path.startswith('/api/projects/') and path.endswith('/telemetry-files'):
             parts = path.split('/')
             slug = urllib.parse.unquote(parts[3])
@@ -134,22 +139,138 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 os.path.exists(os.path.join(proj_dir, 'run_bot.py'))
             )
             dataset = load_json('dataset_inicial.json') or []
+            recording = load_json('gravacao.json') or {}
+            
+            skills_recordings = {}
+            if recording and "events" in recording:
+                project_dir = project_manager.get_project_dir(slug)
+                for ev in recording["events"]:
+                    if ev.get("type") == "call_skill":
+                        skill_slug = ev.get("skill_slug")
+                        if skill_slug and skill_slug not in skills_recordings:
+                            sp = os.path.join(project_dir, "skills", skill_slug, "gravacao.json")
+                            if os.path.exists(sp):
+                                try:
+                                    with open(sp, 'r', encoding='utf-8') as sf:
+                                        skills_recordings[skill_slug] = json.load(sf)
+                                except Exception:
+                                    pass
+
             self._json({
                 'dictionary': load_json('dicionario.json') or {},
                 'dataset': dataset if isinstance(dataset, list) else [dataset],
                 'report': load_text('relatorio.md'),
                 'validation': load_json('relatorio_validacao.json') or {},
                 'has_bot': has_bot,
-                'recording': load_json('gravacao.json') or {},
+                'recording': recording,
+                'skills_recordings': skills_recordings,
                 'steps_history': load_json('historico_passos.json')
             })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            self._json({'versions': project_manager.list_versions(slug, test_slug)})
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/executions'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            self._json({'executions': project_manager.list_executions(slug, test_slug)})
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/executions/' in path:
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            execution_id = urllib.parse.unquote(parts[7])
+            
+            test_dir = os.path.join(project_manager.get_project_dir(slug), "tests", test_slug)
+            exec_dir = os.path.join(test_dir, "executions", execution_id)
+            
+            log_path = os.path.join(exec_dir, "execution.log")
+            steps_path = os.path.join(exec_dir, "historico_passos.json")
+            report_path = os.path.join(exec_dir, "relatorio_execucao.csv")
+            
+            log_content = ""
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        log_content = f.read()
+                except:
+                    pass
+                    
+            steps_data = []
+            if os.path.exists(steps_path):
+                try:
+                    with open(steps_path, "r", encoding="utf-8") as f:
+                        steps_data = json.load(f)
+                except:
+                    pass
+                    
+            report_rows = []
+            if os.path.exists(report_path):
+                try:
+                    import csv
+                    with open(report_path, "r", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        report_rows = list(reader)
+                except:
+                    pass
+                    
+            self._json({
+                'log': log_content,
+                'steps_history': steps_data,
+                'report': report_rows
+            })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/executions/' in path and '/files/' in path:
+            # /api/projects/<slug>/tests/<test_slug>/executions/<execution_id>/files/<filename>
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            execution_id = urllib.parse.unquote(parts[7])
+            filename = urllib.parse.unquote(parts[9])
+            
+            # Sanitiza filename para evitar directory traversal
+            filename = os.path.basename(filename)
+            
+            test_dir = os.path.join(project_manager.get_project_dir(slug), "tests", test_slug)
+            exec_dir = os.path.join(test_dir, "executions", execution_id)
+            file_path = os.path.join(exec_dir, filename)
+            
+            if os.path.exists(file_path):
+                self.send_response(200)
+                if filename.endswith('.png'):
+                    self.send_header('Content-Type', 'image/png')
+                elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+                    self.send_header('Content-Type', 'image/jpeg')
+                else:
+                    self.send_header('Content-Type', 'application/octet-stream')
+                
+                try:
+                    with open(file_path, 'rb') as f:
+                        content = f.read()
+                    self.send_header('Content-Length', str(len(content)))
+                    self.end_headers()
+                    self.wfile.write(content)
+                except Exception as e:
+                    self.send_response(500)
+                    self.end_headers()
+                return
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
 
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+        path = parsed.path
         try:
             body = json.loads(self._read_body())
         except Exception:
@@ -195,6 +316,32 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({'success': False, 'message': str(e)}, 500)
 
+        elif path.startswith('/api/projects/') and path.endswith('/skills/promote'):
+            parts = path.split('/')
+            project_slug = urllib.parse.unquote(parts[3])
+            test_slug = body.get('test_slug', '').strip()
+            skill_name = body.get('skill_name', '').strip()
+            skill_slug = body.get('skill_slug', '').strip() or None
+            category = body.get('category', 'Geral').strip()
+            description = body.get('description', '').strip()
+            
+            if not test_slug or not skill_name:
+                self._json({'success': False, 'message': 'test_slug e skill_name são obrigatórios.'}, 400)
+                return
+                
+            try:
+                meta = project_manager.promote_to_skill(
+                    project_slug=project_slug,
+                    test_slug=test_slug,
+                    skill_name=skill_name,
+                    skill_slug=skill_slug,
+                    category=category,
+                    description=description
+                )
+                self._json({'success': True, 'skill': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
         elif path.startswith('/api/projects/') and path.endswith('/steps-history/clear'):
             parts = path.split('/')
             slug = urllib.parse.unquote(parts[3])
@@ -217,6 +364,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             parts = path.split('/')
             slug = urllib.parse.unquote(parts[3])
             test_slug = body.get('test_slug', '') or query.get('test_slug', [None])[0]
+            execution_id = body.get('execution_id', '') or query.get('execution_id', [None])[0]
             steps_data = body.get('steps', [])
             
             proj_dir = project_manager.get_project_dir(slug)
@@ -227,6 +375,17 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             try:
                 with open(history_path, "w", encoding="utf-8") as f:
                     json.dump(steps_data, f, indent=4, ensure_ascii=False)
+                
+                # Se houver um execution_id ativo, grava também dentro da pasta da execução
+                if execution_id:
+                    exec_history_path = os.path.join(proj_dir, "executions", execution_id, "historico_passos.json")
+                    try:
+                        os.makedirs(os.path.dirname(exec_history_path), exist_ok=True)
+                        with open(exec_history_path, "w", encoding="utf-8") as f:
+                            json.dump(steps_data, f, indent=4, ensure_ascii=False)
+                    except Exception as ex:
+                        print(f"[WARNING] Falha ao gravar historico_passos na execucao: {ex}")
+                        
                 self._json({'success': True, 'message': 'Histórico de passos gravado.'})
             except Exception as e:
                 self._json({'success': False, 'message': str(e)}, 500)
@@ -258,6 +417,33 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     self._json({'success': False, 'message': str(e)}, 500)
             else:
                 self._json({'success': False, 'message': 'Projeto ou cenário não encontrado.'}, 404)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/dataset'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            if test_slug:
+                proj_dir = os.path.join(proj_dir, "tests", test_slug)
+                
+            dataset_path = os.path.join(proj_dir, "dataset_inicial.json")
+            
+            try:
+                # O payload deve ser uma lista de registros
+                if not isinstance(body, list):
+                    self._json({'success': False, 'message': 'O dataset deve ser uma lista de registros.'}, 400)
+                    return
+                
+                with open(dataset_path, "w", encoding="utf-8") as f:
+                    json.dump(body, f, indent=4, ensure_ascii=False)
+                
+                # Atualiza metadados do projeto
+                project_manager.update_project_activity(slug)
+                
+                self._json({'success': True, 'message': 'Dataset atualizado com sucesso.'})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
 
         elif path == '/api/run-recorder':
             if process_manager.active_process is not None:
@@ -355,9 +541,49 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': False, 'message': 'Nenhum script de robô encontrado no projeto.'}, 400)
                 return
                 
+            execution_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            try:
+                exec_dir = project_manager.prepare_execution(slug, test_slug, execution_id)
+            except Exception as e:
+                self._json({'success': False, 'message': f'Falha ao preparar diretório de execução: {e}'}, 500)
+                return
+                
+            headless = body.get('headless', True)
+            screenshots = body.get('screenshots', False)
+            realtime_logs = body.get('realtime_logs', True)
+            selected_ids = body.get('selected_ids', [])
+            
+            if selected_ids and isinstance(selected_ids, list):
+                dataset_path = os.path.join(proj_dir, "dataset_inicial.json")
+                if os.path.exists(dataset_path):
+                    try:
+                        with open(dataset_path, "r", encoding="utf-8") as f:
+                            full_dataset = json.load(f)
+                        if isinstance(full_dataset, dict):
+                            full_dataset = [full_dataset]
+                        
+                        filtered_dataset = [row for row in full_dataset if str(row.get('id', '')) in [str(x) for x in selected_ids]]
+                        
+                        exec_ds_path = os.path.join(exec_dir, "dataset_inicial.json")
+                        with open(exec_ds_path, "w", encoding="utf-8") as f:
+                            json.dump(filtered_dataset, f, indent=4, ensure_ascii=False)
+                    except Exception as filter_err:
+                        print(f"[COCKPIT ERROR] Falha ao filtrar dataset para execução: {filter_err}")
+            
             cmd = [sys.executable, '-u', bot_script]
-            process_manager.run_command_in_background(cmd, 'EXECUÇÃO_ROBÔ', cwd=proj_dir, project_slug=slug, test_slug=test_slug)
-            self._json({'success': True, 'message': 'Robô de produção iniciado!'})
+            process_manager.run_command_in_background(
+                cmd, 'EXECUÇÃO_ROBÔ', cwd=proj_dir, 
+                project_slug=slug, test_slug=test_slug,
+                env_vars={
+                    "AEGIS_EXECUTION_DIR": exec_dir, 
+                    "AEGIS_EXECUTION_ID": execution_id,
+                    "AEGIS_BROWSER_HEADLESS": "true" if headless else "false",
+                    "AEGIS_STEP_SCREENSHOTS": "true" if screenshots else "false",
+                    "AEGIS_STEP_LOGS_REALTIME": "true" if realtime_logs else "false"
+                },
+                execution_id=execution_id
+            )
+            self._json({'success': True, 'message': 'Robô de produção iniciado!', 'execution_id': execution_id})
 
         elif path == '/api/stop':
             if process_manager.stop_active_process():
@@ -372,6 +598,80 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             cmd = [sys.executable, '-m', 'playwright', 'install', 'chromium', 'msedge']
             process_manager.run_command_in_background(cmd, 'INSTALAÇÃO_NAVEGADORES', cwd=PROJECT_ROOT)
             self._json({'success': True, 'message': 'Instalação de navegadores iniciada!'})
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/restore'):
+            # POST /api/projects/{slug}/tests/{test_slug}/versions/{version_id}/restore
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            version_id = urllib.parse.unquote(parts[7])
+            try:
+                project_manager.restore_version(slug, test_slug, version_id)
+                self._json({'success': True, 'message': f'Versão {version_id} restaurada com sucesso.'})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/versions/' in path and path.endswith('/clone'):
+            # POST /api/projects/{slug}/tests/{test_slug}/versions/{version_id}/clone
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            version_id = urllib.parse.unquote(parts[7])
+            name = body.get('name', '').strip()
+            description = body.get('description', '').strip()
+            try:
+                meta = project_manager.clone_version(slug, test_slug, version_id, name, description)
+                self._json({'success': True, 'version': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions'):
+            # POST /api/projects/{slug}/tests/{test_slug}/versions
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            name = body.get('name', '').strip()
+            description = body.get('description', '').strip()
+            clean = body.get('clean', False)
+            try:
+                meta = project_manager.create_version(slug, test_slug, name, description, clean=clean)
+                self._json({'success': True, 'version': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/save'):
+            # POST /api/projects/{slug}/tests/{test_slug}/save
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            try:
+                project_manager.save_current_version(slug, test_slug)
+                self._json({'success': True})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/clone'):
+            # POST /api/projects/{slug}/tests/{test_slug}/clone
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            new_test_name = body.get('new_test_name', '').strip()
+            try:
+                meta = project_manager.clone_test(slug, test_slug, new_test_name)
+                self._json({'success': True, 'test': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and path.endswith('/clone'):
+            # POST /api/projects/{slug}/clone
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            new_project_name = body.get('new_project_name', '').strip()
+            try:
+                meta = project_manager.clone_project(slug, new_project_name)
+                self._json({'success': True, 'project': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
 
         else:
             self.send_response(404)

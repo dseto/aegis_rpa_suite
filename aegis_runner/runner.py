@@ -18,10 +18,18 @@ class TransactionRunner:
         self.initial_url = initial_url
         self.scenarios = {}
         
+        # Direcionamento de logs de execução para pasta separada se configurado
+        self.output_dir = os.environ.get("AEGIS_EXECUTION_DIR")
+        if self.output_dir:
+            self.output_dir = os.path.abspath(self.output_dir)
+            os.makedirs(self.output_dir, exist_ok=True)
+        else:
+            self.output_dir = self.project_dir
+        
         # Arquivos de dados do projeto
         self.dataset_json = os.path.join(self.project_dir, "dataset_inicial.json")
         self.dataset_csv = os.path.join(self.project_dir, "dados_entrada.csv")
-        self.report_csv = os.path.join(self.project_dir, "relatorio_execucao.csv")
+        self.report_csv = os.path.join(self.output_dir, "relatorio_execucao.csv")
         
         # Configura a saída UTF-8
         sys.stdout.reconfigure(encoding='utf-8')
@@ -32,10 +40,52 @@ class TransactionRunner:
         else:
             self.cognitive = CognitiveGateway(project_dir=self.project_dir)
 
+        # Inicializa controle de screenshots por passo e id da transação
+        self.step_screenshots = os.environ.get("AEGIS_STEP_SCREENSHOTS", "false").lower() in ("true", "1", "yes")
+        self.realtime_logs = os.environ.get("AEGIS_STEP_LOGS_REALTIME", "true").lower() in ("true", "1", "yes")
+        self.step_counter = 0
+        self.current_row_id = "1"
+        self.steps_history = []
+
     def register_scenario(self, scenario_name, callback):
         """Registra a rotina de preenchimento de formulário para um cenário lógico."""
         self.scenarios[scenario_name] = callback
         print(f"[AEGIS RUNNER] Cenário '{scenario_name}' registrado com sucesso.")
+
+    def _log_step(self, page, status, action, selector, target_description, error_msg=""):
+        screenshot_filename = ""
+        row_id = getattr(self, "current_row_id", "1")
+        if status in ("SUCCESS", "HEALED") and getattr(self, "step_screenshots", False):
+            self.step_counter = getattr(self, "step_counter", 0) + 1
+            # Substitui caracteres inválidos para nome de arquivo seguro
+            clean_sel = re.sub(r'[^a-zA-Z0-9_\-]', '_', selector)[:30]
+            screenshot_filename = f"step_{row_id}_{self.step_counter}_{action}_{clean_sel}.png"
+            path = os.path.join(self.output_dir, screenshot_filename)
+            try:
+                page.screenshot(path=path)
+                print(f"[AEGIS RUNNER] Screenshot do passo {self.step_counter} salvo em: {path}")
+            except Exception as e:
+                print(f"[WARNING] Falha ao capturar screenshot do passo {self.step_counter}: {e}")
+                screenshot_filename = ""
+                
+        # Registra o passo no histórico interno da execução
+        if not hasattr(self, "steps_history"):
+            self.steps_history = []
+        self.steps_history.append({
+            "index": len(self.steps_history) + 1,
+            "type": action,
+            "selector": selector,
+            "desc": target_description,
+            "status": status,
+            "error": error_msg,
+            "usedHealing": status == "HEALED",
+            "screenshot": screenshot_filename or None,
+            "row_id": row_id
+        })
+
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] {status} | {action} | {selector} | {target_description} | {error_msg} | {screenshot_filename} | {row_id}")
+            sys.stdout.flush()
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None) -> bool:
         """
@@ -48,8 +98,9 @@ class TransactionRunner:
         - Validação Ativa: Se validate_navigation=True, verifica se o clique causou navegação.
           Caso contrário, tenta clicar em outros elementos correspondentes de forma sequencial.
         """
-        print(f"[AEGIS_STEP] START | click | {selector} | {target_description}")
-        sys.stdout.flush()
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | click | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
+            sys.stdout.flush()
 
         # 1. Se o seletor for composto (encadeado com >>), faz hover sequencial nos pais para expandir menus multinível
         if " >> " in selector:
@@ -86,8 +137,7 @@ class TransactionRunner:
             try:
                 print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
                 page.locator(selector).click(timeout=timeout)
-                print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
-                sys.stdout.flush()
+                self._log_step(page, "SUCCESS", "click", selector, target_description)
                 return True
             except Exception as e:
                 return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords)
@@ -172,8 +222,7 @@ class TransactionRunner:
             )
         
         if clicked:
-            print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
-            sys.stdout.flush()
+            self._log_step(page, "SUCCESS", "click", selector, target_description)
         return clicked
 
     def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None) -> bool:
@@ -181,8 +230,7 @@ class TransactionRunner:
             try:
                 print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
                 page.locator(selector).first.click(timeout=timeout)
-                print(f"[AEGIS_STEP] SUCCESS | click | {selector} | {target_description}")
-                sys.stdout.flush()
+                self._log_step(page, "SUCCESS", "click", selector, target_description)
                 return True
             except Exception as inner_e:
                 e = inner_e
@@ -191,19 +239,26 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
             healed = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
             if healed:
-                print(f"[AEGIS_STEP] HEALED | click | {selector} | {target_description}")
-                sys.stdout.flush()
+                self._log_step(page, "HEALED", "click", selector, target_description)
                 return True
             else:
-                print(f"[AEGIS_STEP] FAILED | click | {selector} | {target_description} | IA self-healing failed")
-                sys.stdout.flush()
+                self._log_step(page, "FAILED", "click", selector, target_description, "IA self-healing failed")
                 raise e
         else:
             print(f"[AEGIS RUNNER] Falha ao clicar em '{selector}' e módulo cognitivo inativo.")
-            print(f"[AEGIS_STEP] FAILED | click | {selector} | {target_description} | {str(e)}")
-            sys.stdout.flush()
+            self._log_step(page, "FAILED", "click", selector, target_description, str(e))
             raise e
 
+    def wait_for_selector(self, page, selector, state="visible", timeout=10000, target_description=None) -> bool:
+        """Aguarda um seletor ficar visível ou oculto com suporte a logs resilientes."""
+        desc = target_description or selector
+        print(f"[AEGIS RUNNER] Aguardando elemento '{desc}' ficar {state}...")
+        try:
+            page.locator(selector).wait_for(state=state, timeout=timeout)
+            return True
+        except Exception as e:
+            print(f"[AEGIS WARNING] Timeout ao aguardar seletor '{selector}': {e}")
+            raise e
 
     def fill_resilient(self, page, selector, text_val, target_description,
                        strategy="DIRECT", delay_ms=60, timeout=5000) -> bool:
@@ -214,29 +269,27 @@ class TransactionRunner:
           necessário para campos com detecção de cadência de teclado (Zone.js, etc).
         Se falhar por timeout ou outra exceção, localiza visualmente o elemento na tela via IA e digita.
         """
-        print(f"[AEGIS_STEP] START | fill | {selector} | {target_description}")
-        sys.stdout.flush()
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | fill | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
+            sys.stdout.flush()
 
         if strategy == "HUMAN_LIKE":
             res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout)
             if res:
-                print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
-                sys.stdout.flush()
+                self._log_step(page, "SUCCESS", "fill", selector, target_description)
             return res
 
         try:
             print(f"[AEGIS RUNNER] Tentando preenchimento físico em '{selector}'...")
             page.locator(selector).fill(text_val, timeout=timeout)
-            print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
-            sys.stdout.flush()
+            self._log_step(page, "SUCCESS", "fill", selector, target_description)
             return True
         except Exception as e:
             if "strict mode violation" in str(e) or "resolved to" in str(e):
                 try:
                     print(f"[AEGIS RUNNER] Múltiplos elementos encontrados para '{selector}'. Tentando preencher o primeiro...")
                     page.locator(selector).first.fill(text_val, timeout=timeout)
-                    print(f"[AEGIS_STEP] SUCCESS | fill | {selector} | {target_description}")
-                    sys.stdout.flush()
+                    self._log_step(page, "SUCCESS", "fill", selector, target_description)
                     return True
                 except Exception as inner_e:
                     e = inner_e
@@ -249,16 +302,13 @@ class TransactionRunner:
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
                     page.evaluate("() => { const active = document.activeElement; if (active) { active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
-                    print(f"[AEGIS_STEP] HEALED | fill | {selector} | {target_description}")
-                    sys.stdout.flush()
+                    self._log_step(page, "HEALED", "fill", selector, target_description)
                     return True
-                print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | IA self-healing failed")
-                sys.stdout.flush()
+                self._log_step(page, "FAILED", "fill", selector, target_description, "IA self-healing failed")
                 return False
             else:
                 print(f"[AEGIS RUNNER] Falha ao preencher em '{selector}' e módulo cognitivo inativo.")
-                print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | {str(e)}")
-                sys.stdout.flush()
+                self._log_step(page, "FAILED", "fill", selector, target_description, str(e))
                 raise e
 
     def fill_human_like(self, page, selector, text_val, target_description=None, delay_ms=60, timeout=5000) -> bool:
@@ -298,11 +348,9 @@ class TransactionRunner:
                     for char in str(text_val):
                         page.keyboard.press(char)
                         _t2.sleep(delay_ms / 1000.0)
-                    print(f"[AEGIS_STEP] HEALED | fill | {selector} | {target_description}")
-                    sys.stdout.flush()
+                    self._log_step(page, "HEALED", "fill", selector, target_description)
                     return True
-            print(f"[AEGIS_STEP] FAILED | fill | {selector} | {target_description} | {str(e)}")
-            sys.stdout.flush()
+            self._log_step(page, "FAILED", "fill", selector, target_description, str(e))
             raise e
 
     def diagnose_failure(self, page, error) -> str:
@@ -321,6 +369,14 @@ class TransactionRunner:
 
     def _load_dataset(self):
         """Carrega dados do dataset_inicial.json ou dados_entrada.csv do projeto."""
+        # Se houver um dataset_inicial.json filtrado dentro da pasta temporária da execução, use-o!
+        exec_dataset = os.path.join(self.output_dir, "dataset_inicial.json")
+        if os.path.exists(exec_dataset):
+            print(f"[AEGIS RUNNER] Carregando dataset filtrado da pasta de execução: {exec_dataset}")
+            with open(exec_dataset, "r", encoding="utf-8") as f:
+                import json
+                return json.load(f)
+
         if os.path.exists(self.dataset_json):
             print(f"[AEGIS RUNNER] Carregando dataset JSON: {self.dataset_json}")
             with open(self.dataset_json, "r", encoding="utf-8") as f:
@@ -347,6 +403,16 @@ class TransactionRunner:
 
     def run(self, url=None, headless=True, slow_mo=50, channel="msedge"):
         """Inicia a orquestração centralizada de loops de transação Playwright."""
+        # Override do headless via variável de ambiente (prioridade)
+        env_headless = os.environ.get("AEGIS_BROWSER_HEADLESS")
+        if env_headless is not None:
+            headless = env_headless.lower() in ("true", "1", "yes")
+
+        # Atualiza a flag de screenshots por passo dinamicamente a partir do ambiente
+        self.step_screenshots = os.environ.get("AEGIS_STEP_SCREENSHOTS", "false").lower() in ("true", "1", "yes")
+        self.realtime_logs = os.environ.get("AEGIS_STEP_LOGS_REALTIME", "true").lower() in ("true", "1", "yes")
+        self.steps_history = []
+
         print("\n" + "=" * 80)
         print("🛡️ AEGIS RUNNER LIBRARY: EXECUTANDO LOOP TRANSACIONAL EM LOTE")
         print("=" * 80)
@@ -361,12 +427,33 @@ class TransactionRunner:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=headless, slow_mo=slow_mo, channel=channel)
             context = browser.new_context()
-            
-                
-            page = context.new_page()
+            page = None
             
             for idx, row in enumerate(dataset):
+                # Cria uma nova página para cada transação para garantir isolamento total e evitar
+                # que erros/diálogos abertos/quedas de página afetem transações subsequentes.
+                if page:
+                    try:
+                        page.close()
+                    except:
+                        pass
+                
+                try:
+                    page = context.new_page()
+                    # Dispensa automaticamente todos os diálogos JavaScript (alert, confirm, prompt)
+                    page.on("dialog", lambda d: d.dismiss())
+                except Exception as page_err:
+                    print(f"[AEGIS RUNNER] Erro crítico ao instanciar nova página: {page_err}. Tentando recuperar context...")
+                    try:
+                        context = browser.new_context()
+                        page = context.new_page()
+                        page.on("dialog", lambda d: d.dismiss())
+                    except:
+                        continue
+                
                 row_id = row.get("id", str(idx + 1))
+                self.current_row_id = row_id
+                self.step_counter = 0
                 scenario = row.get("aegis_scenario", "default")
                 expected = row.get("expected_result", "SUCCESS").upper()
                 expected_token = row.get("expected_error_token", "")
@@ -434,7 +521,7 @@ class TransactionRunner:
                         print(f"[✓ SUCESSO] Transação {row_id} executada com sucesso!")
                         
                         # Captura screenshot da última tela do robô
-                        screenshot_path = os.path.join(self.project_dir, "screenshot_script.png")
+                        screenshot_path = os.path.join(self.output_dir, "screenshot_script.png")
                         try:
                             page.screenshot(path=screenshot_path)
                             print(f"[AEGIS RUNNER] Screenshot da última tela do robô gravado em: {screenshot_path}")
@@ -519,7 +606,7 @@ class TransactionRunner:
                                 print(f"[AEGIS RUNNER] Falha ao executar diagnóstico de IA: {diag_err}")
                         
                         # Tira screenshot do erro
-                        screenshot_path = os.path.join(self.project_dir, f"screenshot_erro_transacao_{row_id}.png")
+                        screenshot_path = os.path.join(self.output_dir, f"screenshot_erro_transacao_{row_id}.png")
                         try:
                             page.screenshot(path=screenshot_path)
                             print(f"[❌ FALHA] Transação {row_id} quebrou por erro sistêmico. Screenshot salvo em: {screenshot_path}")
@@ -540,4 +627,27 @@ class TransactionRunner:
             
             # Fecha navegador e grava relatório
             self._write_report(reports)
+            
+            # Grava o histórico final de passos em JSON na pasta de execução
+            steps_json_path = os.path.join(self.output_dir, "historico_passos.json")
+            try:
+                with open(steps_json_path, "w", encoding="utf-8") as sf:
+                    json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
+                print(f"[AEGIS RUNNER] Trilha de auditoria final (historico_passos.json) gravada em: {steps_json_path}")
+            except Exception as j_err:
+                print(f"[WARNING] Falha ao gravar {steps_json_path}: {j_err}")
+                
+            if page:
+                try:
+                    page.close()
+                except:
+                    pass
             browser.close()
+
+        # Retorna erro se houver falhas nas transações do lote
+        has_failures = any(r["status"] not in ["SUCCESS", "SUCCESS_BLOCKED"] for r in reports)
+        if has_failures:
+            print("\n[AEGIS RUNNER] ❌ Execução em lote finalizada com falhas detectadas nas transações.")
+            sys.exit(1)
+        else:
+            print("\n[AEGIS RUNNER] ✅ Execução em lote finalizada com sucesso total!")
