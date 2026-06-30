@@ -568,11 +568,19 @@ PORTAL_PASSWORD=
                         with open(test_json, "r", encoding="utf-8") as f:
                             meta = json.load(f)
                         
-                        # Garante identificador único para o cenário
+                        # Garante identificador único para o cenário e consistência do slug
+                        needs_rewrite = False
                         if "test_id" not in meta or "id" not in meta or (isinstance(meta.get("id"), str) and len(meta["id"]) > 10):
                             next_tid = self.get_next_test_id(project_slug)
                             meta["test_id"] = next_tid
                             meta["id"] = str(next_tid)
+                            needs_rewrite = True
+                            
+                        if "slug" not in meta or meta.get("slug") != entry:
+                            meta["slug"] = entry
+                            needs_rewrite = True
+                            
+                        if needs_rewrite:
                             with open(test_json, "w", encoding="utf-8") as wf:
                                 json.dump(meta, wf, indent=4, ensure_ascii=False)
                                 
@@ -587,8 +595,11 @@ PORTAL_PASSWORD=
         tests_dir = os.path.join(proj_dir, "tests")
         os.makedirs(tests_dir, exist_ok=True)
         
+        now = datetime.now().isoformat(timespec="seconds")
+        next_tid = self.get_next_test_id(project_slug)
+        
         if not test_slug:
-            test_slug = self.slugify(test_name)
+            test_slug = f"{next_tid:03d}_{self.slugify(test_name)}"
             
         base_slug = test_slug
         counter = 2
@@ -598,9 +609,6 @@ PORTAL_PASSWORD=
             
         test_dir = os.path.join(tests_dir, test_slug)
         os.makedirs(test_dir, exist_ok=True)
-        
-        now = datetime.now().isoformat(timespec="seconds")
-        next_tid = self.get_next_test_id(project_slug)
         meta = {
             "id": str(next_tid),
             "test_id": next_tid,

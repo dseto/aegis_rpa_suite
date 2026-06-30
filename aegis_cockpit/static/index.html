@@ -4116,8 +4116,12 @@
             
             const hasTest = !!activeProjectSlug && !!activeTestSlug;
             
-            const btns = [
-                document.getElementById('btn-start-record'),
+            const recordBtn = document.getElementById('btn-start-record');
+            if (recordBtn) {
+                recordBtn.disabled = !hasTest;
+            }
+            
+            const otherWorkspaceBtns = [
                 document.getElementById('btn-run-sanitizer'),
                 document.getElementById('btn-run-validator'),
                 document.getElementById('btn-run-generator'),
@@ -4125,7 +4129,7 @@
             ];
             const runBotBtn = document.getElementById('btn-run-bot');
             
-            btns.forEach(b => {
+            otherWorkspaceBtns.forEach(b => {
                 if (b) b.disabled = !hasTest || !versionSelected;
             });
             if (runBotBtn) {
