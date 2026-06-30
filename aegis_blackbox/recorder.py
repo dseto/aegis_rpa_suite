@@ -280,7 +280,7 @@ JS_MINIMAL_LISTENERS = """
                     if (res.status === 'started') {
                         showAegisToast("🎙️ Gravação de Voz Iniciada... Fale agora!");
                     } else if (res.status === 'stopped') {
-                        showAegisToast("✅ Voz Gravada!\nTranscrição: " + res.transcription, 6000);
+                        showAegisToast("✅ Voz Gravada!\\nTranscrição: " + res.transcription, 6000);
                     }
                 });
             }
@@ -1023,6 +1023,22 @@ class AegisRecorder:
             self.context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
             self.page = self.context.new_page()
+
+            # Console Logger e tratamento de erros do navegador
+            def on_console_msg(msg):
+                text = msg.text
+                msg_type = msg.type
+                if msg_type in ["error", "warning"] or "aegis" in text.lower():
+                    print(f"[BROWSER CONSOLE {msg_type.upper()}] {text}")
+                    sys.stdout.flush()
+
+            def on_page_error(err):
+                print(f"[BROWSER PAGE ERROR] {err}")
+                sys.stdout.flush()
+
+            self.page.on("console", on_console_msg)
+            self.page.on("pageerror", on_page_error)
+
             self.page.expose_function("pythonRecordAction", self.record_action)
             self.page.expose_function("pythonToggleVoice", self.toggle_voice_from_page)
             self.page.expose_function("pythonAddAnnotation", self.record_annotation)
@@ -1036,6 +1052,25 @@ class AegisRecorder:
             self.page.on("close", on_page_close)
             self.page.on("response", self.handle_response)
             self.page.on("filechooser", self.handle_filechooser)
+
+            # Suporte a Multi-Abas: configura dinamicamente novas abas criadas no contexto
+            def on_new_page(new_page):
+                print(f"[AEGIS] Nova aba detectada: {new_page.url}")
+                sys.stdout.flush()
+                try:
+                    new_page.expose_function("pythonRecordAction", self.record_action)
+                    new_page.expose_function("pythonToggleVoice", self.toggle_voice_from_page)
+                    new_page.expose_function("pythonAddAnnotation", self.record_annotation)
+                    new_page.on("close", lambda _: print(f"[AEGIS] Aba fechada: {new_page.url}"))
+                    new_page.on("console", on_console_msg)
+                    new_page.on("pageerror", on_page_error)
+                    new_page.on("response", self.handle_response)
+                    new_page.on("filechooser", self.handle_filechooser)
+                except Exception as e:
+                    print(f"[AEGIS WARNING] Erro ao configurar nova aba: {e}")
+                    sys.stdout.flush()
+
+            self.context.on("page", on_new_page)
 
             # Adiciona script de inicialização para injetar nas navegações futuras
             self.context.add_init_script(JS_MINIMAL_LISTENERS)
