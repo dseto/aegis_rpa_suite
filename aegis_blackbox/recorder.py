@@ -1055,20 +1055,37 @@ class AegisRecorder:
 
             self.page = self.context.new_page()
 
-            # Console Logger e tratamento de erros do navegador
+            # Console Logger e tratamento de erros do navegador (salva de forma discreta em arquivo)
+            browser_log_path = os.path.join(self.output_dir, "browser_console.log")
+
+            def log_browser_message(msg_text):
+                try:
+                    os.makedirs(self.output_dir, exist_ok=True)
+                    with open(browser_log_path, "a", encoding="utf-8") as lf:
+                        lf.write(msg_text + "\n")
+                except Exception:
+                    pass
+
             def on_console_msg(msg):
                 text = msg.text
                 msg_type = msg.type
-                # Ignora erros genéricos de rede (404/403/recursos) para não poluir o terminal
-                if "failed to load resource" in text.lower() or "net::err_" in text.lower():
-                    return
-                if msg_type == "error" or "aegis" in text.lower():
+                # Salva no arquivo de auditoria
+                log_browser_message(f"[CONSOLE {msg_type.upper()}] {text}")
+                
+                # Só exibe no terminal do usuário se for erro do próprio Aegis
+                if "aegis" in text.lower():
                     print(f"[BROWSER CONSOLE {msg_type.upper()}] {text}")
                     sys.stdout.flush()
 
             def on_page_error(err):
-                print(f"[BROWSER PAGE ERROR] {err}")
-                sys.stdout.flush()
+                err_str = str(err)
+                # Salva no arquivo de auditoria
+                log_browser_message(f"[PAGE ERROR] {err_str}")
+                
+                # Só exibe no terminal do usuário se for erro do próprio Aegis
+                if "aegis" in err_str.lower():
+                    print(f"[BROWSER PAGE ERROR] {err}")
+                    sys.stdout.flush()
 
             self.page.on("console", on_console_msg)
             self.page.on("pageerror", on_page_error)
