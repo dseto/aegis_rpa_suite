@@ -258,8 +258,14 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    import time
    from playwright.sync_api import Page
    
-   # Resolve o caminho do framework Aegis RPA Suite para importação do SDK
-   AEGIS_SUITE_ROOT = r"{PROJECT_ROOT}"
+   # Resolve o caminho do framework Aegis RPA Suite dinamicamente subindo os diretórios
+   current_dir = os.path.dirname(os.path.abspath(__file__))
+   AEGIS_SUITE_ROOT = current_dir
+   while AEGIS_SUITE_ROOT and not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):
+       parent = os.path.dirname(AEGIS_SUITE_ROOT)
+       if parent == AEGIS_SUITE_ROOT:
+           break
+       AEGIS_SUITE_ROOT = parent
    if AEGIS_SUITE_ROOT not in sys.path:
        sys.path.insert(0, AEGIS_SUITE_ROOT)
        

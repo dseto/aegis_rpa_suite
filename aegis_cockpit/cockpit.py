@@ -104,6 +104,28 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             slug = urllib.parse.unquote(parts[3])
             self._json({'skills': project_manager.list_skills(slug)})
 
+        elif path.startswith('/api/projects/') and path.endswith('/devops-config'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            
+            cfg = project_manager.get_devops_config(slug)
+            
+            # Mascara os segredos para enviar para o frontend
+            masked_cfg = dict(cfg)
+            for key in ["pat", "llm_api_key"]:
+                if masked_cfg.get(key):
+                    masked_cfg[key] = "********"
+                    
+            # Inclui a lista de cenários disponíveis do projeto
+            tests = project_manager.list_tests(slug)
+            tests_meta = [{"slug": t["slug"], "name": t["name"], "status": t["status"]} for t in tests]
+            
+            self._json({
+                'success': True,
+                'config': masked_cfg,
+                'available_scenarios': tests_meta
+            })
+
         elif path.startswith('/api/projects/') and path.endswith('/telemetry-files'):
             parts = path.split('/')
             slug = urllib.parse.unquote(parts[3])
@@ -296,10 +318,12 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             name = body.get('name', '').strip()
             url = body.get('url', '').strip()
             custom_path = body.get('custom_path', '').strip()
+            business_description = body.get('business_description', '').strip()
+            expected_business_outcome = body.get('expected_business_outcome', '').strip()
             if not name:
                 self._json({'success': False, 'message': 'Nome do projeto é obrigatório.'}, 400)
                 return
-            meta = project_manager.create_project(name, url, custom_path)
+            meta = project_manager.create_project(name, url, custom_path, business_description, expected_business_outcome)
             self._json({'success': True, 'project': meta})
 
         elif path.startswith('/api/projects/') and path.endswith('/tests'):
@@ -307,11 +331,17 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             project_slug = urllib.parse.unquote(parts[3])
             name = body.get('name', '').strip()
             url = body.get('url', '').strip()
+            business_description = body.get('business_description', '').strip()
+            expected_business_outcome = body.get('expected_business_outcome', '').strip()
             if not name:
                 self._json({'success': False, 'message': 'Nome do cenário é obrigatório.'}, 400)
                 return
             try:
-                meta = project_manager.create_test(project_slug, name, url=url)
+                meta = project_manager.create_test(
+                    project_slug, name, url=url, 
+                    business_description=business_description, 
+                    expected_business_outcome=expected_business_outcome
+                )
                 self._json({'success': True, 'test': meta})
             except Exception as e:
                 self._json({'success': False, 'message': str(e)}, 500)
@@ -404,7 +434,12 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 try:
                     with open(proj_json, 'r', encoding='utf-8') as f:
                         meta = json.load(f)
-                    meta['url'] = body.get('url', meta.get('url', ''))
+                    if 'url' in body:
+                        meta['url'] = body.get('url', meta.get('url', ''))
+                    if 'business_description' in body:
+                        meta['business_description'] = body.get('business_description', '')
+                    if 'expected_business_outcome' in body:
+                        meta['expected_business_outcome'] = body.get('expected_business_outcome', '')
                     meta['last_activity'] = datetime.now().isoformat(timespec='seconds')
                     with open(proj_json, 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4, ensure_ascii=False)
@@ -417,6 +452,112 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     self._json({'success': False, 'message': str(e)}, 500)
             else:
                 self._json({'success': False, 'message': 'Projeto ou cenário não encontrado.'}, 404)
+
+        elif path.startswith('/api/projects/') and path.endswith('/edit') and '/tests/' not in path:
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            new_name = body.get('name', '').strip()
+            new_desc = body.get('business_description', '').strip()
+            new_outcome = body.get('expected_business_outcome', '').strip()
+            if not new_name:
+                self._json({'success': False, 'message': 'Nome do projeto é obrigatório.'}, 400)
+                return
+            try:
+                meta = project_manager.edit_project(slug, new_name, new_desc, new_outcome)
+                self._json({'success': True, 'project': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/edit'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            new_name = body.get('name', '').strip()
+            new_desc = body.get('business_description', '').strip()
+            new_outcome = body.get('expected_business_outcome', '').strip()
+            if not new_name:
+                self._json({'success': False, 'message': 'Nome do cenário é obrigatório.'}, 400)
+                return
+            try:
+                meta = project_manager.edit_test(slug, test_slug, new_name, new_desc, new_outcome)
+                self._json({'success': True, 'test': meta})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and path.endswith('/enrich') and '/tests/' not in path:
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            name = body.get('name', '').strip()
+            url_context = body.get('url', '').strip()
+            desc = body.get('business_description', '').strip()
+            outcome = body.get('expected_business_outcome', '').strip()
+            
+            try:
+                from aegis_runner.cognitive_fallback import CognitiveGateway
+                proj_dir = project_manager.get_project_dir(slug)
+                gateway = CognitiveGateway(project_dir=proj_dir)
+                if not gateway.is_active():
+                    self._json({'success': False, 'message': 'Módulo cognitivo (LLM) inativo ou sem API Key configurada.'}, 400)
+                    return
+                
+                prompt = f"""
+                Você é o Aegis Mentor, especialista em engenharia de requisitos de RPA e QA.
+                O usuário quer enriquecer a descrição de negócio e o resultado de negócio esperado para o projeto RPA abaixo.
+                Nome do Projeto: {name}
+                URL/Contexto do Alvo: {url_context}
+                Descrição Atual: {desc}
+                Resultado Esperado Atual: {outcome}
+
+                Sua tarefa é melhorar, detalhar e refinar tecnicamente a descrição de negócio e o resultado esperado do projeto, tornando-os mais profissionais, claros e focados em QA.
+
+                Retorne OBRIGATORIAMENTE um objeto JSON com os campos:
+                - "business_description": Descrição enriquecida e detalhada do projeto.
+                - "expected_business_outcome": Descrição enriquecida do resultado esperado.
+                
+                Retorne EXCLUSIVAMENTE o JSON sem blocos de formatação markdown adicionais.
+                """
+                response_text = gateway.call_llm(prompt, force_json=True)
+                json_data = gateway.parse_json_response(response_text)
+                self._json({'success': True, 'enriched': json_data})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/enrich'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            name = body.get('name', '').strip()
+            desc = body.get('business_description', '').strip()
+            outcome = body.get('expected_business_outcome', '').strip()
+            
+            try:
+                from aegis_runner.cognitive_fallback import CognitiveGateway
+                proj_dir = project_manager.get_project_dir(slug)
+                gateway = CognitiveGateway(project_dir=os.path.join(proj_dir, "tests", test_slug))
+                if not gateway.is_active():
+                    self._json({'success': False, 'message': 'Módulo cognitivo (LLM) inativo ou sem API Key configurada.'}, 400)
+                    return
+                
+                prompt = f"""
+                Você é o Aegis Mentor, especialista em engenharia de requisitos de RPA e QA.
+                O usuário quer enriquecer a descrição de negócio e o resultado de negócio esperado para o cenário de teste abaixo.
+                Nome do Cenário: {name}
+                Descrição Atual: {desc}
+                Resultado Esperado Atual: {outcome}
+
+                Sua tarefa é melhorar, detalhar e refinar tecnicamente a descrição de negócio e o resultado esperado, tornando-os mais focados em cenários de QA e cobertura de testes de regressão.
+
+                Retorne OBRIGATORIAMENTE um objeto JSON com os campos:
+                - "business_description": Descrição enriquecida e detalhada do cenário.
+                - "expected_business_outcome": Descrição enriquecida do resultado esperado.
+                
+                Retorne EXCLUSIVAMENTE o JSON sem blocos de formatação markdown adicionais.
+                """
+                response_text = gateway.call_llm(prompt, force_json=True)
+                json_data = gateway.parse_json_response(response_text)
+                self._json({'success': True, 'enriched': json_data})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
 
         elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/dataset'):
             parts = path.split('/')
@@ -516,6 +657,41 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             cmd = [sys.executable, '-u', generator_script, '--project-dir', proj_dir]
             process_manager.run_command_in_background(cmd, 'GERAÇÃO_CÓDIGO', cwd=PROJECT_ROOT, project_slug=slug, test_slug=test_slug)
             self._json({'success': True, 'message': 'Gerador de código iniciado!'})
+
+        elif path.startswith('/api/projects/') and path.endswith('/devops-config') and '/tests/' not in path:
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            try:
+                saved = project_manager.save_devops_config(slug, body)
+                # Oculta segredos ao responder
+                masked = dict(saved)
+                for key in ["pat", "llm_api_key"]:
+                    if masked.get(key):
+                        masked[key] = "********"
+                self._json({'success': True, 'config': masked})
+            except Exception as e:
+                self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and path.endswith('/publish-devops') and '/tests/' not in path:
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            
+            if process_manager.active_process is not None:
+                self._json({'success': False, 'message': 'Já existe um processo em execução. Pare-o primeiro.'}, 400)
+                return
+                
+            proj_dir = project_manager.get_project_dir(slug)
+            config_file = os.path.join(proj_dir, "devops_config.json")
+            if not os.path.exists(config_file):
+                self._json({'success': False, 'message': 'Configure o DevOps para este projeto antes de publicar.'}, 400)
+                return
+                
+            publisher_script = os.path.join(PROJECT_ROOT, 'aegis_devops', 'publish_pipeline.py')
+            cmd = [sys.executable, '-u', publisher_script, '--project-slug', slug]
+            process_manager.run_command_in_background(
+                cmd, 'PUBLICAÇÃO_DEVOPS', cwd=PROJECT_ROOT, project_slug=slug
+            )
+            self._json({'success': True, 'message': 'Publicação do DevOps iniciada em background!'})
 
         elif path == '/api/run-bot':
             if process_manager.active_process is not None:

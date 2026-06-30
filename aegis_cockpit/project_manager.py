@@ -14,8 +14,8 @@ class ProjectManager:
         
         # Inicializa configurações persistentes
         cfg = self.load_aegis_config()
-        self.projects_dir = os.path.abspath(cfg.get("projects_dir", r"C:\Projetos\Lab\projects"))
-        self.telemetry_dir = os.path.abspath(cfg.get("telemetry_dir", r"C:\Projetos\Lab\telemetry_data"))
+        self.projects_dir = os.path.abspath(cfg.get("projects_dir", os.path.join(project_root, "projects")))
+        self.telemetry_dir = os.path.abspath(cfg.get("telemetry_dir", os.path.join(project_root, "telemetry_data")))
         
         os.makedirs(self.projects_dir, exist_ok=True)
         os.makedirs(self.telemetry_dir, exist_ok=True)
@@ -34,15 +34,23 @@ class ProjectManager:
             except:
                 pass
         return {
-            "projects_dir": r"C:\Projetos\Lab\projects",
-            "telemetry_dir": r"C:\Projetos\Lab\telemetry_data"
+            "projects_dir": os.path.abspath(os.path.join(self.project_root, "projects")),
+            "telemetry_dir": os.path.abspath(os.path.join(self.project_root, "telemetry_data"))
         }
 
     def save_aegis_config(self, cfg: dict):
-        """Salva configurações persistentes."""
+        """Salva configurações persistentes fundindo-as com as existentes."""
         try:
+            current_cfg = {}
+            if os.path.exists(self.config_file):
+                try:
+                    with open(self.config_file, "r", encoding="utf-8") as f:
+                        current_cfg = json.load(f)
+                except:
+                    pass
+            current_cfg.update(cfg)
             with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                json.dump(current_cfg, f, indent=4, ensure_ascii=False)
         except Exception as e:
             print(f"[AEGIS COCKPIT] Erro ao salvar aegis_config.json: {e}")
 
@@ -208,7 +216,7 @@ class ProjectManager:
             
         return projects
 
-    def create_project(self, name: str, url: str, custom_path: str = "") -> dict:
+    def create_project(self, name: str, url: str, custom_path: str = "", business_description: str = "", expected_business_outcome: str = "") -> dict:
         """Cria um novo diretório de projeto físico (localizado no projects_dir ou em custom_path)."""
         base_slug = self.slugify(name)
         slug = self.get_unique_slug(base_slug)
@@ -229,7 +237,9 @@ class ProjectManager:
             "url": url,
             "created_at": now,
             "last_activity": now,
-            "status": "empty"
+            "status": "empty",
+            "business_description": business_description,
+            "expected_business_outcome": expected_business_outcome
         }
         with open(os.path.join(proj_dir, "project.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=4, ensure_ascii=False)
@@ -571,7 +581,7 @@ PORTAL_PASSWORD=
                         pass
         return tests
 
-    def create_test(self, project_slug: str, test_name: str, test_slug: str = None, url: str = "") -> dict:
+    def create_test(self, project_slug: str, test_name: str, test_slug: str = None, url: str = "", business_description: str = "", expected_business_outcome: str = "") -> dict:
         """Cria um novo cenário de teste sob um projeto."""
         proj_dir = self.get_project_dir(project_slug)
         tests_dir = os.path.join(proj_dir, "tests")
@@ -599,7 +609,9 @@ PORTAL_PASSWORD=
             "url": url,
             "created_at": now,
             "last_activity": now,
-            "status": "empty"
+            "status": "empty",
+            "business_description": business_description,
+            "expected_business_outcome": expected_business_outcome
         }
         
         with open(os.path.join(test_dir, "project.json"), "w", encoding="utf-8") as f:
@@ -1241,4 +1253,81 @@ PORTAL_PASSWORD=
             "slug": new_slug,
             "created_at": now
         }
+
+    def edit_project(self, project_slug: str, new_name: str, new_business_desc: str, new_expected_outcome: str) -> dict:
+        """Edita os detalhes estruturais de um projeto e atualiza o project.json correspondente."""
+        proj_dir = self.get_project_dir(project_slug)
+        proj_json = os.path.join(proj_dir, "project.json")
+        if not os.path.exists(proj_json):
+            raise FileNotFoundError(f"Metadados do projeto não encontrados em: {proj_json}")
+
+        with open(proj_json, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        meta["name"] = new_name
+        meta["business_description"] = new_business_desc
+        meta["expected_business_outcome"] = new_expected_outcome
+        meta["last_activity"] = datetime.now().isoformat(timespec="seconds")
+
+        with open(proj_json, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=4, ensure_ascii=False)
+
+        return meta
+
+    def edit_test(self, project_slug: str, test_slug: str, new_name: str, new_business_desc: str, new_expected_outcome: str) -> dict:
+        """Edita os detalhes estruturais de um cenário de teste e atualiza o project.json correspondente."""
+        proj_dir = self.get_project_dir(project_slug)
+        test_dir = os.path.join(proj_dir, "tests", test_slug)
+        test_json = os.path.join(test_dir, "project.json")
+        if not os.path.exists(test_json):
+            raise FileNotFoundError(f"Metadados do cenário não encontrados em: {test_json}")
+
+        with open(test_json, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        meta["name"] = new_name
+        meta["business_description"] = new_business_desc
+        meta["expected_business_outcome"] = new_expected_outcome
+
+        with open(test_json, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=4, ensure_ascii=False)
+
+        # Atualiza data de atividade do projeto principal
+        self.update_project_activity(project_slug)
+
+        return meta
+
+    def get_devops_config(self, project_slug: str) -> dict:
+        """Carrega as configurações do DevOps de um projeto específico."""
+        proj_dir = self.get_project_dir(project_slug)
+        config_path = os.path.join(proj_dir, "devops_config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+
+    def save_devops_config(self, project_slug: str, config_data: dict) -> dict:
+        """Salva as configurações do DevOps de um projeto específico."""
+        proj_dir = self.get_project_dir(project_slug)
+        config_path = os.path.join(proj_dir, "devops_config.json")
+        
+        # Carrega configuração pré-existente para não sobrescrever tokens mascarados vazios
+        existing = self.get_devops_config(project_slug)
+        
+        # Se vier com chaves mascaradas, restaura o segredo real original
+        # Isso previne que o usuário salve "********" por cima do segredo real no disco
+        for key in ["pat", "llm_api_key"]:
+            val = config_data.get(key)
+            if val and all(c == '*' for c in val) and len(val) >= 4:
+                config_data[key] = existing.get(key, "")
+        
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=4, ensure_ascii=False)
+            
+        self.update_project_activity(project_slug)
+        return config_data
+
 

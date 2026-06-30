@@ -61,3 +61,10 @@ telemetry_data/*
 aegis_runner/test_cognitive_fallback.py
 aegis_runner/test_runner_integration.py
 docs/dataset_generation_backlog.md
+
+# Python/Editor temporary files
+*.log
+*.bak
+*.swp
+.pytest_cache/
+.ipynb_checkpoints/

@@ -113,6 +113,10 @@ python aegis_cockpit/cockpit.py
 * **Fase 5 Expandida:** A etapa do Aegis Runner foi promovida a um card de largura total (`.runner-card`), organizando as opções de execução (checkboxes) de forma horizontal e elegante.
 * **Checkboxes Personalizados:** Substituição dos checkboxes nativos por controles personalizados de alta fidelidade visual com capitalização em texto natural (evitando a coerção do estilo em maiúsculas).
 * **Painel e Terminal de Execução com Scroll:** A coluna central agora suporta rolagem vertical nativa com scrollbars personalizados no tom estético violeta. O Terminal de Execução possui altura mínima garantida de `300px` para evitar que suma da tela.
+* **Edição de Títulos e Metadados com IA:** Os nomes de projetos e cenários, bem como suas descrições e resultados esperados, podem ser editados após a criação por meio de modais dedicados (ícone ✏️ na barra lateral) e do painel contextual central. Cada painel de edição dispõe do botão **✨ Enriquecer com IA**, que consulta a LLM para detalhar e qualificar as descrições em linguagem natural baseada em melhores práticas de QA.
+* **Resolução Dinâmica de Caminhos:** O Cockpit substituiu fallbacks rígidos/estáticos para caminhos locais (antigo `C:\Projetos\Lab\...`) por caminhos dinâmicos gerados em tempo de execução relativos à raiz do framework (`PROJECT_ROOT`). Isso garante funcionamento imediato sem quebras de diretórios em máquinas limpas.
+* **Salvamento Seguro de Configuração (Merge):** O processo de atualização do arquivo de workspace (`aegis_config.json`) foi refatorado para realizar uma fusão (merge) de chaves em vez de sobrescrita destrutiva, preservando portas e parâmetros do SO durante o reinício.
+* **Carregamento Robusto do Módulo Cognitivo:** O parser do arquivo `.env` global foi aprimorado para suportar varreduras multi-diretórios (lendo da raiz do framework e do CWD atual) e sanitização automática de aspas simples/duplas para chaves de API, mitigando erros de autenticação na LLM.
 
 ### 📊 Gestão de Dataset (Aba Dataset)
 
@@ -150,6 +154,34 @@ Navegação em dois níveis para evitar sobrecarregar a tela em datasets com mui
 * **Nível 2 — Passos Auditados por Registro:** Ao clicar em um registro específico, exibe os passos auditados exclusivos daquele `row_id`. Botão `⬅ Voltar` retorna ao Nível 1.
 * **Visualizador de Screenshots:** Passos com evidências visuais exibem botão 📸 que carrega o screenshot no painel.
 * **Retrocompatibilidade:** Execuções antigas sem relatório transacional renderizam os passos diretamente em modo legado.
+
+---
+
+## 🎙️ Anotações Semânticas em Tempo Real (Texto & Voz)
+
+O **Aegis Blackbox** permite documentar a intenção funcional do processo de negócio diretamente no browser durante a gravaçãoheaded:
+* **Anotações de Texto (`Ctrl+Shift+A`):** Abre um modal integrado com Shadow DOM na página web sob gravação para digitação da intenção funcional do passo atual (salvo via `pythonAddAnnotation`).
+* **Anotações de Voz (`Ctrl+Shift+V`):** Inicia a captura de áudio do microfone em background (utilizando API nativa MCI no Windows, sem dependências externas). Ao pressionar novamente, salva o arquivo `.wav` de 16kHz e realiza a transcrição semântica automática via LLM/Whisper no `CognitiveGateway` (exibindo toast reativo na tela).
+* **Sanitização Semântica:** O `sanitizer.py` consome essas anotações e reescreve descrições mecânicas em linguagem de negócio no `relatorio.md` e `gravacao.json`.
+
+---
+
+## 🔗 Módulo Aegis DevOps (REST API v7.1)
+
+O módulo `aegis_devops/` fornece integração nativa com o **Azure DevOps** utilizando estritamente a API REST v7.1 (autenticação por PAT):
+
+* **Painel DevOps Independente (Nova Tela):** Interface gráfica dedicada e apartada no Cockpit para configuração centralizada de pipelines. Permite selecionar o projeto do workspace, configurar credenciais globais e selecionar múltiplos cenários de teste para compor a matriz do pipeline.
+* **Configurações Persistentes por Projeto:** Parametrizações do DevOps são salvas localmente em `projects/{project_slug}/devops_config.json` com mascaramento automático de chaves (PAT/API Key) na UI e algoritmo de merge que impede a sobrescrita acidental de tokens válidos.
+* **Publicação Assíncrona em Background (`publish_pipeline.py`):** O processo de push e registro de pipeline é executado em segundo plano sob o `ProcessManager` do Cockpit, permitindo que o usuário acompanhe o progresso detalhado de cada fase em tempo real por um console de terminal integrado.
+* **Matriz de Execução Concorrente:** A publicação consolida a execução paralela de múltiplos cenários de teste no arquivo `azure-pipelines.yml` gerado automaticamente, otimizando o tempo de execução no agente Azure DevOps.
+* **Governança Segura de Segredos:** Quando o Variable Group cognitivo (`aegis-llm-group`) já existe no Azure DevOps, a publicação preserva intactos os segredos editados manualmente pelo usuário na UI do Azure DevOps (como chaves da API de LLM), evitando sobrescritas acidentais com strings vazias.
+* **Git Push REST (`publisher.py`):** Realiza commits atômicos de arquivos, scripts do core do runner e cenários diretamente no Azure Repos sem depender do binário local `git`.
+* **Mapeamento Granular no Azure Test Plans:**
+  * **Test Plan** $\rightarrow$ Projeto Aegis (`project_slug`).
+  * **Test Suite** $\rightarrow$ Cenário Aegis (`test_slug`).
+  * **Test Case** $\rightarrow$ Registro individual do Dataset (um caso de teste criado e documentado por linha do dataset, com cada campo mapeado como step do Test Case).
+  * **Test Run** $\rightarrow$ Publica os resultados individuais da execução em lote (Passed, Failed) diretamente atrelados aos seus respectivos Test Cases.
+* **JUnit XML Reporter (`junit_reporter.py`):** Traduz o relatório CSV de execução do robô para o formato JUnit XML, integrado à task `PublishTestResults@2` do pipeline YAML, permitindo gráficos detalhados de sucesso/falha e vinculação automática de logs e screenshots às falhas no painel de QA.
 
 ---
 

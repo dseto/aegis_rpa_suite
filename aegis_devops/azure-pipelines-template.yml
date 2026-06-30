@@ -1,0 +1,80 @@
+# Pipeline gerada automaticamente pelo Aegis RPA Suite
+trigger:
+  branches:
+    include:
+      - {branch}
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  # Variable Group de configuração cognitiva (chaves de LLM)
+  - group: {variable_group}
+  # Variable Group de autenticação — credenciais SSO/OKTA nunca ficam no código ou dataset.
+  # Criado manualmente no Azure DevOps: Pipelines > Library > + Variable Group
+  # Nome obrigatório: aegis-auth-secrets
+  # Variáveis obrigatórias (marcar como Secret):
+  #   OKTA_USER         → usuário de serviço criado pelo time de IAM
+  #   OKTA_PASSWORD     → senha do usuário de serviço
+  #   OKTA_TOTP_SECRET  → string base32 do fator TOTP registrado no OKTA (ex: JBSWY3DPEHPK3PXP)
+  - group: aegis-auth-secrets
+
+jobs:
+  - job: RunAegisTests
+    displayName: 'Execução de Testes Aegis RPA'
+    strategy:
+      matrix:
+{matrix_block}
+    steps:
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: '3.11'
+          addToPath: true
+
+      - script: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install msedge
+        displayName: 'Instalar Dependências e Microsoft Edge'
+
+      - script: |
+          python projects/{project_slug}/tests/$(SCENARIO)/bot_producao.py
+        displayName: 'Executar Cenário: $(SCENARIO)'
+        env:
+          # --- Módulo Cognitivo (Aegis Self-Healing) ---
+          AEGIS_COGNITIVE_API_KEY:    $(AEGIS_COGNITIVE_API_KEY)
+          AEGIS_COGNITIVE_PROVIDER:   $(AEGIS_COGNITIVE_PROVIDER)
+          AEGIS_COGNITIVE_MODEL:      $(AEGIS_COGNITIVE_MODEL)
+          AEGIS_COGNITIVE_BASE_URL:   $(AEGIS_COGNITIVE_BASE_URL)
+          AEGIS_COGNITIVE_ENABLED:    'true'
+          # --- Navegador ---
+          AEGIS_BROWSER_CHANNEL:      'msedge'
+          AEGIS_BROWSER_HEADLESS:     'true'
+          AEGIS_STEP_SCREENSHOTS:     'true'
+          # --- Autenticação OKTA (injetadas do Variable Group 'aegis-auth-secrets') ---
+          # As variáveis marcadas como Secret no Variable Group são automaticamente
+          # mascaradas nos logs do Azure DevOps — nunca aparecem em texto puro.
+          OKTA_USER:        $(OKTA_USER)
+          OKTA_PASSWORD:    $(OKTA_PASSWORD)
+          OKTA_TOTP_SECRET: $(OKTA_TOTP_SECRET)
+
+      - script: |
+          python aegis_devops/junit_reporter.py projects/{project_slug}/tests/$(SCENARIO)/relatorio_execucao.csv projects/{project_slug}/tests/$(SCENARIO)/test-results.xml
+        displayName: 'Gerar Relatório JUnit XML'
+        condition: always()
+
+      - task: PublishTestResults@2
+        inputs:
+          testResultsFormat: 'JUnit'
+          testResultsFiles: '**/test-results.xml'
+          failOnFailedTests: true
+        displayName: 'Publicar Resultados no Test Plans'
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+          PathtoPublish: 'projects/{project_slug}/tests/$(SCENARIO)'
+          ArtifactName: 'aegis-execution-results-$(SCENARIO)'
+          publishLocation: 'Container'
+        displayName: 'Publicar Screenshots e Trilha de Auditoria'
+        condition: always()

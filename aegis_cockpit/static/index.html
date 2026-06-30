@@ -852,12 +852,87 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        
+        /* ── Módulo DevOps ── */
+        .global-nav {
+            display: flex;
+            gap: 8px;
+            margin-left: 30px;
+        }
+        .nav-btn {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: var(--text-muted);
+            padding: 6px 16px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .nav-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: rgba(255,255,255,0.2);
+        }
+        .nav-btn.active {
+            background: rgba(124, 58, 237, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .devops-layout {
+            display: none;
+            grid-template-columns: 350px 1fr;
+            gap: 20px;
+            height: calc(100vh - 60px);
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .devops-left-col {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .devops-right-col {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .devops-scenarios-box {
+            background: rgba(5,5,10,0.3);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 350px;
+            overflow-y: auto;
+        }
+        .devops-scenario-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 4px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-size: 12px;
+        }
+        .devops-scenario-row:last-child {
+            border-bottom: none;
+        }
     </style>
 </head>
 <body>
 
     <header>
-        <div class="logo">🛡️ <span>Aegis</span> RPA Suite Cockpit</div>
+        <div style="display: flex; align-items: center;">
+            <div class="logo">🛡️ <span>Aegis</span> RPA Suite Cockpit</div>
+            <nav class="global-nav">
+                <button class="nav-btn active" id="nav-btn-workspace" onclick="showScreen('workspace')">📁 Workspace</button>
+                <button class="nav-btn" id="nav-btn-devops" onclick="showScreen('devops')">🚀 DevOps Pipelines</button>
+            </nav>
+        </div>
         <div class="header-right">
             <button id="btn-install-browsers" class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px; margin-right: 10px; cursor: pointer;" title="Baixar/Instalar navegadores necessários via Playwright CLI">🌐 Playwright Install</button>
             <div id="badge-status" class="status-badge status-idle">
@@ -892,6 +967,35 @@
 
             <div id="active-banner" class="active-project-banner banner-no-project">
                 ⚠️ Nenhum projeto selecionado. Selecione ou crie um projeto na sidebar.
+            </div>
+
+            <!-- CARD CONTEXTO DE NEGÓCIO -->
+            <div id="business-context-card" class="card" style="display: none; padding: 16px; margin-bottom: 16px; border: 1px solid rgba(124,58,237,0.2); background: rgba(5,5,10,0.2);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-weight: 700; color: #fff; font-size: 13px; display:flex; align-items:center; gap:6px;">
+                        <span>🧠 Contexto de Negócio do Cenário</span>
+                    </div>
+                    <button class="btn btn-sm btn-ghost" id="btn-edit-business-context" style="width:auto; padding:2px 8px; font-size:11px;" onclick="toggleEditBusinessContext(true)">✏️ Editar</button>
+                </div>
+                <div id="business-context-view">
+                    <p style="font-size: 12px; margin: 0 0 6px 0; color: var(--text);"><strong>Descrição:</strong> <span id="lbl-business-description" style="color:var(--text-muted);">Não informada.</span></p>
+                    <p style="font-size: 12px; margin: 0; color: var(--text);"><strong>Resultado Esperado:</strong> <span id="lbl-expected-outcome" style="color:var(--text-muted);">Não informado.</span></p>
+                </div>
+                <div id="business-context-edit" style="display:none; flex-direction:column; gap:10px;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:11px; margin-bottom:4px; display:block; color:var(--text-muted);">Descrição de Negócio / História de Usuário</label>
+                        <textarea id="txt-business-description" rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:11px; margin-bottom:4px; display:block; color:var(--text-muted);">Resultado Esperado de Negócio</label>
+                        <textarea id="txt-expected-outcome" rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+                    </div>
+                    <div style="display:flex; gap:8px; justify-content:flex-end;">
+                        <button class="btn btn-ghost btn-sm" style="width:auto; padding:4px 10px;" onclick="toggleEditBusinessContext(false)">Cancelar</button>
+                        <button class="btn btn-sm btn-ghost" id="btn-context-enrich-ai" style="width:auto; padding:4px 10px; border:1px solid var(--accent); color:var(--accent);" onclick="enrichContextCardWithAI()">✨ Enriquecer com IA</button>
+                        <button class="btn btn-sm btn-success" style="width:auto; padding:4px 10px;" onclick="saveBusinessContext()">Salvar Contexto</button>
+                    </div>
+                </div>
             </div>
 
             <div id="scenario-version-bar" class="card" style="display: none; padding: 16px; margin-bottom: 16px; border: 1px solid rgba(124,58,237,0.3); background: rgba(124,58,237,0.03);">
@@ -953,6 +1057,16 @@
                         <p class="step-desc">Gera o robô resiliente via Inteligência Artificial.</p>
                         <div style="margin-top: auto;">
                             <button id="btn-run-generator" class="btn btn-accent" style="background: linear-gradient(135deg, #ec4899 0%, #be185d 100%); width: 100%;" disabled>🤖 Gerar Robô</button>
+                        </div>
+                    </div>
+
+                    <!-- Fase 6: Azure DevOps -->
+                    <div class="step-card" id="card-devops" style="border: 1px solid rgba(0, 120, 212, 0.3); background: rgba(0, 120, 212, 0.03); display: none !important;">
+                        <div class="step-badge" style="background: #0078d4; border-color: #005a9e;">Fase 6</div>
+                        <div class="step-title" style="color: #0078d4;">Azure DevOps</div>
+                        <p class="step-desc">Publica no repositório Git e configura pipelines de CI/CD.</p>
+                        <div style="margin-top: auto;">
+                            <button id="btn-publish-devops" class="btn" style="background: #0078d4; border-color: #005a9e; color: #fff; width: 100%;" onclick="openPublishDevOpsModal()" disabled>🚀 Publicar DevOps</button>
                         </div>
                     </div>
                 </div>
@@ -1130,9 +1244,125 @@
         </div>
     </div>
 
+    <!-- ── Módulo Aegis DevOps ── -->
+    <div class="devops-layout" id="devops-layout">
+        <!-- Coluna Esquerda: Seleção de Projeto e Cenários -->
+        <div class="devops-left-col">
+            <!-- Card 1: Selecionar Projeto -->
+            <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+                <div class="card-title">📁 Selecionar Projeto</div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <select id="devops-project-select" onchange="onDevOpsProjectChanged()" style="background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 4px; font-size: 13px; outline: none; width: 100%;">
+                        <option value="">-- Selecione o Projeto --</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Card 2: Cenários a incluir no Pipeline -->
+            <div class="card" style="padding: 16px; flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 250px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="card-title" style="margin-bottom: 0;">🤖 Cenários a Incluir</div>
+                    <label class="checkbox-container" style="font-size: 11px; margin-bottom: 0;">
+                        <input type="checkbox" id="devops-select-all-scenarios" onchange="toggleDevOpsSelectAll(this)" />
+                        <span class="checkmark"></span>
+                        Todos
+                    </label>
+                </div>
+                <div class="devops-scenarios-box" id="devops-scenarios-list">
+                    <div class="empty-msg" style="text-align: center; padding: 20px;">Selecione um projeto para carregar cenários.</div>
+                </div>
+                
+                <!-- Ações principais de DevOps -->
+                <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px;">
+                    <button class="btn btn-success" onclick="saveDevOpsSettings()" style="width: 100%; justify-content: center;">💾 Salvar Configurações</button>
+                    <button class="btn btn-accent" id="btn-publish-devops-run" onclick="startDevOpsPublication()" style="background: #0078d4; border-color: #005a9e; color: #fff; width: 100%; justify-content: center;" disabled>🚀 Publicar Pipeline</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Coluna Direita: Formulário de Configuração + Console de Logs -->
+        <div class="devops-right-col" style="display: grid; grid-template-rows: auto 1fr; gap: 16px; min-height: 0;">
+            <!-- Painel de Configurações (Azure + LLM) -->
+            <div class="card" style="padding: 16px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px;">
+                <!-- Configurações do Azure DevOps -->
+                <div>
+                    <h4 style="margin: 0 0 12px 0; color: #0078d4; font-size: 14px; display: flex; align-items: center; gap: 6px;">🚀 Conexão Azure DevOps (REST API v7.1)</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label for="devops-org">Organização (ou URL Completa)</label>
+                            <input type="text" id="devops-org" placeholder="Ex: minha-organizacao" />
+                        </div>
+                        <div class="form-group">
+                            <label for="devops-project">Projeto</label>
+                            <input type="text" id="devops-project" placeholder="Ex: MeuProjetoRPA" />
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label for="devops-repo">Repositório Git</label>
+                            <input type="text" id="devops-repo" placeholder="Ex: aegis-rpa-tests" />
+                        </div>
+                        <div class="form-group">
+                            <label for="devops-branch">Branch Principal</label>
+                            <input type="text" id="devops-branch" value="main" />
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 12px;">
+                        <div class="form-group">
+                            <label for="devops-pat">PAT (Personal Access Token)</label>
+                            <input type="password" id="devops-pat" placeholder="PAT do Azure DevOps com escopos Build e Code" />
+                        </div>
+                        <div class="form-group">
+                            <label for="devops-vg">Grupo de Variáveis (Variable Group)</label>
+                            <input type="text" id="devops-vg" value="aegis-llm-group" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configurações de IA/LLM do Pipeline -->
+                <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 20px;">
+                    <h4 style="margin: 0 0 12px 0; color: var(--accent); font-size: 14px; display: flex; align-items: center; gap: 6px;">🧠 Configurações de IA (Módulo Cognitivo)</h4>
+                    <div class="form-group">
+                        <label for="devops-provider">Provedor de LLM</label>
+                        <select id="devops-provider" style="background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px; outline: none; width: 100%;">
+                            <option value="openrouter">OpenRouter (Recomendado)</option>
+                            <option value="litellm">LiteLLM (ou Local)</option>
+                            <option value="gemini">Google Gemini API</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="devops-apikey">API Key do Provedor (Deixe em branco se já salva no AzDO)</label>
+                        <input type="password" id="devops-apikey" placeholder="Chave secreta para auto-healing cognitivo" />
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 12px;">
+                        <div class="form-group">
+                            <label for="devops-model">Modelo de LLM</label>
+                            <input type="text" id="devops-model" value="google/gemini-2.5-flash" />
+                        </div>
+                        <div class="form-group">
+                            <label for="devops-baseurl">Base URL</label>
+                            <input type="text" id="devops-baseurl" value="https://openrouter.ai/api/v1" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Monitoramento e Console de Logs (Terminal) -->
+            <div class="card" style="padding: 16px; display: flex; flex-direction: column; min-height: 0; flex: 1;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 6px; margin-bottom: 8px;">
+                    <div class="card-title" style="margin-bottom: 0;">📟 Console de Logs de Publicação</div>
+                    <div id="devops-status-badge" class="status-badge status-idle">
+                        <span class="badge-dot"></span>IDLE
+                    </div>
+                </div>
+                <pre id="devops-terminal" class="terminal-box" style="flex: 1; font-size: 11px; overflow-y: auto; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; font-family: 'Fira Code', monospace; padding: 10px; margin: 0; min-height: 200px;"></pre>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Modal: Novo Projeto ── -->
     <div class="modal-overlay" id="modal-overlay">
-        <div class="modal">
+        <div class="modal" style="max-height: 90vh; overflow-y: auto;">
             <h3>➕ Novo Projeto RPA</h3>
             <div class="form-group">
                 <label for="modal-proj-name">Nome do Projeto</label>
@@ -1141,6 +1371,14 @@
             <div class="form-group">
                 <label for="modal-proj-url">URL de Gravação</label>
                 <input type="text" id="modal-proj-url" placeholder="Ex: http://localhost:5173/?e2e=true" />
+            </div>
+            <div class="form-group">
+                <label for="modal-proj-desc">Descrição de Negócio / Contexto (Opcional)</label>
+                <textarea id="modal-proj-desc" placeholder="Ex: Mapeamento de fluxos do portal de seguros..." rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="modal-proj-outcome">Resultado Geral Esperado (Opcional)</label>
+                <textarea id="modal-proj-outcome" placeholder="Ex: Gerar apólices válidas..." rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
             </div>
             <div class="form-group">
                 <label for="modal-proj-path">Caminho Físico de Destino (Opcional)</label>
@@ -1156,7 +1394,7 @@
 
     <!-- ── Modal: Novo Cenário ── -->
     <div class="modal-overlay" id="modal-test-overlay">
-        <div class="modal">
+        <div class="modal" style="max-height: 90vh; overflow-y: auto;">
             <h3>➕ Novo Cenário de Teste</h3>
             <input type="hidden" id="modal-test-proj-slug" />
             <div class="form-group">
@@ -1167,9 +1405,65 @@
                 <label for="modal-test-url">URL de Gravação (Opcional - Em branco usa a do projeto)</label>
                 <input type="text" id="modal-test-url" placeholder="Ex: http://localhost:5173/?login=true" />
             </div>
+            <div class="form-group">
+                <label for="modal-test-desc">Descrição de Negócio / História de Usuário (Opcional)</label>
+                <textarea id="modal-test-desc" placeholder="Ex: Simula a cotação de seguro com dados válidos" rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="modal-test-outcome">Resultado Esperado (Opcional)</label>
+                <textarea id="modal-test-outcome" placeholder="Ex: Proposta emitida com sucesso" rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
             <div class="modal-actions">
                 <button class="btn btn-ghost btn-sm" id="btn-close-test-modal">Cancelar</button>
                 <button class="btn btn-sm" id="btn-confirm-create-test" style="width:auto;">✅ Criar Cenário</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Editar Projeto ── -->
+    <div class="modal-overlay" id="modal-edit-proj-overlay">
+        <div class="modal" style="max-height: 90vh; overflow-y: auto;">
+            <h3>✏️ Editar Projeto RPA</h3>
+            <div class="form-group">
+                <label for="modal-edit-proj-name">Nome do Projeto</label>
+                <input type="text" id="modal-edit-proj-name" placeholder="Nome do projeto" />
+            </div>
+            <div class="form-group">
+                <label for="modal-edit-proj-desc">Descrição de Negócio (Opcional)</label>
+                <textarea id="modal-edit-proj-desc" placeholder="História ou escopo do projeto..." rows="3" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="modal-edit-proj-outcome">Resultado Geral Esperado (Opcional)</label>
+                <textarea id="modal-edit-proj-outcome" placeholder="Resultado funcional esperado..." rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" onclick="closeEditProjectModal()">Cancelar</button>
+                <button class="btn btn-sm btn-ghost" id="btn-edit-proj-enrich" onclick="enrichProjectWithAI()" style="width:auto; border: 1px solid var(--accent); color: var(--accent);">✨ Enriquecer com IA</button>
+                <button class="btn btn-sm btn-success" onclick="saveProjectEdit()" style="width:auto;">💾 Salvar Alterações</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Editar Cenário ── -->
+    <div class="modal-overlay" id="modal-edit-test-overlay">
+        <div class="modal" style="max-height: 90vh; overflow-y: auto;">
+            <h3>✏️ Editar Cenário de Teste</h3>
+            <div class="form-group">
+                <label for="modal-edit-test-name">Nome do Cenário</label>
+                <input type="text" id="modal-edit-test-name" placeholder="Nome do cenário" />
+            </div>
+            <div class="form-group">
+                <label for="modal-edit-test-desc">Descrição de Negócio (Opcional)</label>
+                <textarea id="modal-edit-test-desc" placeholder="Escopo ou passos de negócio..." rows="3" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="modal-edit-test-outcome">Resultado Esperado (Opcional)</label>
+                <textarea id="modal-edit-test-outcome" placeholder="Resultado de sucesso do cenário..." rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost btn-sm" onclick="closeEditTestModal()">Cancelar</button>
+                <button class="btn btn-sm btn-ghost" id="btn-edit-test-enrich" onclick="enrichTestWithAI()" style="width:auto; border: 1px solid var(--accent); color: var(--accent);">✨ Enriquecer com IA</button>
+                <button class="btn btn-sm btn-success" onclick="saveTestEdit()" style="width:auto;">💾 Salvar Alterações</button>
             </div>
         </div>
     </div>
@@ -1193,6 +1487,75 @@
             <div class="modal-actions">
                 <button class="btn btn-ghost btn-sm" id="btn-close-skill-modal">Cancelar</button>
                 <button class="btn btn-accent btn-sm" id="btn-save-skill" style="width:auto;">Promover</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Publicar no Azure DevOps ── -->
+    <div class="modal-overlay" id="modal-devops-overlay">
+        <div class="modal" style="max-width: 600px; max-height: 90vh; overflow-y: auto;">
+            <h3>🚀 Publicar no Azure DevOps CI/CD</h3>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Publica os arquivos do cenário atual no repositório git e cria/atualiza a Build Pipeline v7.1 no Azure DevOps.</p>
+            
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="form-group">
+                    <label for="modal-devops-org">Organização (ou URL)</label>
+                    <input type="text" id="modal-devops-org" placeholder="Ex: minha-organizacao" />
+                </div>
+                <div class="form-group">
+                    <label for="modal-devops-project">Projeto</label>
+                    <input type="text" id="modal-devops-project" placeholder="Ex: MeuProjetoRPA" />
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="form-group">
+                    <label for="modal-devops-repo">Repositório Git</label>
+                    <input type="text" id="modal-devops-repo" placeholder="Ex: aegis-rpa-tests" />
+                </div>
+                <div class="form-group">
+                    <label for="modal-devops-branch">Branch</label>
+                    <input type="text" id="modal-devops-branch" value="main" />
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="modal-devops-pat">Personal Access Token (PAT)</label>
+                <input type="password" id="modal-devops-pat" placeholder="Código PAT do Azure DevOps com escopo de Build & Código" />
+            </div>
+            
+            <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px; margin-top:12px;">
+                <h4 style="margin: 0 0 8px 0; font-size:13px; color:#fff;">⚙️ Configurações Cognitivas de Pipelines (Variable Group)</h4>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label for="modal-devops-vg">Nome do Grupo de Variáveis</label>
+                        <input type="text" id="modal-devops-vg" value="aegis-llm-group" />
+                    </div>
+                    <div class="form-group">
+                        <label for="modal-devops-provider">Provedor de LLM</label>
+                        <select id="modal-devops-provider" style="background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px; outline: none; width:100%;">
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="litellm">LiteLLM (ou local)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="modal-devops-apikey">API Key do Provedor de LLM</label>
+                    <input type="password" id="modal-devops-apikey" placeholder="Chave secreta para auto-healing cognitivo" />
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label for="modal-devops-model">Modelo de LLM</label>
+                        <input type="text" id="modal-devops-model" value="google/gemini-2.5-flash" />
+                    </div>
+                    <div class="form-group">
+                        <label for="modal-devops-baseurl">Base URL do Provedor</label>
+                        <input type="text" id="modal-devops-baseurl" value="https://openrouter.ai/api/v1" />
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-actions" style="margin-top:16px;">
+                <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-devops-overlay').classList.remove('open')">Cancelar</button>
+                <button class="btn btn-accent btn-sm" id="btn-confirm-publish-devops" style="width:auto; background:#0078d4; border-color:#005a9e;" onclick="publishDevOpsConfirm()">🚀 Iniciar Publicação</button>
             </div>
         </div>
     </div>
@@ -1293,6 +1656,11 @@
         let dashboardSearchQuery = '';
 
         function updateLayoutState() {
+            const devopsScreen = document.getElementById('devops-layout');
+            if (devopsScreen && devopsScreen.style.display === 'grid') {
+                return;
+            }
+
             const layout = document.getElementById('main-layout');
             const dashboard = document.getElementById('projects-dashboard');
             const sidebar = document.querySelector('.sidebar');
@@ -1338,8 +1706,11 @@
 
             // Restaura e atualiza o header da sidebar
             sidebarHeader.innerHTML = `
-                <span class="sidebar-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; font-weight: 700;" title="${projDisplayName}">📁 ${projDisplayName}</span>
-                <button class="btn btn-ghost btn-sm" style="padding: 2px 6px; font-size: 9px; width: auto;" onclick="event.stopPropagation(); openNewTestModal('${p.slug}')">+ Cenário</button>
+                <span class="sidebar-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; font-weight: 700;" title="${projDisplayName}">📁 ${projDisplayName}</span>
+                <div style="display: flex; gap: 4px;">
+                    <button class="btn btn-ghost btn-sm" style="padding: 2px 6px; font-size: 9px; width: auto;" onclick="event.stopPropagation(); openEditProjectModal('${p.slug}')" title="Editar Projeto">✏️</button>
+                    <button class="btn btn-ghost btn-sm" style="padding: 2px 6px; font-size: 9px; width: auto;" onclick="event.stopPropagation(); openNewTestModal('${p.slug}')">+ Cenário</button>
+                </div>
             `;
 
             const tests = p.tests || [];
@@ -1365,11 +1736,13 @@
                             <div class="test-item ${isTestActive ? 'active-test' : ''}" 
                                  style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; cursor: pointer; transition: all 0.2s;"
                                  onclick="event.stopPropagation(); selectTest('${p.slug}', '${t.slug}')">
-                                <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; width: 85%;">
+                                <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; width: 75%;">
                                     <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;" title="${testDisplayName}">${testDisplayName}</span>
                                     ${pillFor(t.status)}
                                 </div>
                                 <div style="display: flex; gap: 4px; align-items: center;">
+                                    <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
+                                            onclick="event.stopPropagation(); openEditTestModal('${p.slug}', '${t.slug}')" title="Editar cenário">✏️</button>
                                     <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
                                             onclick="event.stopPropagation(); cloneTestPrompt('${p.slug}', '${t.slug}')" title="Clonar cenário">👯</button>
                                     <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px;" 
@@ -1599,6 +1972,303 @@
                 if (versionBar) versionBar.style.display = 'none';
             }
             updateVersionAndOpsPanel();
+            updateBusinessContextUI();
+        }
+
+        function toggleEditBusinessContext(showEdit = true) {
+            const viewDiv = document.getElementById('business-context-view');
+            const editDiv = document.getElementById('business-context-edit');
+            const editBtn = document.getElementById('btn-edit-business-context');
+            if (showEdit) {
+                viewDiv.style.display = 'none';
+                editDiv.style.display = 'flex';
+                editBtn.style.display = 'none';
+                
+                // Popula inputs com valores atuais
+                const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                if (proj && proj.tests && activeTestSlug) {
+                    const test = proj.tests.find(t => t.slug === activeTestSlug);
+                    if (test) {
+                        document.getElementById('txt-business-description').value = test.business_description || '';
+                        document.getElementById('txt-expected-outcome').value = test.expected_business_outcome || '';
+                    }
+                }
+            } else {
+                viewDiv.style.display = 'block';
+                editDiv.style.display = 'none';
+                editBtn.style.display = 'block';
+            }
+        }
+
+        function saveBusinessContext() {
+            const desc = document.getElementById('txt-business-description').value.trim();
+            const outcome = document.getElementById('txt-expected-outcome').value.trim();
+            
+            if (!activeProjectSlug || !activeTestSlug) return;
+            
+            fetch('/api/projects/' + encodeURIComponent(activeProjectSlug) + '/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    test_slug: activeTestSlug,
+                    business_description: desc,
+                    expected_business_outcome: outcome
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    toggleEditBusinessContext(false);
+                    // Atualiza localmente no cache allProjects
+                    const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                    if (proj && proj.tests) {
+                        const test = proj.tests.find(t => t.slug === activeTestSlug);
+                        if (test) {
+                            test.business_description = desc;
+                            test.expected_business_outcome = outcome;
+                        }
+                    }
+                    updateBusinessContextUI();
+                } else {
+                    alert('Erro ao salvar contexto de negócio: ' + data.message);
+                }
+            });
+        }
+
+        // ── Funções de Edição de Projetos e Cenários com IA ──
+        function openEditProjectModal(slug) {
+            const proj = allProjects.find(p => p.slug === slug);
+            if (!proj) return;
+            document.getElementById('modal-edit-proj-name').value = proj.name || '';
+            document.getElementById('modal-edit-proj-desc').value = proj.business_description || '';
+            document.getElementById('modal-edit-proj-outcome').value = proj.expected_business_outcome || '';
+            document.getElementById('modal-edit-proj-overlay').classList.add('open');
+        }
+
+        function closeEditProjectModal() {
+            document.getElementById('modal-edit-proj-overlay').classList.remove('open');
+        }
+
+        function saveProjectEdit() {
+            const slug = activeProjectSlug;
+            if (!slug) return;
+            const name = document.getElementById('modal-edit-proj-name').value.trim();
+            const desc = document.getElementById('modal-edit-proj-desc').value.trim();
+            const outcome = document.getElementById('modal-edit-proj-outcome').value.trim();
+            
+            if (!name) return alert('Nome do projeto é obrigatório.');
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/edit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, business_description: desc, expected_business_outcome: outcome })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    closeEditProjectModal();
+                    // Atualiza localmente
+                    const proj = allProjects.find(p => p.slug === slug);
+                    if (proj) {
+                        proj.name = name;
+                        proj.business_description = desc;
+                        proj.expected_business_outcome = outcome;
+                    }
+                    renderWorkspaceSidebar();
+                    updateActiveUI();
+                    loadProjects(); // Recarrega projetos gerais
+                } else {
+                    alert('Erro ao salvar projeto: ' + data.message);
+                }
+            });
+        }
+
+        function openEditTestModal(projectSlug, testSlug) {
+            const proj = allProjects.find(p => p.slug === projectSlug);
+            if (!proj || !proj.tests) return;
+            const test = proj.tests.find(t => t.slug === testSlug);
+            if (!test) return;
+            
+            document.getElementById('modal-edit-test-name').value = test.name || '';
+            document.getElementById('modal-edit-test-desc').value = test.business_description || '';
+            document.getElementById('modal-edit-test-outcome').value = test.expected_business_outcome || '';
+            document.getElementById('modal-edit-test-overlay').classList.add('open');
+        }
+
+        function closeEditTestModal() {
+            document.getElementById('modal-edit-test-overlay').classList.remove('open');
+        }
+
+        function saveTestEdit() {
+            const slug = activeProjectSlug;
+            const testSlug = activeTestSlug;
+            if (!slug || !testSlug) return;
+            const name = document.getElementById('modal-edit-test-name').value.trim();
+            const desc = document.getElementById('modal-edit-test-desc').value.trim();
+            const outcome = document.getElementById('modal-edit-test-outcome').value.trim();
+            
+            if (!name) return alert('Nome do cenário é obrigatório.');
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/tests/${encodeURIComponent(testSlug)}/edit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, business_description: desc, expected_business_outcome: outcome })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    closeEditTestModal();
+                    // Atualiza localmente
+                    const proj = allProjects.find(p => p.slug === slug);
+                    if (proj && proj.tests) {
+                        const test = proj.tests.find(t => t.slug === testSlug);
+                        if (test) {
+                            test.name = name;
+                            test.business_description = desc;
+                            test.expected_business_outcome = outcome;
+                        }
+                    }
+                    renderWorkspaceSidebar();
+                    updateActiveUI();
+                    updateBusinessContextUI();
+                } else {
+                    alert('Erro ao salvar cenário: ' + data.message);
+                }
+            });
+        }
+
+        function enrichProjectWithAI() {
+            const slug = activeProjectSlug;
+            if (!slug) return;
+            const btn = document.getElementById('btn-edit-proj-enrich');
+            const name = document.getElementById('modal-edit-proj-name').value.trim();
+            const desc = document.getElementById('modal-edit-proj-desc').value.trim();
+            const outcome = document.getElementById('modal-edit-proj-outcome').value.trim();
+            const proj = allProjects.find(p => p.slug === slug);
+            const url = proj ? proj.url : '';
+            
+            const originalText = btn.innerText;
+            btn.innerText = '✨ Enriquecendo...';
+            btn.disabled = true;
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/enrich`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url, business_description: desc, expected_business_outcome: outcome })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                if (data.success && data.enriched) {
+                    document.getElementById('modal-edit-proj-desc').value = data.enriched.business_description || '';
+                    document.getElementById('modal-edit-proj-outcome').value = data.enriched.expected_business_outcome || '';
+                } else {
+                    alert('Erro no enriquecimento IA: ' + data.message);
+                }
+            })
+            .catch(err => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                alert('Erro na requisição: ' + err);
+            });
+        }
+        
+        function enrichTestWithAI() {
+            const slug = activeProjectSlug;
+            const testSlug = activeTestSlug;
+            if (!slug || !testSlug) return;
+            const btn = document.getElementById('btn-edit-test-enrich');
+            const name = document.getElementById('modal-edit-test-name').value.trim();
+            const desc = document.getElementById('modal-edit-test-desc').value.trim();
+            const outcome = document.getElementById('modal-edit-test-outcome').value.trim();
+            
+            const originalText = btn.innerText;
+            btn.innerText = '✨ Enriquecendo...';
+            btn.disabled = true;
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/tests/${encodeURIComponent(testSlug)}/enrich`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, business_description: desc, expected_business_outcome: outcome })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                if (data.success && data.enriched) {
+                    document.getElementById('modal-edit-test-desc').value = data.enriched.business_description || '';
+                    document.getElementById('modal-edit-test-outcome').value = data.enriched.expected_business_outcome || '';
+                } else {
+                    alert('Erro no enriquecimento IA: ' + data.message);
+                }
+            })
+            .catch(err => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                alert('Erro na requisição: ' + err);
+            });
+        }
+
+        function enrichContextCardWithAI() {
+            const slug = activeProjectSlug;
+            const testSlug = activeTestSlug;
+            if (!slug || !testSlug) return;
+            const btn = document.getElementById('btn-context-enrich-ai');
+            const proj = allProjects.find(p => p.slug === slug);
+            const test = proj ? proj.tests.find(t => t.slug === testSlug) : null;
+            const name = test ? test.name : testSlug;
+            const desc = document.getElementById('txt-business-description').value.trim();
+            const outcome = document.getElementById('txt-expected-outcome').value.trim();
+            
+            const originalText = btn.innerText;
+            btn.innerText = '✨ Enriquecendo...';
+            btn.disabled = true;
+            
+            fetch(`/api/projects/${encodeURIComponent(slug)}/tests/${encodeURIComponent(testSlug)}/enrich`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, business_description: desc, expected_business_outcome: outcome })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                if (data.success && data.enriched) {
+                    document.getElementById('txt-business-description').value = data.enriched.business_description || '';
+                    document.getElementById('txt-expected-outcome').value = data.enriched.expected_business_outcome || '';
+                } else {
+                    alert('Erro no enriquecimento IA: ' + data.message);
+                }
+            })
+            .catch(err => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                alert('Erro na requisição: ' + err);
+            });
+        }
+        
+        function updateBusinessContextUI() {
+            const card = document.getElementById('business-context-card');
+            if (activeProjectSlug && activeTestSlug) {
+                card.style.display = 'block';
+                const proj = allProjects.find(p => p.slug === activeProjectSlug);
+                if (proj && proj.tests) {
+                    const test = proj.tests.find(t => t.slug === activeTestSlug);
+                    if (test) {
+                        const desc = test.business_description || '';
+                        const outcome = test.expected_business_outcome || '';
+                        
+                        document.getElementById('lbl-business-description').innerText = desc || 'Não informada.';
+                        document.getElementById('lbl-business-description').style.color = desc ? 'var(--text)' : 'var(--text-muted)';
+                        
+                        document.getElementById('lbl-expected-outcome').innerText = outcome || 'Não informado.';
+                        document.getElementById('lbl-expected-outcome').style.color = outcome ? 'var(--text)' : 'var(--text-muted)';
+                    }
+                }
+            } else {
+                card.style.display = 'none';
+            }
         }
 
         function confirmDeleteProject(slug) {
@@ -1800,11 +2470,13 @@
             const name = document.getElementById('modal-proj-name').value.trim();
             const url = document.getElementById('modal-proj-url').value.trim();
             const custom_path = document.getElementById('modal-proj-path').value.trim();
+            const business_description = document.getElementById('modal-proj-desc').value.trim();
+            const expected_business_outcome = document.getElementById('modal-proj-outcome').value.trim();
             if (!name) { alert('Por favor, informe o nome do projeto.'); return; }
             fetch('/api/projects', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url, custom_path })
+                body: JSON.stringify({ name, url, custom_path, business_description, expected_business_outcome })
             })
             .then(r => r.json())
             .then(data => {
@@ -1813,6 +2485,8 @@
                     document.getElementById('modal-proj-name').value = '';
                     document.getElementById('modal-proj-url').value = '';
                     document.getElementById('modal-proj-path').value = '';
+                    document.getElementById('modal-proj-desc').value = '';
+                    document.getElementById('modal-proj-outcome').value = '';
                     loadProjects(() => {
                         selectProject(data.project.slug);
                     });
@@ -2166,17 +2840,23 @@
             const projectSlug = document.getElementById('modal-test-proj-slug').value;
             const name = document.getElementById('modal-test-name').value.trim();
             const url = document.getElementById('modal-test-url').value.trim();
+            const business_description = document.getElementById('modal-test-desc').value.trim();
+            const expected_business_outcome = document.getElementById('modal-test-outcome').value.trim();
             if (!name) { alert('Por favor, informe o nome do cenário.'); return; }
             
             fetch(`/api/projects/${encodeURIComponent(projectSlug)}/tests`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url })
+                body: JSON.stringify({ name, url, business_description, expected_business_outcome })
             })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     document.getElementById('modal-test-overlay').classList.remove('open');
+                    document.getElementById('modal-test-name').value = '';
+                    document.getElementById('modal-test-url').value = '';
+                    document.getElementById('modal-test-desc').value = '';
+                    document.getElementById('modal-test-outcome').value = '';
                     loadProjects(() => {
                         selectTest(projectSlug, data.test.slug);
                     });
@@ -2244,6 +2924,84 @@
                 alert("Erro na requisição: " + err);
             });
         });
+
+        function openPublishDevOpsModal() {
+            if (!activeProjectSlug || !activeTestSlug) return alert('Selecione um projeto e cenário primeiro.');
+            
+            // Carrega valores salvos do localStorage
+            document.getElementById('modal-devops-org').value = localStorage.getItem('aegis_devops_org') || '';
+            document.getElementById('modal-devops-project').value = localStorage.getItem('aegis_devops_project') || '';
+            document.getElementById('modal-devops-repo').value = localStorage.getItem('aegis_devops_repo') || '';
+            document.getElementById('modal-devops-branch').value = localStorage.getItem('aegis_devops_branch') || 'main';
+            document.getElementById('modal-devops-pat').value = localStorage.getItem('aegis_devops_pat') || '';
+            
+            // LLM variables
+            document.getElementById('modal-devops-apikey').value = localStorage.getItem('aegis_devops_apikey') || '';
+            document.getElementById('modal-devops-provider').value = localStorage.getItem('aegis_devops_provider') || 'openrouter';
+            document.getElementById('modal-devops-model').value = localStorage.getItem('aegis_devops_model') || 'google/gemini-2.5-flash';
+            document.getElementById('modal-devops-baseurl').value = localStorage.getItem('aegis_devops_baseurl') || 'https://openrouter.ai/api/v1';
+
+            document.getElementById('modal-devops-overlay').classList.add('open');
+        }
+
+        function publishDevOpsConfirm() {
+            const org = document.getElementById('modal-devops-org').value.trim();
+            const project = document.getElementById('modal-devops-project').value.trim();
+            const repo = document.getElementById('modal-devops-repo').value.trim();
+            const branch = document.getElementById('modal-devops-branch').value.trim();
+            const pat = document.getElementById('modal-devops-pat').value.trim();
+            const vg_name = document.getElementById('modal-devops-vg').value.trim();
+            
+            const llm_api_key = document.getElementById('modal-devops-apikey').value.trim();
+            const llm_provider = document.getElementById('modal-devops-provider').value.trim();
+            const llm_model = document.getElementById('modal-devops-model').value.trim();
+            const llm_base_url = document.getElementById('modal-devops-baseurl').value.trim();
+
+            if (!org || !project || !repo || !pat) {
+                alert('Por favor, preencha todos os campos obrigatórios (Organização, Projeto, Repositório e PAT).');
+                return;
+            }
+
+            // Salva no localStorage para conveniência
+            localStorage.setItem('aegis_devops_org', org);
+            localStorage.setItem('aegis_devops_project', project);
+            localStorage.setItem('aegis_devops_repo', repo);
+            localStorage.setItem('aegis_devops_branch', branch);
+            localStorage.setItem('aegis_devops_pat', pat);
+            localStorage.setItem('aegis_devops_apikey', llm_api_key);
+            localStorage.setItem('aegis_devops_provider', llm_provider);
+            localStorage.setItem('aegis_devops_model', llm_model);
+            localStorage.setItem('aegis_devops_baseurl', llm_base_url);
+
+            const btn = document.getElementById('btn-confirm-publish-devops');
+            btn.disabled = true;
+            btn.innerText = '⏳ Publicando...';
+
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/publish-devops`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    org, project, repo, branch, pat, vg_name,
+                    llm_api_key, llm_provider, llm_model, llm_base_url
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerText = '🚀 Iniciar Publicação';
+                if (data.success) {
+                    alert('🎉 Sucesso! Cenário e Pipeline configurados com sucesso no Azure DevOps!');
+                    document.getElementById('modal-devops-overlay').classList.remove('open');
+                } else {
+                    alert('❌ Falha na publicação: ' + data.message);
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerText = '🚀 Iniciar Publicação';
+                alert('❌ Erro na requisição: ' + err);
+            });
+        }
 
         function renderDict(dictionary) {
             const div = document.getElementById('dict-view');
@@ -3363,6 +4121,7 @@
                 document.getElementById('btn-run-sanitizer'),
                 document.getElementById('btn-run-validator'),
                 document.getElementById('btn-run-generator'),
+                document.getElementById('btn-publish-devops'),
             ];
             const runBotBtn = document.getElementById('btn-run-bot');
             
@@ -3593,6 +4352,288 @@
                 }
             })
             .catch(err => console.error('Erro ao processar ação de versão:', err));
+        }
+
+        // ── Módulo DevOps Scripting ──
+        let devopsLogsOffset = 0;
+        let devopsLogsInterval = null;
+        let devopsActiveProject = null;
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+            const workspaceScreen = document.getElementById('main-layout');
+            const dashboardScreen = document.getElementById('projects-dashboard');
+            const devopsScreen = document.getElementById('devops-layout');
+
+            if (screenId === 'workspace') {
+                document.getElementById('nav-btn-workspace').classList.add('active');
+                devopsScreen.style.display = 'none';
+                workspaceScreen.style.display = 'grid';
+                // Restaura visualização do workspace dependendo do projeto ativo
+                updateLayoutState();
+                if (devopsLogsInterval) {
+                    clearInterval(devopsLogsInterval);
+                    devopsLogsInterval = null;
+                }
+            } else if (screenId === 'devops') {
+                document.getElementById('nav-btn-devops').classList.add('active');
+                workspaceScreen.style.display = 'none';
+                dashboardScreen.style.display = 'none';
+                devopsScreen.style.display = 'grid';
+                
+                // Carrega projetos no dropdown do DevOps
+                loadDevOpsProjectsDropdown();
+            }
+        }
+
+        function loadDevOpsProjectsDropdown() {
+            const select = document.getElementById('devops-project-select');
+            select.innerHTML = '<option value="">-- Selecione o Projeto --</option>';
+            
+            allProjects.forEach(proj => {
+                const opt = document.createElement('option');
+                opt.value = proj.slug;
+                const projFormattedId = String(proj.project_id || proj.id).padStart(3, '0');
+                opt.textContent = `${projFormattedId}-${proj.name}`;
+                select.appendChild(opt);
+            });
+            
+            // Pré-seleciona o projeto ativo no workspace se houver
+            if (activeProjectSlug && allProjects.some(p => p.slug === activeProjectSlug)) {
+                select.value = activeProjectSlug;
+                onDevOpsProjectChanged();
+            } else {
+                clearDevOpsForm();
+            }
+        }
+
+        function clearDevOpsForm() {
+            devopsActiveProject = null;
+            document.getElementById('devops-org').value = '';
+            document.getElementById('devops-project').value = '';
+            document.getElementById('devops-repo').value = '';
+            document.getElementById('devops-branch').value = 'main';
+            document.getElementById('devops-pat').value = '';
+            document.getElementById('devops-vg').value = 'aegis-llm-group';
+            document.getElementById('devops-provider').value = 'openrouter';
+            document.getElementById('devops-apikey').value = '';
+            document.getElementById('devops-model').value = 'google/gemini-2.5-flash';
+            document.getElementById('devops-baseurl').value = 'https://openrouter.ai/api/v1';
+            document.getElementById('devops-scenarios-list').innerHTML = '<div class="empty-msg" style="text-align: center; padding: 20px;">Selecione um projeto para carregar cenários.</div>';
+            document.getElementById('devops-select-all-scenarios').checked = false;
+            document.getElementById('btn-publish-devops-run').disabled = true;
+            document.getElementById('devops-terminal').textContent = '';
+            updateDevOpsStatusBadge('IDLE', false);
+        }
+
+        function onDevOpsProjectChanged() {
+            const slug = document.getElementById('devops-project-select').value;
+            if (!slug) {
+                clearDevOpsForm();
+                return;
+            }
+            
+            devopsActiveProject = slug;
+            fetch(`/api/projects/${encodeURIComponent(slug)}/devops-config`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const cfg = data.config || {};
+                        document.getElementById('devops-org').value = cfg.org || '';
+                        document.getElementById('devops-project').value = cfg.project || '';
+                        document.getElementById('devops-repo').value = cfg.repo || '';
+                        document.getElementById('devops-branch').value = cfg.branch || 'main';
+                        document.getElementById('devops-pat').value = cfg.pat || '';
+                        document.getElementById('devops-vg').value = cfg.vg_name || 'aegis-llm-group';
+                        document.getElementById('devops-provider').value = cfg.llm_provider || 'openrouter';
+                        document.getElementById('devops-apikey').value = cfg.llm_api_key || '';
+                        document.getElementById('devops-model').value = cfg.llm_model || 'google/gemini-2.5-flash';
+                        document.getElementById('devops-baseurl').value = cfg.llm_base_url || 'https://openrouter.ai/api/v1';
+                        
+                        renderDevOpsScenarios(data.available_scenarios || [], cfg.included_scenarios || []);
+                        
+                        // Habilita publicação se o projeto estiver configurado minimamente
+                        document.getElementById('btn-publish-devops-run').disabled = false;
+                        
+                        // Verifica se existe processo DevOps ativo para este projeto
+                        checkDevOpsProcessStatus();
+                    } else {
+                        alert('Erro ao carregar configurações de DevOps: ' + data.message);
+                    }
+                })
+                .catch(err => console.error('Erro na conexão DevOps:', err));
+        }
+
+        function renderDevOpsScenarios(scenarios, included) {
+            const container = document.getElementById('devops-scenarios-list');
+            if (scenarios.length === 0) {
+                container.innerHTML = '<div class="empty-msg" style="text-align: center; padding: 20px;">Nenhum cenário cadastrado neste projeto.</div>';
+                return;
+            }
+            
+            let html = '';
+            scenarios.forEach(s => {
+                const isChecked = included.includes(s.slug);
+                html += `
+                    <div class="devops-scenario-row">
+                        <label class="checkbox-container" style="margin-bottom:0; font-size:12px; width:100%; display:flex; align-items:center; gap:8px;">
+                            <input type="checkbox" class="devops-scenario-chk" value="${s.slug}" ${isChecked ? 'checked' : ''} onchange="updateDevOpsSelectAllHeader()" />
+                            <span class="checkmark" style="position:relative; top:0;"></span>
+                            <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:260px;" title="${s.name}">${s.name} (${s.slug})</span>
+                        </label>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+            updateDevOpsSelectAllHeader();
+        }
+
+        function toggleDevOpsSelectAll(master) {
+            document.querySelectorAll('.devops-scenario-chk').forEach(chk => {
+                chk.checked = master.checked;
+            });
+        }
+
+        function updateDevOpsSelectAllHeader() {
+            const chks = document.querySelectorAll('.devops-scenario-chk');
+            const master = document.getElementById('devops-select-all-scenarios');
+            if (chks.length === 0) {
+                master.checked = false;
+                return;
+            }
+            const allChecked = Array.from(chks).every(c => c.checked);
+            master.checked = allChecked;
+        }
+
+        function saveDevOpsSettings() {
+            if (!devopsActiveProject) return alert('Selecione um projeto primeiro.');
+            
+            const included = Array.from(document.querySelectorAll('.devops-scenario-chk'))
+                                  .filter(c => c.checked)
+                                  .map(c => c.value);
+                                  
+            if (included.length === 0) {
+                return alert('Por favor, selecione pelo menos um cenário de teste para incluir no pipeline.');
+            }
+            
+            const payload = {
+                org: document.getElementById('devops-org').value.trim(),
+                project: document.getElementById('devops-project').value.trim(),
+                repo: document.getElementById('devops-repo').value.trim(),
+                branch: document.getElementById('devops-branch').value.trim(),
+                pat: document.getElementById('devops-pat').value.trim(),
+                vg_name: document.getElementById('devops-vg').value.trim(),
+                llm_provider: document.getElementById('devops-provider').value,
+                llm_api_key: document.getElementById('devops-apikey').value.trim(),
+                llm_model: document.getElementById('devops-model').value.trim(),
+                llm_base_url: document.getElementById('devops-baseurl').value.trim(),
+                included_scenarios: included
+            };
+            
+            fetch(`/api/projects/${encodeURIComponent(devopsActiveProject)}/devops-config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Configurações de DevOps salvas com sucesso localmente!');
+                    // Atualiza campos com os dados salvos/mascarados
+                    const cfg = data.config || {};
+                    if (cfg.pat) document.getElementById('devops-pat').value = cfg.pat;
+                    if (cfg.llm_api_key) document.getElementById('devops-apikey').value = cfg.llm_api_key;
+                } else {
+                    alert('Erro ao salvar configurações: ' + data.message);
+                }
+            })
+            .catch(err => console.error('Erro ao salvar DevOps:', err));
+        }
+
+        function startDevOpsPublication() {
+            if (!devopsActiveProject) return;
+            if (!confirm('Deseja iniciar o processo de publicação do pipeline no Azure DevOps agora?')) return;
+            
+            const btn = document.getElementById('btn-publish-devops-run');
+            btn.disabled = true;
+            document.getElementById('devops-terminal').textContent = '';
+            devopsLogsOffset = 0;
+            updateDevOpsStatusBadge('INICIANDO...', true);
+            
+            fetch(`/api/projects/${encodeURIComponent(devopsActiveProject)}/publish-devops`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    startDevOpsPolling();
+                } else {
+                    alert('Erro ao iniciar publicação: ' + data.message);
+                    btn.disabled = false;
+                    updateDevOpsStatusBadge('FALHOU', false);
+                }
+            })
+            .catch(err => {
+                console.error('Erro ao chamar publish:', err);
+                btn.disabled = false;
+                updateDevOpsStatusBadge('ERRO', false);
+            });
+        }
+
+        function checkDevOpsProcessStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.running && data.status === 'PUBLICAÇÃO_DEVOPS') {
+                        startDevOpsPolling();
+                    } else {
+                        updateDevOpsStatusBadge('IDLE', false);
+                    }
+                });
+        }
+
+        function startDevOpsPolling() {
+            if (devopsLogsInterval) clearInterval(devopsLogsInterval);
+            document.getElementById('btn-publish-devops-run').disabled = true;
+            
+            devopsLogsInterval = setInterval(() => {
+                fetch(`/api/logs?offset=${devopsLogsOffset}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        devopsLogsOffset = data.offset;
+                        const term = document.getElementById('devops-terminal');
+                        
+                        if (data.lines && data.lines.length > 0) {
+                            data.lines.forEach(l => {
+                                term.textContent += l;
+                            });
+                            term.scrollTop = term.scrollHeight;
+                        }
+                        
+                        updateDevOpsStatusBadge(data.status, data.running);
+                        
+                        if (!data.running) {
+                            clearInterval(devopsLogsInterval);
+                            devopsLogsInterval = null;
+                            document.getElementById('btn-publish-devops-run').disabled = false;
+                        }
+                    })
+                    .catch(err => console.error('Erro ao obter logs de publicação:', err));
+            }, 1000);
+        }
+
+        function updateDevOpsStatusBadge(status, isRunning) {
+            const badge = document.getElementById('devops-status-badge');
+            if (!badge) return;
+            if (isRunning) {
+                badge.className = 'status-badge status-active';
+                badge.innerHTML = '<span class="badge-dot"></span>' + status;
+            } else {
+                badge.className = 'status-badge status-idle';
+                badge.innerHTML = '<span class="badge-dot"></span>' + status;
+            }
         }
 
         // ── Init ──

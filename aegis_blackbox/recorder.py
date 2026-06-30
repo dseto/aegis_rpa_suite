@@ -270,6 +270,112 @@ JS_MINIMAL_LISTENERS = """
         };
     })();
     // ── FIM AEGIS ANTI-BOT DETECTOR ──────────────────────────────────────────
+
+    // Atalho Ctrl+Shift+V para gravação de áudio do microfone
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
+            e.preventDefault();
+            if (window.pythonToggleVoice) {
+                window.pythonToggleVoice().then(res => {
+                    if (res.status === 'started') {
+                        showAegisToast("🎙️ Gravação de Voz Iniciada... Fale agora!");
+                    } else if (res.status === 'stopped') {
+                        showAegisToast("✅ Voz Gravada!\nTranscrição: " + res.transcription, 6000);
+                    }
+                });
+            }
+        }
+    });
+
+    // Atalho Ctrl+Shift+A para caixa de diálogo flutuante de anotação de texto
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.code === 'KeyA') {
+            e.preventDefault();
+            showAegisAnnotationModal();
+        }
+    });
+
+    function showAegisAnnotationModal() {
+        let modal = document.getElementById('aegis-annotation-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'aegis-annotation-modal';
+            modal.style.position = 'fixed';
+            modal.style.top = '50%';
+            modal.style.left = '50%';
+            modal.style.transform = 'translate(-50%, -50%)';
+            modal.style.backgroundColor = 'rgba(15, 10, 25, 0.98)';
+            modal.style.color = '#fff';
+            modal.style.padding = '20px';
+            modal.style.borderRadius = '10px';
+            modal.style.border = '2px solid #7c3aed';
+            modal.style.zIndex = '2147483647';
+            modal.style.fontFamily = 'sans-serif';
+            modal.style.boxShadow = '0 10px 25px rgba(0,0,0,0.8)';
+            modal.style.width = '350px';
+            
+            modal.innerHTML = `
+                <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #a78bfa; display: flex; align-items: center; gap: 6px;">📝 Anotação de Negócio Aegis</h4>
+                <p style="margin: 0 0 12px 0; font-size: 11px; color: #cbd5e1;">Descreva a intenção de negócio do passo atual:</p>
+                <textarea id="aegis-annotation-input" rows="3" style="width: 100%; box-sizing: border-box; background: #0f0a19; border: 1px solid #4c1d95; color: #fff; padding: 8px; border-radius: 6px; font-size: 12px; resize: none; outline: none; margin-bottom: 12px;"></textarea>
+                <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                    <button id="aegis-annotation-cancel" style="background: transparent; border: 1px solid #cbd5e1; color: #cbd5e1; padding: 6px 12px; border-radius: 4px; font-size: 11px; cursor: pointer;">Cancelar</button>
+                    <button id="aegis-annotation-save" style="background: #7c3aed; border: none; color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: bold;">Salvar</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            document.getElementById('aegis-annotation-cancel').addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+            
+            document.getElementById('aegis-annotation-save').addEventListener('click', () => {
+                const text = document.getElementById('aegis-annotation-input').value.trim();
+                if (text) {
+                    if (window.pythonAddAnnotation) {
+                        window.pythonAddAnnotation(text);
+                    }
+                    showAegisToast("📝 Anotação salva: " + text);
+                }
+                modal.style.display = 'none';
+                document.getElementById('aegis-annotation-input').value = '';
+            });
+        }
+        
+        modal.style.display = 'block';
+        setTimeout(() => {
+            document.getElementById('aegis-annotation-input').focus();
+        }, 100);
+    }
+
+    function showAegisToast(text, duration = 3000) {
+        let toast = document.getElementById('aegis-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'aegis-toast';
+            toast.style.position = 'fixed';
+            toast.style.bottom = '20px';
+            toast.style.right = '20px';
+            toast.style.backgroundColor = 'rgba(15, 10, 25, 0.95)';
+            toast.style.color = '#fff';
+            toast.style.padding = '12px 18px';
+            toast.style.borderRadius = '8px';
+            toast.style.border = '1px solid #7c3aed';
+            toast.style.fontSize = '12px';
+            toast.style.zIndex = '2147483647';
+            toast.style.fontFamily = 'sans-serif';
+            toast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.5)';
+            toast.style.transition = 'all 0.3s ease';
+            document.body.appendChild(toast);
+        }
+        toast.innerText = text;
+        toast.style.opacity = '1';
+        toast.style.display = 'block';
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => { toast.style.display = 'none'; }, 300);
+        }, duration);
+    }
 })();
 """
 
@@ -340,6 +446,14 @@ class AegisControlHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_response(400)
                     response = {"success": False, "error": "Missing 'text' parameter"}
+            elif path == "/api/voice/start":
+                success = self.server.control_callbacks["start_voice"]()
+                response["message"] = "Voice recording started" if success else "Failed to start voice recording"
+                response["success"] = success
+            elif path == "/api/voice/stop":
+                transcription = self.server.control_callbacks["stop_voice"]()
+                response["message"] = "Voice recording stopped"
+                response["transcription"] = transcription
             elif path == "/api/scan":
                 self.server.control_callbacks["trigger_scan"]()
                 response["message"] = "Scan triggered"
@@ -436,8 +550,11 @@ class AegisRecorder:
         self.finish_requested = False
         self.force_scan_requested = False
         self.reset_requested = False
+        self.recording_voice = False
+        self.voice_note_counter = 0
         
         self.recording_paused_requested = None
+        self.voice_recording_requested = None
         self.new_scenario_requested = None
         self.new_annotation_requested = None
 
@@ -673,6 +790,83 @@ class AegisRecorder:
         print(f"[AEGIS ANNOTATION] Regra anotada no cenário '{self.active_scenario}': {note_text}")
         sys.stdout.flush()
 
+    def start_voice_recording(self):
+        """Inicia a gravação de áudio do microfone usando a API MCI do Windows."""
+        if sys.platform != "win32":
+            print("[AEGIS VOICE WARNING] Gravação de voz MCI é suportada apenas em ambiente Windows.")
+            return False
+            
+        if self.recording_voice:
+            print("[AEGIS VOICE WARNING] Já existe uma gravação de voz em andamento.")
+            return False
+
+        try:
+            import ctypes
+            winmm = ctypes.windll.winmm
+            # Abre o canal de gravação waveaudio
+            winmm.mciSendStringW("open new type waveaudio alias aegisvoice", None, 0, 0)
+            # Configura qualidade aceitável (16-bit, 16kHz, Mono para Whisper)
+            winmm.mciSendStringW("set aegisvoice bitspersample 16 samplespersec 16000 channels 1", None, 0, 0)
+            # Inicia gravação de forma assíncrona
+            winmm.mciSendStringW("record aegisvoice", None, 0, 0)
+            self.recording_voice = True
+            print("[AEGIS VOICE] Gravação de voz iniciada...")
+            return True
+        except Exception as e:
+            print(f"[AEGIS VOICE ERROR] Falha ao iniciar gravação MCI: {e}")
+            return False
+
+    def stop_voice_recording(self) -> str:
+        """Para a gravação de áudio, salva em .wav, transcreve usando CognitiveGateway e registra anotação."""
+        if not self.recording_voice or sys.platform != "win32":
+            return ""
+
+        try:
+            import ctypes
+            winmm = ctypes.windll.winmm
+            
+            self.voice_note_counter += 1
+            filename = f"voice_note_{self.voice_note_counter}.wav"
+            filepath = os.path.join(self.output_dir, filename)
+            
+            # Para a gravação
+            winmm.mciSendStringW("stop aegisvoice", None, 0, 0)
+            # Salva no arquivo filepath (usando aspas para caminhos com espaço)
+            winmm.mciSendStringW(f'save aegisvoice "{filepath}"', None, 0, 0)
+            winmm.mciSendStringW("close aegisvoice", None, 0, 0)
+            
+            self.recording_voice = False
+            print(f"[AEGIS VOICE] Gravação de voz parada. Arquivo salvo em: {filepath}")
+            
+            # Executa transcrição cognitiva via CognitiveGateway
+            from aegis_runner.cognitive_fallback import CognitiveGateway
+            gateway = CognitiveGateway(project_dir=self.output_dir)
+            
+            transcription = gateway.transcribe_audio(filepath)
+            
+            # Registra anotação transcrita
+            self.record_annotation(transcription)
+            
+            # Adiciona marcação de voz para o Sanitizer cruzar posteriormente
+            if self.events_log:
+                self.events_log[-1]["voice_annotation"] = transcription
+                
+            return transcription
+            
+        except Exception as e:
+            print(f"[AEGIS VOICE ERROR] Falha ao parar gravação MCI: {e}")
+            self.recording_voice = False
+            return ""
+
+    def toggle_voice_from_page(self):
+        """Invocado via Playwright exposto para a página browser do usuário."""
+        if self.recording_voice:
+            text = self.stop_voice_recording()
+            return {"status": "stopped", "transcription": text}
+        else:
+            success = self.start_voice_recording()
+            return {"status": "started", "success": success}
+
     def update_scenario(self, new_scenario_name: str):
         self.active_scenario = new_scenario_name
         print(f"\n[AEGIS SCENARIO] >>> Alterando Cenário Ativo para: '{self.active_scenario.upper()}' <<<")
@@ -741,8 +935,29 @@ class AegisRecorder:
             "success": True,
             "paused": self.recording_paused,
             "scenario": self.active_scenario,
-            "events_count": len(self.events_log)
+            "events_count": len(self.events_log),
+            "recording_voice": self.recording_voice
         }
+
+    def start_voice_callback(self):
+        self.voice_recording_requested = 'start'
+        start_time = time.time()
+        while self.voice_recording_requested == 'start' and time.time() - start_time < 3.0:
+            time.sleep(0.05)
+        return self.recording_voice
+
+    def stop_voice_callback(self):
+        self.voice_recording_requested = 'stop'
+        start_time = time.time()
+        # Aguarda até 15s para a transcrição da LLM concluir
+        while self.voice_recording_requested == 'stop' and time.time() - start_time < 15.0:
+            time.sleep(0.05)
+        # Localiza a transcrição no último evento
+        if self.events_log:
+            for ev in reversed(self.events_log):
+                if ev.get("type") == "annotation" and ev.get("voice_annotation"):
+                    return ev.get("voice_annotation")
+        return "Gravação finalizada sem transcrição."
 
     def set_paused_callback(self, paused):
         self.recording_paused_requested = paused
@@ -763,6 +978,11 @@ class AegisRecorder:
         cmd_lower = cmd.lower().strip()
         if cmd_lower == "p":
             self.recording_paused_requested = not self.recording_paused
+        elif cmd_lower == "v":
+            if self.recording_voice:
+                self.voice_recording_requested = 'stop'
+            else:
+                self.voice_recording_requested = 'start'
         elif cmd_lower.startswith("s "):
             name = cmd[2:].strip()
             if name:
@@ -804,6 +1024,8 @@ class AegisRecorder:
 
             self.page = self.context.new_page()
             self.page.expose_function("pythonRecordAction", self.record_action)
+            self.page.expose_function("pythonToggleVoice", self.toggle_voice_from_page)
+            self.page.expose_function("pythonAddAnnotation", self.record_annotation)
 
             # Listeners de fechamento voluntário do usuário
             def on_page_close(_):
@@ -834,12 +1056,13 @@ class AegisRecorder:
             print("Use comandos no console (p, s, n, scan, reset, f) ou a API HTTP (localhost:9900/api) para controlar.")
             sys.stdout.flush()
 
-            # Configura callbacks para o Servidor HTTP de Controle
             callbacks = {
                 "get_status": self.get_status_callback,
                 "set_paused": self.set_paused_callback,
                 "set_scenario": self.set_scenario_callback,
                 "add_annotation": self.add_annotation_callback,
+                "start_voice": self.start_voice_callback,
+                "stop_voice": self.stop_voice_callback,
                 "trigger_scan": self.trigger_scan_callback,
                 "finish_session": self.finish_session_callback
             }
@@ -927,6 +1150,14 @@ class AegisRecorder:
                             annotation_text = self.new_annotation_requested
                             self.new_annotation_requested = None
                             self.record_annotation(annotation_text)
+
+                        if self.voice_recording_requested is not None:
+                            action = self.voice_recording_requested
+                            self.voice_recording_requested = None
+                            if action == 'start':
+                                self.start_voice_recording()
+                            elif action == 'stop':
+                                self.stop_voice_recording()
 
                         if self.reset_requested:
                             self.reset_requested = False

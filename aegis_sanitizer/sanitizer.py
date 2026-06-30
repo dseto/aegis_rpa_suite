@@ -4,6 +4,12 @@ import sys
 import argparse
 from datetime import datetime
 
+# Adiciona caminhos necessários ao path
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(MODULE_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 def evaluate_selector_reliability(selector):
@@ -105,12 +111,30 @@ class SanitizerService:
                 
             cleaned_events.append(ev)
             
-        events = cleaned_events
-        raw_data["events"] = cleaned_events
-        
-        # Salva o arquivo de gravação devidamente sanitizado
+        # Carrega metadados do projeto para buscar descrição de negócio e resultado esperado
+        project_json_path = os.path.join(self.telemetry_dir, "project.json")
+        business_desc = ""
+        expected_outcome = ""
+        if os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, "r", encoding="utf-8") as f:
+                    proj_meta = json.load(f)
+                    business_desc = proj_meta.get("business_description", "")
+                    expected_outcome = proj_meta.get("expected_business_outcome", "")
+            except:
+                pass
+
+        # Realiza o refinamento semântico cognitivo
+        dict_data, raw_data = self.refine_semantics_with_llm(dict_data, raw_data, business_desc, expected_outcome)
+        events = raw_data.get("events", [])
+        raw_data["events"] = events
+
+        # Salva o arquivo de gravação e dicionário devidamente sanitizados e traduzidos
         with open(self.telemetry_file, "w", encoding="utf-8") as f:
             json.dump(raw_data, f, indent=4, ensure_ascii=False)
+
+        with open(self.dict_file, "w", encoding="utf-8") as f:
+            json.dump(dict_data, f, indent=4, ensure_ascii=False)
 
         network = raw_data.get("network_payloads", {})
         anti_bot_fields = raw_data.get("anti_bot_fields", [])
@@ -279,6 +303,10 @@ class SanitizerService:
                     else:
                         selector = f"`{selector}`"
 
+                    desc_negocio = ev.get("business_description") or ev.get("description")
+                    if desc_negocio:
+                        val_text = f"**{desc_negocio}**<br><span style='font-size:10px; color:var(--text-muted);'>{val_text}</span>"
+
                     markdown.append(f"| {passo_count} | `{ev_type}` | `{tag}` | {selector} | {val_text} |")
                     passo_count += 1
                     previous_event = ev
@@ -360,6 +388,136 @@ class SanitizerService:
         print(f"\n[SUCESSO] Relatório Markdown compilado com sucesso em: {self.report_file}")
         print("=" * 60)
         return True
+
+    def refine_semantics_with_llm(self, dict_data: dict, raw_data: dict, business_desc: str, expected_outcome: str) -> tuple:
+        """
+        Usa LLM para refinar as chaves do dicionário para linguagem de negócio e traduzir
+        os passos de gravação para descrições inteligíveis.
+        """
+        from aegis_runner.cognitive_fallback import CognitiveGateway
+        gateway = CognitiveGateway(project_dir=self.telemetry_dir)
+        if not gateway.is_active():
+            print("[INFO] Gateway Cognitivo não configurado ou ativo. Ignorando refinamento semântico via LLM.")
+            return dict_data, raw_data
+
+        print("[COGNITIVE] Iniciando Higienização Cognitiva Semântica (Fase 2.5)...")
+        
+        inputs = dict_data.get("inputs", [])
+        outputs = dict_data.get("outputs", [])
+        events = raw_data.get("events", [])
+        
+        simplified_inputs = []
+        for inp in inputs:
+            simplified_inputs.append({
+                "semantic_key": inp.get("semantic_key"),
+                "type": inp.get("type"),
+                "selector": inp.get("selector"),
+                "observed_value": inp.get("observed_value")
+            })
+            
+        simplified_outputs = []
+        for out in outputs:
+            simplified_outputs.append({
+                "semantic_key": out.get("semantic_key"),
+                "selector": out.get("selector")
+            })
+            
+        simplified_events = []
+        for idx, ev in enumerate(events):
+            simplified_events.append({
+                "index": idx,
+                "type": ev.get("type"),
+                "selector": ev.get("selector"),
+                "text": ev.get("text", ""),
+                "value": ev.get("value", ""),
+                "voice_annotation": ev.get("voice_annotation", ""),
+                "annotation": ev.get("annotation", "")
+            })
+            
+        prompt = f"""
+        Você é o Sanitizador Cognitivo da suíte Aegis RPA.
+        Sua missão é traduzir termos técnicos, seletores e placeholders brutos para uma linguagem de negócio limpa e legível.
+        
+        ---
+        CONTEXTO DE NEGÓCIO FORNECIDO PELO USUÁRIO:
+        Descrição do Caso de Teste: {business_desc or 'Não informada'}
+        Resultado de Negócio Esperado: {expected_outcome or 'Não informado'}
+        ---
+        
+        TAREFAS:
+        1. Renomear as chaves técnicas de inputs ("semantic_key") para nomes amigáveis baseados no negócio (ex: 'seuemail_exemplo_com' -> 'email_login', 'txt_cpf_pf' -> 'cpf_cliente'). Use snake_case.
+        2. Renomear as chaves técnicas de outputs ("semantic_key") para nomes amigáveis baseados no negócio.
+        3. Para cada evento do fluxo (identificado pelo seu "index"), crie uma descrição funcional em linguagem de negócio amigável (em português), explicando o que o usuário está realizando (ex: "Preencher email do usuário para autenticação"). 
+           - Importante: Se houver "voice_annotation" ou "annotation" fornecidas pelo usuário no evento, use-as como fonte de verdade absoluta para a descrição funcional!
+        
+        INPUTS BRUTOS:
+        {json.dumps(simplified_inputs, indent=2)}
+        
+        OUTPUTS BRUTOS:
+        {json.dumps(simplified_outputs, indent=2)}
+        
+        EVENTOS DO FLUXO:
+        {json.dumps(simplified_events, indent=2)}
+        
+        Retorne OBRIGATORIAMENTE um objeto JSON estruturado contendo exatamente:
+        - "inputs": lista de objetos com "original_key" (a chave original a ser mapeada) e "semantic_key" (nova chave refinada).
+        - "outputs": lista de objetos com "original_key" (a chave original a ser mapeada) e "semantic_key" (nova chave refinada).
+        - "events": lista de objetos, cada um com "index" (o índice original) e "business_description" (a descrição refinada de negócio em português).
+        
+        Exemplo de saída esperada:
+        {{
+            "inputs": [
+                {{ "original_key": "seuemail_exemplo_com", "semantic_key": "email_login" }}
+            ],
+            "outputs": [
+                {{ "original_key": "lbl_res_val", "semantic_key": "valor_cotacao" }}
+            ],
+            "events": [
+                {{ "index": 0, "business_description": "Acessar a página de cotações do portal" }},
+                {{ "index": 1, "business_description": "Digitar o e-mail de acesso corporativo" }}
+            ]
+        }}
+        
+        Retorne EXCLUSIVAMENTE o JSON estruturado.
+        """
+        
+        try:
+            raw_response = gateway._call_llm_api(prompt, force_json=True)
+            result = gateway._clean_json_response(raw_response)
+            
+            # Aplica mapeamentos aos inputs originais
+            input_mapping = {item["original_key"]: item["semantic_key"] for item in result.get("inputs", []) if "original_key" in item and "semantic_key" in item}
+            output_mapping = {item["original_key"]: item["semantic_key"] for item in result.get("outputs", []) if "original_key" in item and "semantic_key" in item}
+            event_descriptions = {item["index"]: item["business_description"] for item in result.get("events", []) if "index" in item and "business_description" in item}
+            
+            # Atualiza o dicionário de dados
+            for inp in inputs:
+                orig = inp.get("semantic_key")
+                if orig in input_mapping:
+                    inp["semantic_key"] = input_mapping[orig]
+            for out in outputs:
+                orig = out.get("semantic_key")
+                if orig in output_mapping:
+                    out["semantic_key"] = output_mapping[orig]
+                    
+            # Se o dicionário tiver "fields", atualiza também
+            if "fields" in dict_data:
+                new_fields = {}
+                for sem_key, field_info in dict_data["fields"].items():
+                    new_key = input_mapping.get(sem_key, sem_key)
+                    new_fields[new_key] = field_info
+                dict_data["fields"] = new_fields
+                
+            # Atualiza eventos em raw_data
+            for idx, ev in enumerate(events):
+                if idx in event_descriptions:
+                    ev["business_description"] = event_descriptions[idx]
+                    
+            print("[COGNITIVE SUCESSO] Dicionário de dados e fluxo de eventos traduzidos para linguagem de negócio.")
+        except Exception as e:
+            print(f"[COGNITIVE WARNING] Falha ao realizar a tradução cognitiva semântica: {e}")
+            
+        return dict_data, raw_data
 
 
 if __name__ == '__main__':

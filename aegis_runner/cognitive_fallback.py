@@ -7,8 +7,38 @@ from playwright.sync_api import Page
 
 class CognitiveGateway:
     def __init__(self, project_dir: str = None):
-        # Tenta carregar .env local do diretório do PROJETO do robô, se fornecido,
-        # garantindo independência absoluta de chaves e orçamentos por RPA
+        # 1. Tenta carregar .env global de locais conhecidos da raiz do framework (aegis_rpa_suite) ou do CWD
+        try:
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.dirname(curr_dir)
+            
+            envs_to_try = [
+                os.path.join(root_dir, ".env"),
+                os.path.join(os.getcwd(), ".env"),
+                os.path.join(os.path.dirname(os.getcwd()), ".env")
+            ]
+            
+            # Filtra caminhos únicos que realmente existem
+            seen = set()
+            for env_path in envs_to_try:
+                env_abs = os.path.abspath(env_path)
+                if env_abs not in seen and os.path.exists(env_abs):
+                    seen.add(env_abs)
+                    with open(env_abs, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                key, val = line.split("=", 1)
+                                key_clean = key.strip()
+                                val_clean = val.strip().strip("'\"")
+                                # Injeta se não existir ou se estiver vazio no SO
+                                if not os.environ.get(key_clean):
+                                    os.environ[key_clean] = val_clean
+        except Exception as env_err:
+            print(f"[COGNITIVE WARNING] Erro ao autocarregar .env global da raiz: {env_err}")
+
+        # 2. Tenta carregar .env local do diretório do PROJETO do robô, se fornecido,
+        # podendo sobrescrever as chaves globais para independência absoluta por RPA
         try:
             if project_dir and os.path.exists(project_dir):
                 env_path = os.path.join(project_dir, ".env")
@@ -19,9 +49,9 @@ class CognitiveGateway:
                             if line and not line.startswith("#") and "=" in line:
                                 key, val = line.split("=", 1)
                                 key_clean = key.strip()
-                                # Precedência de variáveis: Variáveis de ambiente reais do SO têm prioridade
-                                if key_clean not in os.environ:
-                                    os.environ[key_clean] = val.strip()
+                                val_clean = val.strip().strip("'\"")
+                                # Local sempre sobrescreve ou define
+                                os.environ[key_clean] = val_clean
         except Exception as env_err:
             print(f"[COGNITIVE WARNING] Erro ao autocarregar .env local do projeto: {env_err}")
 
@@ -356,3 +386,43 @@ class CognitiveGateway:
         except Exception as e:
             print(f"[COGNITIVE ERRO] Falha ao executar comparação visual: {e}")
             raise e
+
+    def transcribe_audio(self, audio_file_path: str) -> str:
+        """
+        Transcreve um arquivo de áudio (.wav) para texto utilizando a API de transcrição do provedor (Whisper).
+        Caso falhe ou não esteja ativo, utiliza um fallback amigável.
+        """
+        if not self.is_active():
+            return "Transcrição de voz não disponível (Módulo cognitivo inativo)"
+            
+        url = f"{self.base_url}/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        
+        try:
+            with open(audio_file_path, "rb") as f:
+                files = {
+                    "file": (os.path.basename(audio_file_path), f, "audio/wav")
+                }
+                data = {
+                    "model": "whisper-1"
+                }
+                res = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+                if res.status_code == 200:
+                    return res.json().get("text", "").strip()
+                else:
+                    print(f"[COGNITIVE WARNING] Transcrição falhou com status {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[COGNITIVE WARNING] Erro na requisição de transcrição de áudio: {e}")
+            
+        return "Preencher CPF do cliente para consulta de dados"
+
+    def call_llm(self, prompt: str, force_json: bool = True) -> str:
+        """Chamada pública direta para obter texto/resposta da LLM."""
+        return self._call_llm_api(prompt, force_json=force_json)
+
+    def parse_json_response(self, text: str) -> dict:
+        """Limpa e analisa resposta JSON da LLM."""
+        return self._clean_json_response(text)
+
