@@ -149,28 +149,51 @@ JS_MINIMAL_LISTENERS = """
         const host = document.createElement('div');
         host.id = 'aegis-indicator-host';
         host.style.position = 'fixed';
-        host.style.top = '10px';
-        host.style.right = '10px';
+        host.style.top = '16px';
+        host.style.right = '16px';
         host.style.zIndex = '2147483647';
         host.style.pointerEvents = 'none';
 
         const shadow = host.attachShadow({mode: 'closed'});
         
+        const badge = document.createElement('div');
+        badge.id = 'aegis-badge';
+        badge.style.display = 'flex';
+        badge.style.alignItems = 'center';
+        badge.style.gap = '8px';
+        badge.style.background = 'rgba(15, 10, 25, 0.85)';
+        badge.style.backdropFilter = 'blur(8px)';
+        badge.style.border = '1px solid rgba(124, 58, 237, 0.5)';
+        badge.style.padding = '6px 12px';
+        badge.style.borderRadius = '20px';
+        badge.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+        badge.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        badge.style.userSelect = 'none';
+        
         const led = document.createElement('div');
         led.id = 'aegis-led';
-        led.style.width = '12px';
-        led.style.height = '12px';
+        led.style.width = '8px';
+        led.style.height = '8px';
         led.style.borderRadius = '50%';
         led.style.backgroundColor = '#ff5555';
         led.style.boxShadow = '0 0 8px #ff5555';
         led.style.transition = 'all 0.3s ease';
         
+        const label = document.createElement('span');
+        label.id = 'aegis-label';
+        label.innerText = 'AEGIS REC';
+        label.style.color = '#ffffff';
+        label.style.fontSize = '10px';
+        label.style.fontWeight = '700';
+        label.style.letterSpacing = '1px';
+        label.style.textShadow = '0 0 2px rgba(255,255,255,0.3)';
+        
         const style = document.createElement('style');
         style.textContent = `
             @keyframes pulse {
-                0% { opacity: 0.4; transform: scale(0.9); }
-                50% { opacity: 1; transform: scale(1.1); }
-                100% { opacity: 0.4; transform: scale(0.9); }
+                0% { opacity: 0.5; transform: scale(0.95); }
+                50% { opacity: 1; transform: scale(1.05); }
+                100% { opacity: 0.5; transform: scale(0.95); }
             }
             .recording {
                 animation: pulse 1.5s infinite ease-in-out;
@@ -178,7 +201,9 @@ JS_MINIMAL_LISTENERS = """
         `;
         led.classList.add('recording');
         
-        shadow.appendChild(led);
+        badge.appendChild(led);
+        badge.appendChild(label);
+        shadow.appendChild(badge);
         shadow.appendChild(style);
         document.body.appendChild(host);
 
@@ -188,10 +213,16 @@ JS_MINIMAL_LISTENERS = """
                 led.style.backgroundColor = '#33cc99';
                 led.style.boxShadow = '0 0 8px #33cc99';
                 led.classList.remove('recording');
+                label.innerText = 'PAUSADO';
+                label.style.color = '#33cc99';
+                badge.style.border = '1px solid rgba(51, 204, 153, 0.5)';
             } else {
                 led.style.backgroundColor = '#ff5555';
                 led.style.boxShadow = '0 0 8px #ff5555';
                 led.classList.add('recording');
+                label.innerText = 'AEGIS REC';
+                label.style.color = '#ffffff';
+                badge.style.border = '1px solid rgba(124, 58, 237, 0.5)';
             }
         };
     }
@@ -1028,7 +1059,10 @@ class AegisRecorder:
             def on_console_msg(msg):
                 text = msg.text
                 msg_type = msg.type
-                if msg_type in ["error", "warning"] or "aegis" in text.lower():
+                # Ignora erros genéricos de rede (404/403/recursos) para não poluir o terminal
+                if "failed to load resource" in text.lower() or "net::err_" in text.lower():
+                    return
+                if msg_type == "error" or "aegis" in text.lower():
                     print(f"[BROWSER CONSOLE {msg_type.upper()}] {text}")
                     sys.stdout.flush()
 
