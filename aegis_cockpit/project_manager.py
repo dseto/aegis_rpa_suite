@@ -393,7 +393,7 @@ PORTAL_PASSWORD=
         legacy_run = legacy_run_new if os.path.exists(legacy_run_new) else legacy_run_old
 
         if os.path.exists(legacy_run) and not os.path.exists(legacy_flag):
-            slug = self.get_unique_slug("exemplo_portal_segura")
+            slug = self.get_unique_slug("exemplo_migrado")
             proj_dir = os.path.join(self.projects_dir, slug)
             os.makedirs(proj_dir, exist_ok=True)
 
@@ -417,9 +417,9 @@ PORTAL_PASSWORD=
                 "aegis_sanitized_report.md": "relatorio.md",
                 "relatorio_validacao.json": "relatorio_validacao.json",
                 "aegis_dataset_validation_report.json": "relatorio_validacao.json",
-                "portalsegura_execution_report.csv": "relatorio_execucao.csv",
+                "exemplo_execution_report.csv": "relatorio_execucao.csv",
                 "aegis_execution_report.csv": "relatorio_execucao.csv",
-                "portalsegura_input_dataset.csv": "dados_entrada.csv",
+                "exemplo_input_dataset.csv": "dados_entrada.csv",
                 "aegis_input_dataset.csv": "dados_entrada.csv",
             }
             status = "empty"
@@ -436,7 +436,7 @@ PORTAL_PASSWORD=
 
             now = datetime.now().isoformat(timespec="seconds")
             meta = {
-                "name": "[Exemplo] Portal Segura - Dados Migrados",
+                "name": "[Exemplo] Projeto Migrado - Dados Migrados",
                 "slug": slug,
                 "url": url,
                 "created_at": now,

@@ -31,11 +31,11 @@ aegis_rpa_suite/
 │       ├── rpa-copilot-analyst.md
 │       └── rpa-copilot-coder.md
 ├── projects/                    # [Área Externa] Pasta de RPAs específicos
-│   └── <nome_projeto>/          # Ex: portal_segura_teste
+│   └── <nome_projeto>/          # Ex: faturamento_portal
 │       ├── .env                 # Configurações de IA e browser do projeto
 │       ├── project.json         # Metadados do Projeto
 │       ├── skills/              # Skills reutilizáveis do projeto
-│       │   └── <slug_skill>/    # Ex: login_segura (gravacao, dicionario, skill.json)
+│       │   └── <slug_skill>/    # Ex: login_portal (gravacao, dicionario, skill.json)
 │       └── tests/               # Cenários de teste isolados
 │           └── <slug_cenario>/  # dataset, bot, dicionário, logs, executions/
 ├── telemetry_data/              # [Área Externa] Logs de telemetria e datasets

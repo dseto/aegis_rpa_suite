@@ -1105,7 +1105,7 @@ class AegisRecorder:
 
             # Loop principal cooperativo thread-safe
             if self.auto_simulate:
-                print("[AEGIS AUTO-SIMULATOR] Iniciando simulação automática de preenchimento do Portal Segura...")
+                print("[AEGIS AUTO-SIMULATOR] Iniciando simulação automática de preenchimento do portal...")
                 sys.stdout.flush()
                 try:
                     from aegis_blackbox.recorder import run_auto_simulation
@@ -1411,7 +1411,7 @@ def run_auto_simulation(page, update_scenario, record_annotation):
     sys.stdout.flush()
     
     # Campo do autocomplete do corretor parceiro
-    fill_autocomplete_local("mat-form-field:has-text('Corretor Parceiro') input", "Porto", "Porto Seguro Seguros")
+    fill_autocomplete_local("mat-form-field:has-text('Corretor Parceiro') input", "Corretora", "Corretora de Exemplo")
     time.sleep(1.0)
     
     update_scenario("fluxo_bifurcado_aceite")

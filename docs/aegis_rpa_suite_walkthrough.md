@@ -131,7 +131,7 @@ A fase final atesta a estabilidade do robô através de instrumentação de logs
    * Após a conclusão bem-sucedida, capture telas comprobatórias e salve-as dinamicamente no repositório de evidências (Brain) sem caminhos fixos (hardcoded), usando o helper de resolução dinâmica.
 5. **Estrutura Organizacional Organizada:**
    * Os motores genéricos (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`) são isolados e não contêm códigos específicos de processos.
-   * Todos os RPAs são armazenados no diretório `projects/` (ex: `projects/portal_segura_integracao_e2e/bot_portalsegura.py`).
+   * Todos os RPAs são armazenados no diretório `projects/` (ex: `projects/faturamento_portal/bot_faturamento.py`).
 
 ---
 
@@ -141,14 +141,14 @@ Para manter o ecossistema Aegis em conformidade com as melhores práticas de seg
 * **Carregamento via `os.getenv`:** Todas as URLs de portais, usuários, senhas e tokens de API devem ser carregadas via variáveis de ambiente.
 * **Validação Estrita:** Caso as variáveis essenciais de produção estejam vazias no ambiente, o código do robô deve levantar um erro estruturado (`ValueError`), interrompendo a execução de forma segura:
   ```python
-  portalsegura_user = os.getenv("PORTALSEGURA_USER")
-  portalsegura_password = os.getenv("PORTALSEGURA_PASSWORD")
-  if not portalsegura_user or not portalsegura_password:
-      raise ValueError("Erro: Variáveis PORTALSEGURA_USER e PORTALSEGURA_PASSWORD não definidas!")
+  portal_user = os.getenv("PORTAL_USER")
+  portal_password = os.getenv("PORTAL_PASSWORD")
+  if not portal_user or not portal_password:
+      raise ValueError("Erro: Variáveis PORTAL_USER e PORTAL_PASSWORD não definidas!")
   ```
 * **Isolamento de Projetos e Proteção do Core Framework (Aegis Suite Blindado):**
   * **Não Geração de Arquivos na Raiz:** Não devem ser gerados arquivos na raiz do projeto (exceto em casos de extrema necessidade, como atualizações de dependências globais no `requirements.txt`).
-  * **Artefatos Específicos Isolados:** Artefatos específicos de um sistema (como logs de execução, capturas de tela, templates de CSV, datasets e relatórios temporários do Portal Segura) só podem ser gerados e salvos dentro da sua própria estrutura de pastas do projeto (ex: subpastas em `projects/`), nunca dentro de pastas da suíte do Aegis.
+  * **Artefatos Específicos Isolados:** Artefatos específicos de um sistema (como logs de execução, capturas de tela, templates de CSV, datasets e relatórios temporários do portal de destino) só podem ser gerados e salvos dentro da sua própria estrutura de pastas do projeto (ex: subpastas em `projects/`), nunca dentro de pastas da suíte do Aegis.
   * **Separação Externa de Projetos:** Tudo o que for específico de um processo automatizado (RPA) ou de um projeto deve ser externo à pasta principal do Aegis. A estrutura do Aegis (como `aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_mentor`) é um motor blindado e deve ser protegida contra alterações específicas de robôs.
   * **Localização de Projects e Telemetry_Data:** As pastas `projects/` (que armazena os códigos-fonte dos RPAs específicos) e `telemetry_data/` (que armazena os dados transacionais de inputs/outputs dos testes e execuções) devem ficar localizadas externamente à suíte core do Aegis (no nível de projeto ou sob diretórios de integração dedicados), nunca misturadas ou aninhadas dentro das pastas internas de ferramentas do framework.
 
