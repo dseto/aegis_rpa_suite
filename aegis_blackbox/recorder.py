@@ -25,12 +25,74 @@ JS_MINIMAL_LISTENERS = """
     window.__aegis_recorder_active__ = true;
     window.__aegis_recording_paused__ = false;
 
+    // Função auxiliar para verificar a quantidade de correspondências do seletor.
+    // Suporta pseudo-classe do Playwright :has-text() que não é nativa do browser.
+    function queryLength(selector, root) {
+        if (!root) root = document;
+        try {
+            let match = selector.match(/^(.*?):has-text\\('([^']*)'\\)(.*)$/);
+            if (match) {
+                let part1 = match[1].trim() || "*";
+                let textToFind = match[2];
+                textToFind = textToFind.replace(/\\\\'/g, "'");
+                let part2 = match[3].trim();
+                
+                let containers = (root.querySelectorAll) ? root.querySelectorAll(part1) : [];
+                let matchingContainers = [];
+                for (let i = 0; i < containers.length; i++) {
+                    let el = containers[i];
+                    let txt = el.innerText || el.textContent || "";
+                    if (txt.replace(/\\s+/g, ' ').trim().includes(textToFind)) {
+                        matchingContainers.push(el);
+                    }
+                }
+                
+                if (!part2) {
+                    return matchingContainers.length;
+                }
+                
+                let totalCount = 0;
+                if (part2.startsWith('~') || part2.startsWith('+')) {
+                    let isAdjacent = part2.startsWith('+');
+                    let siblingSelector = part2.substring(1).trim();
+                    for (let c of matchingContainers) {
+                        let sibling = c.nextElementSibling;
+                        while (sibling) {
+                            if (sibling.matches && sibling.matches(siblingSelector)) {
+                                totalCount++;
+                                if (isAdjacent) break;
+                            }
+                            if (isAdjacent) break;
+                            sibling = sibling.nextElementSibling;
+                        }
+                    }
+                } else {
+                    // Descendente
+                    for (let c of matchingContainers) {
+                        let descendants = c.querySelectorAll ? c.querySelectorAll(part2) : [];
+                        totalCount += descendants.length;
+                    }
+                }
+                return totalCount;
+            } else {
+                return (root.querySelectorAll) ? root.querySelectorAll(selector).length : 0;
+            }
+        } catch (err) {
+            return 0;
+        }
+    }
+
     // Seletores resilientes Aegis V4
     function getAegisSelector(element) {
         if (!element || element === document.body || element === document.documentElement) return "";
         
+        // Redireciona cliques em caminhos de SVG para o elemento gráfico raiz SVG
+        if (element.tagName && element.tagName.toLowerCase() === 'path') {
+            element = element.closest('svg') || element;
+        }
+        
         // Redireciona para o elemento interativo mais próximo se o clique foi em um elemento interno (ex: mat-icon ou span)
-        let interactive = element.closest('button, a, [role="button"], [role="menuitem"], mat-option, .mat-option, .mat-menu-item, [role="tab"], [role="option"]');
+        let interactive = element.closest('button, a, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="listbox"], [role="treeitem"], [role="gridcell"], [role="link"], mat-option, .mat-option, .mat-menu-item');
         if (interactive) {
             element = interactive;
         }
@@ -63,28 +125,124 @@ JS_MINIMAL_LISTENERS = """
         }
 
         if (!hasTestId) {
-            baseSelector = el.tagName.toLowerCase();
-            
-            if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.classList.contains('mat-option') || el.classList.contains('mat-menu-item')) && el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
-                let cleanText = el.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
-                baseSelector = `${el.tagName.toLowerCase()}:has-text('${cleanText}')`;
-            } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-                if (el.getAttribute('placeholder')) {
-                    baseSelector = `${el.tagName.toLowerCase()}[placeholder='${el.getAttribute('placeholder')}']`;
-                } else if (el.getAttribute('name')) {
-                    baseSelector = `${el.tagName.toLowerCase()}[name='${el.getAttribute('name')}']`;
-                } else if (el.getAttribute('id')) {
-                    baseSelector = `#${el.getAttribute('id')}`;
-                }
-            } else if (el.id && !/\\d{8,}/.test(el.id) && !el.id.startsWith('mat-input-')) {
+            if (el.id && !/\\d{8,}/.test(el.id) && !el.id.startsWith('mat-input-') && !el.id.startsWith('mat-select-')) {
                 baseSelector = `#${el.id}`;
+            } else {
+                baseSelector = el.tagName.toLowerCase();
+                let elementRole = el.getAttribute('role') || '';
+                let isInteractiveRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(elementRole);
+                let isMenuClass = el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
+                
+                if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) && 
+                    el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
+                    
+                    let cleanText = el.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                    let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : el.tagName.toLowerCase();
+                    baseSelector = `${tagPrefix}:has-text('${cleanText}')`;
+                    
+                } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+                    if (el.getAttribute('placeholder')) {
+                        baseSelector = `${el.tagName.toLowerCase()}[placeholder='${el.getAttribute('placeholder')}']`;
+                    } else if (el.getAttribute('name')) {
+                        baseSelector = `${el.tagName.toLowerCase()}[name='${el.getAttribute('name')}']`;
+                    } else {
+                        // Resolvedor Universal de Rótulo de Formulário
+                        let labelText = "";
+                        let selectorType = "";
+                        let labelNode = null;
+                        
+                        if (el.id) {
+                            let label = document.querySelector(`label[for='${el.id}']`);
+                            if (label) {
+                                labelText = label.innerText || label.textContent || "";
+                                selectorType = "explicit-label";
+                                labelNode = label;
+                            }
+                        }
+                        if (!labelText) {
+                            let parentLabel = el.closest('label');
+                            if (parentLabel) {
+                                let tempLabel = parentLabel.cloneNode(true);
+                                let innerInput = tempLabel.querySelector('input, textarea, select');
+                                if (innerInput) innerInput.remove();
+                                labelText = tempLabel.innerText || tempLabel.textContent || "";
+                                selectorType = "implicit-label";
+                                labelNode = parentLabel;
+                            }
+                        }
+                        if (!labelText) {
+                            let sibling = el.previousElementSibling;
+                            while (sibling) {
+                                if (sibling.tagName === 'LABEL') {
+                                    labelText = sibling.innerText || sibling.textContent || "";
+                                    selectorType = "sibling-label";
+                                    labelNode = sibling;
+                                    break;
+                                }
+                                sibling = sibling.previousElementSibling;
+                            }
+                        }
+                        if (!labelText) {
+                            const formField = el.closest('mat-form-field');
+                            if (formField) {
+                                const labelEl = formField.querySelector('.mat-form-field-label');
+                                if (labelEl) {
+                                    labelText = labelEl.innerText || labelEl.textContent || "";
+                                    selectorType = "mat-form-field";
+                                    labelNode = formField;
+                                }
+                            }
+                        }
+                        if (!labelText) {
+                            let formGroup = el.closest('.form-group, .form-control-container, .field, .mb-3, .form-row, .form-field');
+                            if (formGroup) {
+                                let label = formGroup.querySelector('label, .label');
+                                if (label) {
+                                    labelText = label.innerText || label.textContent || "";
+                                    selectorType = "form-group";
+                                    labelNode = formGroup;
+                                }
+                            }
+                        }
+
+                        labelText = labelText.trim();
+                        if (labelText && labelText.length < 45) {
+                            let cleanLabel = labelText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                            let tag = el.tagName.toLowerCase();
+                            if (selectorType === "mat-form-field") {
+                                baseSelector = `mat-form-field:has-text('${cleanLabel}') ${tag}`;
+                            } else if (selectorType === "implicit-label") {
+                                baseSelector = `label:has-text('${cleanLabel}') ${tag}`;
+                            } else if (selectorType === "explicit-label" || selectorType === "sibling-label") {
+                                baseSelector = `label:has-text('${cleanLabel}') ~ ${tag}`;
+                            } else if (selectorType === "form-group") {
+                                let classList = Array.from(labelNode.classList);
+                                let semClass = classList.find(cls => cls.includes('form-group') || cls.includes('field') || cls.includes('mb-3'));
+                                if (semClass) {
+                                    baseSelector = `.${semClass}:has-text('${cleanLabel}') ${tag}`;
+                                } else {
+                                    baseSelector = `div:has-text('${cleanLabel}') ${tag}`;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
-            let genericTags = ['img', 'span', 'div', 'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'i', 'b', 'strong', 'em', 'small', 'a'];
-            if (genericTags.includes(el.tagName.toLowerCase()) && (!el.id || /\\d{8,}/.test(el.id))) {
+            let genericTags = ['img', 'span', 'div', 'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'i', 'b', 'strong', 'em', 'small', 'a', 'svg', 'mat-icon'];
+            let isGeneric = genericTags.includes(el.tagName.toLowerCase());
+            let isButtonOrMenu = el.tagName.toLowerCase() === 'button' || el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
+            let isSemanticRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(el.getAttribute('role') || '');
+            let isFormFieldWithLabel = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') && 
+                (baseSelector.startsWith('mat-form-field:has-text') || baseSelector.startsWith('label:has-text') || baseSelector.startsWith('div:has-text') || baseSelector.includes(':has-text'));
+
+            if ((isGeneric || isButtonOrMenu || isSemanticRole || isFormFieldWithLabel) && (!el.id || /\\d{8,}/.test(el.id))) {
                 let parent = el.parentElement;
                 let depth = 0;
-                while (parent && depth < 5) {
+                let root = el.getRootNode();
+                let isUnique = queryLength(baseSelector, root) === 1;
+
+                while (parent && depth < 5 && !isUnique) {
                     let parentTag = parent.tagName.toLowerCase();
                     let parentTestId = null;
                     for (let attr of testIdAttrs) {
@@ -93,30 +251,41 @@ JS_MINIMAL_LISTENERS = """
                             break;
                         }
                     }
+                    
+                    let prefix = null;
                     if (parentTestId) {
-                        baseSelector = `${parentTestId} ${baseSelector}`;
-                        break;
+                        prefix = parentTestId;
+                    } else if (parent.id && !/\\d{8,}/.test(parent.id) && !parent.id.startsWith('mat-input-')) {
+                        prefix = `#${parent.id}`;
+                    } else if (['article', 'section', 'nav', 'aside', 'header', 'footer', 'form', 'table', 'tr', 'fieldset', 'details', 'summary'].includes(parentTag)) {
+                        prefix = parentTag;
+                    } else {
+                        let classList = Array.from(parent.classList);
+                        let semanticClass = classList.find(cls => 
+                            cls.includes('post') || cls.includes('card') || cls.includes('item') || 
+                            cls.includes('thumbnail') || cls.includes('menu') || cls.includes('wrapper') || 
+                            cls.includes('container') || cls.includes('block') || cls.includes('grid')
+                        );
+                        if (semanticClass) {
+                            prefix = `.${semanticClass}`;
+                        }
                     }
-                    if (parent.id && !/\\d{8,}/.test(parent.id) && !parent.id.startsWith('mat-input-')) {
-                        baseSelector = `#${parent.id} ${baseSelector}`;
-                        break;
-                    }
-                    if (['article', 'section', 'nav', 'aside', 'header', 'footer'].includes(parentTag)) {
-                        baseSelector = `${parentTag} ${baseSelector}`;
-                        break;
-                    }
-                    let classList = Array.from(parent.classList);
-                    let semanticClass = classList.find(cls => 
-                        cls.includes('post') || cls.includes('card') || cls.includes('item') || 
-                        cls.includes('thumbnail') || cls.includes('menu') || cls.includes('wrapper') || 
-                        cls.includes('container') || cls.includes('block') || cls.includes('grid')
-                    );
-                    if (semanticClass) {
-                        baseSelector = `.${semanticClass} ${baseSelector}`;
-                        break;
+
+                    if (prefix) {
+                        let candidateSelector = `${prefix} ${baseSelector}`;
+                        let matchesCount = queryLength(candidateSelector, root);
+                        baseSelector = candidateSelector; // Mantém o mais restritivo obtido
+                        if (matchesCount === 1) {
+                            isUnique = true;
+                            break;
+                        }
                     }
                     parent = parent.parentElement;
                     depth++;
+                }
+
+                if (!isUnique) {
+                    console.warn(`[Aegis Recorder] Seletor gerado pode ser ambíguo na página: "${baseSelector}"`);
                 }
             }
         }
