@@ -83,7 +83,7 @@ JS_MINIMAL_LISTENERS = """
     }
 
     // Seletores resilientes Aegis V4
-    function getAegisSelector(element) {
+    function getAegisSelector(element, isNested) {
         if (!element || element === document.body || element === document.documentElement) return "";
         
         // Redireciona cliques em caminhos de SVG para o elemento gráfico raiz SVG
@@ -95,6 +95,24 @@ JS_MINIMAL_LISTENERS = """
         let interactive = element.closest('button, a, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="listbox"], [role="treeitem"], [role="gridcell"], [role="link"], mat-option, .mat-option, .mat-menu-item');
         if (interactive) {
             element = interactive;
+        }
+
+        // --- DETECÇÃO DE SUBMENU / DROPDOWN HOVER-TO-REVEAL ---
+        if (!isNested) {
+            let subMenuContainer = element.closest('.sub-menu, .dropdown-menu, .dropdown, [role="menu"], .hfe-has-submenu');
+            if (subMenuContainer) {
+                let parentMenu = subMenuContainer.parentElement; // Geralmente o <li> correspondente ao menu pai
+                if (parentMenu && parentMenu !== element) {
+                    let parentSelector = getAegisSelector(parentMenu, true);
+                    let childSelector = getAegisSelector(element, true);
+                    if (parentSelector && childSelector) {
+                        if (childSelector.startsWith(parentSelector + " ")) {
+                            childSelector = childSelector.substring(parentSelector.length).trim();
+                        }
+                        return parentSelector + " >> " + childSelector;
+                    }
+                }
+            }
         }
 
         let shadowPath = "";

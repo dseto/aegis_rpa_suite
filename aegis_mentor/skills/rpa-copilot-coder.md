@@ -199,6 +199,13 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
   - Após AJAX auto-fill (nome preenchido pelo backend) → **não redigitar** o campo preenchido automaticamente
   - `delay_ms` recomendado: **60ms** (confortável e acima de todos os thresholds conhecidos)
 
+### 🪟 Padrão N: Detecção de Menus Suspensos / Dropdowns (Hover-to-Reveal)
+* **Problema:** Itens de menu ocultos em dropdowns (especialmente com classes como `.sub-menu`, `.dropdown-menu`, ou similares na telemetria) que precisam de um evento hover no menu pai para se tornarem visíveis e clicáveis.
+* **Solução:** O compilador de IA deve automaticamente identificar quando um seletor pertence a um submenu e dividi-lo em duas partes usando o operador de encadeamento ` >> ` (ex: `Pai >> Filho`), para que o `TransactionRunner.click_resilient` execute o hover automático no elemento pai antes de clicar no filho.
+* **Exemplo:**
+  - Seletor original na telemetria: `#menu-item-28904 .sub-menu #menu-item-141846 a`
+  - Seletor compilado resiliente: `#menu-item-28904 >> #menu-item-141846 a`
+
 ---
 
 ## 🎯 2. Diretrizes de Codificação RPA de Produção
