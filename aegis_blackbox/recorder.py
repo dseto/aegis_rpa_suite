@@ -427,9 +427,12 @@ JS_MINIMAL_LISTENERS = """
     }
 
     window.__aegis_last_recorded_values__ = {};
+    const EXCLUDED_INPUT_TYPES = ['checkbox', 'radio', 'submit', 'button', 'image', 'hidden', 'file'];
+
     function recordFill(target) {
         if (!target) return;
         if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') return;
+        if (target.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(target.type)) return;
         
         let selector = getAegisSelector(target);
         let val = target.value;
@@ -456,6 +459,7 @@ JS_MINIMAL_LISTENERS = """
         const inputs = document.querySelectorAll('input, textarea, select');
         for (let input of inputs) {
             if (input.closest('#aegis-indicator-host')) continue;
+            if (input.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(input.type)) continue;
             let selector = getAegisSelector(input);
             let val = input.value;
             // Só grava se o elemento possuir valor e este diferir do último valor gravado
