@@ -216,7 +216,7 @@ class ProjectManager:
             
         return projects
 
-    def create_project(self, name: str, url: str, custom_path: str = "", business_description: str = "", expected_business_outcome: str = "") -> dict:
+    def create_project(self, name: str, url: str, custom_path: str = "", business_description: str = "", expected_business_outcome: str = "", llm_api_key: str = "") -> dict:
         """Cria um novo diretório de projeto físico (localizado no projects_dir ou em custom_path)."""
         base_slug = self.slugify(name)
         slug = self.get_unique_slug(base_slug)
@@ -307,7 +307,7 @@ Para iniciar o desenvolvimento deste robô de automação, copie e envie o promp
             f.write("playwright>=1.40.0\n./dist/aegis_rpa_suite-1.0.0-py3-none-any.whl\n")
 
         # Cria arquivo de template .env com suporte cognitivo completo
-        env_content = """# ==============================================================================
+        env_content = f"""# ==============================================================================
 # CONFIGURAÇÕES DE EXECUÇÃO DO BROWSER (AEGIS RUNNER)
 # ==============================================================================
 AEGIS_BROWSER_HEADLESS=false
@@ -327,7 +327,7 @@ AEGIS_COGNITIVE_PROVIDER=openrouter
 AEGIS_COGNITIVE_MODEL=google/gemini-2.5-flash
 
 # Chave de API secreta do provedor (Insira sua chave correspondente)
-AEGIS_COGNITIVE_API_KEY=
+AEGIS_COGNITIVE_API_KEY={llm_api_key}
 
 # URL Base do serviço de LLM (Para OpenRouter ou LiteLLM customizado)
 AEGIS_COGNITIVE_BASE_URL=https://openrouter.ai/api/v1
@@ -524,9 +524,7 @@ PORTAL_PASSWORD=
         with open(os.path.join(test_dir, "project.json"), "w", encoding="utf-8") as f:
             json.dump(test_meta, f, indent=4, ensure_ascii=False)
             
-        proj_env = os.path.join(proj_dir, ".env")
-        if os.path.exists(proj_env):
-            shutil.copy2(proj_env, os.path.join(test_dir, ".env"))
+        # .env is now project-level only; no copy to test scenario subfolder
             
         proj_req = os.path.join(proj_dir, "requirements.txt")
         if os.path.exists(proj_req):
@@ -625,9 +623,7 @@ PORTAL_PASSWORD=
         with open(os.path.join(test_dir, "project.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=4, ensure_ascii=False)
             
-        proj_env = os.path.join(proj_dir, ".env")
-        if os.path.exists(proj_env):
-            shutil.copy2(proj_env, os.path.join(test_dir, ".env"))
+        # .env is now project-level only; no copy to test scenario subfolder
             
         proj_req = os.path.join(proj_dir, "requirements.txt")
         if os.path.exists(proj_req):

@@ -122,6 +122,20 @@ def main():
             if os.path.exists(lpath):
                 with open(lpath, "r", encoding="utf-8") as f:
                     files[f"projects/{project_slug}/tests/{test_slug}/{lf}"] = f.read()
+
+    # Pacota o .env do projeto com a API Key mascarada com o token da pipeline $(AEGIS_COGNITIVE_API_KEY)
+    project_env_path = os.path.join(proj_dir, ".env")
+    if os.path.exists(project_env_path):
+        print("[*] Empacotando .env do projeto com token de pipeline mascarado...")
+        with open(project_env_path, "r", encoding="utf-8") as f:
+            env_lines = f.readlines()
+        sanitized_lines = []
+        for line in env_lines:
+            if line.strip().startswith("AEGIS_COGNITIVE_API_KEY="):
+                sanitized_lines.append("AEGIS_COGNITIVE_API_KEY=$(AEGIS_COGNITIVE_API_KEY)\n")
+            else:
+                sanitized_lines.append(line)
+        files[f"projects/{project_slug}/.env"] = "".join(sanitized_lines)
                     
     # 5. Carrega o template da pipeline e popula a matriz de execução do YAML
     print("[*] Gerando pipeline YAML consolidada...")

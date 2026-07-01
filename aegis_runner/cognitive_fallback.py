@@ -31,18 +31,32 @@ class CognitiveGateway:
                                 key, val = line.split("=", 1)
                                 key_clean = key.strip()
                                 val_clean = val.strip().strip("'\"")
-                                # Injeta se não existir ou se estiver vazio no SO
-                                if not os.environ.get(key_clean):
-                                    os.environ[key_clean] = val_clean
+                                is_placeholder = val_clean.startswith("$(") and val_clean.endswith(")")
+                                is_placeholder = is_placeholder or (val_clean.startswith("__") and val_clean.endswith("__"))
+                                if val_clean and not is_placeholder:
+                                    # Injeta se não existir ou se estiver vazio no SO
+                                    if not os.environ.get(key_clean):
+                                        os.environ[key_clean] = val_clean
         except Exception as env_err:
             print(f"[COGNITIVE WARNING] Erro ao autocarregar .env global da raiz: {env_err}")
 
         # 2. Tenta carregar .env local do diretório do PROJETO do robô, se fornecido,
-        # podendo sobrescrever as chaves globais para independência absoluta por RPA
+        # subindo os níveis de diretório até encontrar o .env consolidado
         try:
             if project_dir and os.path.exists(project_dir):
-                env_path = os.path.join(project_dir, ".env")
-                if os.path.exists(env_path):
+                current_lookup = os.path.abspath(project_dir)
+                env_path = None
+                for _ in range(4):
+                    candidate = os.path.join(current_lookup, ".env")
+                    if os.path.exists(candidate):
+                        env_path = candidate
+                        break
+                    parent_lookup = os.path.dirname(current_lookup)
+                    if parent_lookup == current_lookup:
+                        break
+                    current_lookup = parent_lookup
+
+                if env_path and os.path.exists(env_path):
                     with open(env_path, "r", encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
@@ -50,7 +64,12 @@ class CognitiveGateway:
                                 key, val = line.split("=", 1)
                                 key_clean = key.strip()
                                 val_clean = val.strip().strip("'\"")
-                                # Local sempre sobrescreve ou define
+                                # Local sempre sobrescreve ou define, a menos que seja um placeholder/vazio
+                                # e já exista uma chave de ambiente definida no SO
+                                is_placeholder = val_clean.startswith("$(") and val_clean.endswith(")")
+                                is_placeholder = is_placeholder or (val_clean.startswith("__") and val_clean.endswith("__"))
+                                if (not val_clean or is_placeholder) and os.environ.get(key_clean):
+                                    continue
                                 os.environ[key_clean] = val_clean
         except Exception as env_err:
             print(f"[COGNITIVE WARNING] Erro ao autocarregar .env local do projeto: {env_err}")

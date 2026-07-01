@@ -1373,6 +1373,10 @@
                 <input type="text" id="modal-proj-url" placeholder="Ex: https://portal.exemplo.com/login" />
             </div>
             <div class="form-group">
+                <label for="modal-proj-llm-token">Token da API da LLM (Obrigatorio)</label>
+                <input type="password" id="modal-proj-llm-token" placeholder="Ex: sk-or-v1-..." required style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px;" />
+            </div>
+            <div class="form-group">
                 <label for="modal-proj-desc">Descrição de Negócio / Contexto (Opcional)</label>
                 <textarea id="modal-proj-desc" placeholder="Ex: Mapeamento de fluxos do portal de seguros..." rows="2" style="background:var(--bg); border:1px solid var(--border); color:#fff; width:100%; padding:6px; border-radius:4px; font-size:12px; resize:vertical;"></textarea>
             </div>
@@ -2472,11 +2476,13 @@
             const custom_path = document.getElementById('modal-proj-path').value.trim();
             const business_description = document.getElementById('modal-proj-desc').value.trim();
             const expected_business_outcome = document.getElementById('modal-proj-outcome').value.trim();
+            const llm_api_key = document.getElementById('modal-proj-llm-token').value.trim();
             if (!name) { alert('Por favor, informe o nome do projeto.'); return; }
+            if (!llm_api_key) { alert('Por favor, informe o Token da API da LLM.'); return; }
             fetch('/api/projects', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url, custom_path, business_description, expected_business_outcome })
+                body: JSON.stringify({ name, url, custom_path, business_description, expected_business_outcome, llm_api_key })
             })
             .then(r => r.json())
             .then(data => {
@@ -2487,6 +2493,7 @@
                     document.getElementById('modal-proj-path').value = '';
                     document.getElementById('modal-proj-desc').value = '';
                     document.getElementById('modal-proj-outcome').value = '';
+                    document.getElementById('modal-proj-llm-token').value = '';
                     loadProjects(() => {
                         selectProject(data.project.slug);
                     });

@@ -320,10 +320,21 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             custom_path = body.get('custom_path', '').strip()
             business_description = body.get('business_description', '').strip()
             expected_business_outcome = body.get('expected_business_outcome', '').strip()
+            llm_api_key = body.get('llm_api_key', '').strip()
             if not name:
                 self._json({'success': False, 'message': 'Nome do projeto é obrigatório.'}, 400)
                 return
-            meta = project_manager.create_project(name, url, custom_path, business_description, expected_business_outcome)
+            if not llm_api_key:
+                self._json({'success': False, 'message': 'O Token da API da LLM é obrigatório.'}, 400)
+                return
+            meta = project_manager.create_project(
+                name=name,
+                url=url,
+                custom_path=custom_path,
+                business_description=business_description,
+                expected_business_outcome=expected_business_outcome,
+                llm_api_key=llm_api_key
+            )
             self._json({'success': True, 'project': meta})
 
         elif path.startswith('/api/projects/') and path.endswith('/tests'):
