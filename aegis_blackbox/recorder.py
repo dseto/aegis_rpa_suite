@@ -470,10 +470,26 @@ JS_MINIMAL_LISTENERS = """
     }
     window.flushAllInputs = flushAllInputs;
 
+    let lastClickTime = 0;
+    let lastClickSelector = "";
+
     // Listeners em fase de captura
     document.addEventListener('click', function(e) {
         if (window.__aegis_recording_paused__) return;
         if (e.target.closest('#aegis-indicator-host')) return;
+        
+        // Evita gravar cliques programáticos/sintéticos disparados por frameworks
+        if (!e.isTrusted) return;
+        
+        let now = Date.now();
+        let selector = getAegisSelector(e.target);
+        
+        // Evita gravação de cliques duplicados consecutivos (double-clicks rápidos) no mesmo seletor ou sub-seletor dentro de 250ms
+        if (now - lastClickTime < 250 && (selector === lastClickSelector || selector.includes(lastClickSelector) || lastClickSelector.includes(selector))) {
+            return;
+        }
+        lastClickTime = now;
+        lastClickSelector = selector;
         
         // Garante a gravação de todos os inputs pendentes antes do clique
         flushAllInputs();
@@ -481,7 +497,6 @@ JS_MINIMAL_LISTENERS = """
         let x_percent = e.clientX / window.innerWidth;
         let y_percent = e.clientY / window.innerHeight;
  
-        let selector = getAegisSelector(e.target);
         window.pythonRecordAction(JSON.stringify({
             type: 'click',
             tag: e.target.tagName,
