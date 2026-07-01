@@ -263,6 +263,13 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        if parent == AEGIS_SUITE_ROOT:
            break
        AEGIS_SUITE_ROOT = parent
+   
+   # Se não encontrar localmente, adiciona a pasta global padrão da suíte Aegis
+   if not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):
+       global_path = r"C:\Projetos\aegis_rpa_suite"
+       if os.path.exists(global_path):
+           AEGIS_SUITE_ROOT = global_path
+           
    if AEGIS_SUITE_ROOT not in sys.path:
        sys.path.insert(0, AEGIS_SUITE_ROOT)
        
@@ -297,8 +304,8 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    Para preenchimento de datas, utilize seleção completa com `Control+A` e digitação, ou injeção DOM de propriedades removendo a flag `readonly` e despachando os eventos `input` e `change` se necessário.
 7. **Padrão L (Diálogo de Arquivos / Upload):**
    Para upload de arquivos, use `with page.expect_file_chooser()` ou `page.set_input_files()`.
-8. **Espera de transições (Padrão J / Padrão H):**
-   Sempre use esperas explícitas (`page.locator(...).wait_for(...)` ou `runner.wait_for_selector(page, selector, state="visible", timeout=10000, target_description="...")`) ao transicionar de tela ou etapa. NUNCA invente ou adivinhe seletores hipotéticos para aguardar o carregamento da tela. É **PROIBIDO** usar `wait_for_url` se o portal for uma SPA. Em vez disso, faça a espera reativa apontando estritamente para o seletor do primeiro elemento interativo subsequente da próxima etapa (ex: `[data-testid='new-quote-btn']`). Além disso, sempre adicione uma espera explícita (ex: `time.sleep(2.0)`) logo após preencher campos de identificação (como CPF, CNPJ, CEP) que notoriamente disparam buscas assíncronas no backend e autopreenchimento de outros campos na tela, evitando que o robô interaja com o formulário enquanto o backend ainda está reescrevendo valores. Evite outros `time.sleep` estáticos cegos, a não ser que seja para aguardar a conclusão de animações.
+8. **Espera de transições e Proibição de Seletores Inventados (Crítico):**
+   Você é **ESTRITAMENTE PROIBIDO** de inventar, supor ou adivinhar seletores hipotéticos (como `h1:has-text(...)`, cabeçalhos de título, banners ou labels) para usar em `wait_for` ou qualquer espera de transição de tela. Se um elemento ou seletor não foi gravado de fato na lista de passos da telemetria (não consta na lista original de eventos), você **NÃO PODE** criar nenhuma instrução `wait_for` esperando por ele. Para aguardar transições, use apenas a sincronização do próprio passo de clique/preenchimento seguinte da telemetria. É **PROIBIDO** usar `wait_for_url` se o portal for uma SPA. Além disso, sempre adicione uma espera explícita (ex: `time.sleep(2.0)`) logo após preencher campos de identificação (como CPF, CNPJ, CEP) que notoriamente disparam buscas assíncronas no backend e autopreenchimento de outros campos na tela, evitando que o robô interaja com o formulário enquanto o backend ainda está reescrevendo valores. Evite outros `time.sleep` estáticos cegos, a não ser que seja para aguardar a conclusão de animações.
 9. **Proibição de Hardcode (Segurança):**
    Não coloque credenciais ou tokens em texto fixo. Use as variáveis do `.env` carregadas pelo `TransactionRunner` ou passadas no dataset.
 10. **Geração Unificada de Fluxo (Crítico):**
