@@ -156,8 +156,11 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 return ''
 
             has_bot = (
+                os.path.exists(os.path.join(proj_dir, 'code', 'bot_producao.py')) or
                 os.path.exists(os.path.join(proj_dir, 'bot_producao.py')) or
+                os.path.exists(os.path.join(proj_dir, 'code', 'robot.py')) or
                 os.path.exists(os.path.join(proj_dir, 'robot.py')) or
+                os.path.exists(os.path.join(proj_dir, 'code', 'run_bot.py')) or
                 os.path.exists(os.path.join(proj_dir, 'run_bot.py'))
             )
             dataset = load_json('dataset_inicial.json') or []
@@ -210,9 +213,18 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             test_dir = os.path.join(project_manager.get_project_dir(slug), "tests", test_slug)
             exec_dir = os.path.join(test_dir, "executions", execution_id)
             
-            log_path = os.path.join(exec_dir, "execution.log")
-            steps_path = os.path.join(exec_dir, "historico_passos.json")
-            report_path = os.path.join(exec_dir, "relatorio_execucao.csv")
+            # Busca logs e relatórios preferencialmente nas subpastas reports/ ou logs/
+            log_path = os.path.join(exec_dir, "reports", "execution.log")
+            if not os.path.exists(log_path):
+                log_path = os.path.join(exec_dir, "execution.log")
+                
+            steps_path = os.path.join(exec_dir, "reports", "historico_passos.json")
+            if not os.path.exists(steps_path):
+                steps_path = os.path.join(exec_dir, "historico_passos.json")
+                
+            report_path = os.path.join(exec_dir, "reports", "relatorio_execucao.csv")
+            if not os.path.exists(report_path):
+                report_path = os.path.join(exec_dir, "relatorio_execucao.csv")
             
             log_content = ""
             if os.path.exists(log_path):
@@ -254,12 +266,16 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             execution_id = urllib.parse.unquote(parts[7])
             filename = urllib.parse.unquote(parts[9])
             
-            # Sanitiza filename para evitar directory traversal
-            filename = os.path.basename(filename)
+            # Sanitiza filename de forma segura permitindo subpastas
+            # Remove qualquer tentativa de usar '..' para subir de nível
+            clean_filename = filename.replace('\\', '/').replace('../', '').replace('..', '')
+            file_path = os.path.abspath(os.path.join(exec_dir, clean_filename))
             
-            test_dir = os.path.join(project_manager.get_project_dir(slug), "tests", test_slug)
-            exec_dir = os.path.join(test_dir, "executions", execution_id)
-            file_path = os.path.join(exec_dir, filename)
+            # Garante que o caminho final ainda está dentro de exec_dir
+            if not file_path.startswith(os.path.abspath(exec_dir)):
+                self.send_response(403)
+                self.end_headers()
+                return
             
             if os.path.exists(file_path):
                 self.send_response(200)
@@ -718,7 +734,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 proj_dir = os.path.join(proj_dir, "tests", test_slug)
             
             bot_script = None
-            for name in ['bot_producao.py', 'robot.py', 'run_bot.py']:
+            for name in ['code/bot_producao.py', 'bot_producao.py', 'code/robot.py', 'robot.py', 'code/run_bot.py', 'run_bot.py']:
                 candidate = os.path.join(proj_dir, name)
                 if os.path.exists(candidate):
                     bot_script = candidate

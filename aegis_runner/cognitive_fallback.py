@@ -7,6 +7,9 @@ from playwright.sync_api import Page
 
 class CognitiveGateway:
     def __init__(self, project_dir: str = None):
+        # 0. Salva uma cópia das variáveis de ambiente originais do processo pai
+        initial_env = dict(os.environ)
+        
         # 1. Tenta carregar .env global de locais conhecidos da raiz do framework (aegis_rpa_suite) ou do CWD
         try:
             curr_dir = os.path.dirname(os.path.abspath(__file__))
@@ -34,8 +37,8 @@ class CognitiveGateway:
                                 is_placeholder = val_clean.startswith("$(") and val_clean.endswith(")")
                                 is_placeholder = is_placeholder or (val_clean.startswith("__") and val_clean.endswith("__"))
                                 if val_clean and not is_placeholder:
-                                    # Injeta se não existir ou se estiver vazio no SO
-                                    if not os.environ.get(key_clean):
+                                    # Injeta se não existir originalmente no SO
+                                    if key_clean not in initial_env:
                                         os.environ[key_clean] = val_clean
         except Exception as env_err:
             print(f"[COGNITIVE WARNING] Erro ao autocarregar .env global da raiz: {env_err}")
@@ -64,11 +67,13 @@ class CognitiveGateway:
                                 key, val = line.split("=", 1)
                                 key_clean = key.strip()
                                 val_clean = val.strip().strip("'\"")
-                                # Local sempre sobrescreve ou define, a menos que seja um placeholder/vazio
-                                # e já exista uma chave de ambiente definida no SO
+                                # Se a variável foi originalmente passada pelo SO/processo pai, ela tem precedência absoluta
+                                if key_clean in initial_env:
+                                    continue
+                                # Se for vazia ou placeholder, ignora
                                 is_placeholder = val_clean.startswith("$(") and val_clean.endswith(")")
                                 is_placeholder = is_placeholder or (val_clean.startswith("__") and val_clean.endswith("__"))
-                                if (not val_clean or is_placeholder) and os.environ.get(key_clean):
+                                if not val_clean or is_placeholder:
                                     continue
                                 os.environ[key_clean] = val_clean
         except Exception as env_err:
@@ -253,15 +258,9 @@ class CognitiveGateway:
                 return True
             else:
                 print(f"[COGNITIVE FALHA] IA não encontrou o elemento. Justificativa: {result.get('reason')}")
-                
-                # Fallback de segurança definitivo: clique direto nas coordenadas gravadas originais
-                if original_coords and len(original_coords) == 2:
-                    viewport = page.viewport_size or {"width": 1280, "height": 720}
-                    x = int(viewport["width"] * original_coords[0])
-                    y = int(viewport["height"] * original_coords[1])
-                    print(f"[COGNITIVE WARNING] IA falhou no reconhecimento visual. Clicando nas coordenadas gravadas originais: ({x}, {y})")
-                    page.mouse.click(x, y)
-                    return True
+                # Se a IA explicitamente determinou que o elemento não está presente na tela,
+                # não tentamos o clique cego por coordenadas, pois isso geraria falsos-positivos.
+                # Retornamos False para que o runner registre a falha real do fluxo.
                 return False
 
         except Exception as e:

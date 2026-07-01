@@ -118,10 +118,19 @@ def main():
         print(f"[*] Empacotando cenário: {test_slug}...")
         test_dir = os.path.join(proj_dir, "tests", test_slug)
         for lf in local_files:
-            lpath = os.path.join(test_dir, lf)
+            if lf in ["bot_producao.py", "robot.py", "run_bot.py"]:
+                lpath = os.path.join(test_dir, "code", lf)
+                dest_path = f"projects/{project_slug}/tests/{test_slug}/code/{lf}"
+                if not os.path.exists(lpath):
+                    lpath = os.path.join(test_dir, lf)
+                    dest_path = f"projects/{project_slug}/tests/{test_slug}/{lf}"
+            else:
+                lpath = os.path.join(test_dir, lf)
+                dest_path = f"projects/{project_slug}/tests/{test_slug}/{lf}"
+                
             if os.path.exists(lpath):
                 with open(lpath, "r", encoding="utf-8") as f:
-                    files[f"projects/{project_slug}/tests/{test_slug}/{lf}"] = f.read()
+                    files[dest_path] = f.read()
 
     # Pacota o .env do projeto com a API Key mascarada com o token da pipeline $(AEGIS_COGNITIVE_API_KEY)
     project_env_path = os.path.join(proj_dir, ".env")

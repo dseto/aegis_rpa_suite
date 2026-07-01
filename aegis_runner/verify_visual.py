@@ -3,6 +3,7 @@ import sys
 import argparse
 import subprocess
 import json
+from datetime import datetime
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -30,13 +31,27 @@ def run_visual_verification(project_dir):
         
     # 2. Localizar o script do robô (padrão bot_*.py)
     bot_script = None
-    for entry in os.listdir(project_dir):
-        if entry.startswith("bot_") and entry.endswith(".py"):
-            bot_script = os.path.join(project_dir, entry)
-            break
-            
+    # Verifica primeiro se está na pasta 'code'
+    code_dir = os.path.join(project_dir, "code")
+    if os.path.exists(code_dir) and os.path.isdir(code_dir):
+        for entry in os.listdir(code_dir):
+            if entry.startswith("bot_") and entry.endswith(".py"):
+                bot_script = os.path.join(code_dir, entry)
+                break
+        if not bot_script:
+            for entry in os.listdir(code_dir):
+                if entry.endswith(".py") and entry != "__init__.py":
+                    bot_script = os.path.join(code_dir, entry)
+                    break
+                    
     if not bot_script:
-        # Tenta fallback para qualquer arquivo .py caso não ache bot_*.py
+        for entry in os.listdir(project_dir):
+            if entry.startswith("bot_") and entry.endswith(".py"):
+                bot_script = os.path.join(project_dir, entry)
+                break
+                
+    if not bot_script:
+        # Tenta fallback para qualquer arquivo .py caso não ache bot_*.py na raiz
         for entry in os.listdir(project_dir):
             if entry.endswith(".py") and entry != "__init__.py":
                 bot_script = os.path.join(project_dir, entry)
@@ -49,12 +64,18 @@ def run_visual_verification(project_dir):
     print(f"[ROBÔ] Script localizado: {bot_script}")
     
     # Remover screenshot_script.png antigo para evitar falsos positivos
-    path_script = os.path.join(project_dir, "screenshot_script.png")
-    if os.path.exists(path_script):
-        try:
-            os.remove(path_script)
-        except Exception:
-            pass
+    path_script = os.path.join(project_dir, "screenshots", "screenshot_script.png")
+    old_path_script = os.path.join(project_dir, "screenshot_script.png")
+    
+    # Garante a pasta screenshots
+    os.makedirs(os.path.dirname(path_script), exist_ok=True)
+    
+    for p in [path_script, old_path_script]:
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
 
     # 3. Executar o robô em modo HEADLESS=True
     print("[EXECUÇÃO] Iniciando execução do robô de forma isolada e silenciosa (headless)...")
@@ -98,6 +119,9 @@ def run_visual_verification(project_dir):
         print("[AEGIS] Processo de comparação visual abortado devido a quebra técnica do robô.")
         sys.exit(1)
         
+    if not os.path.exists(path_script) and os.path.exists(old_path_script):
+        path_script = old_path_script
+        
     if not os.path.exists(path_script):
         print("[❌ FALHA SISTÊMICA] O robô executou mas não gerou o screenshot de tela final (screenshot_script.png).")
         print("[AEGIS] Processo de comparação visual abortado.")
@@ -115,8 +139,11 @@ def run_visual_verification(project_dir):
     try:
         verdict = gateway.compare_visual_similarity(path_recorder, path_script)
         
-        # Salva o relatório estruturado JSON
-        report_json_path = os.path.join(project_dir, "visual_verification_report.json")
+        # Salva o relatório estruturado JSON na subpasta reports
+        reports_dir = os.path.join(project_dir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        
+        report_json_path = os.path.join(reports_dir, "visual_verification_report.json")
         with open(report_json_path, "w", encoding="utf-8") as f:
             json.dump(verdict, f, indent=4, ensure_ascii=False)
             
@@ -129,26 +156,67 @@ def run_visual_verification(project_dir):
         status_color = "🟢 APROVADO" if ready else "🔴 REVISÃO NECESSÁRIA"
         
         markdown_report = f"""# 🛡️ Relatório de Verificação Visual Aegis
-
-## Status: {status_color}
-
-- **Score de Similaridade:** {score}% (Nota de corte: 85%)
-- **Pronto para o Analista:** {"Sim" if ready else "Não"}
-
-### 📝 Justificativa
-{justification}
-
-### 🔍 Diferenças Detectadas
-"""
+ 
+ ## Status: {status_color}
+ 
+ - **Score de Similaridade:** {score}% (Nota de corte: 85%)
+ - **Pronto para o Analista:** {"Sim" if ready else "Não"}
+ 
+ ### 📝 Justificativa
+ {justification}
+ 
+ ### 🔍 Diferenças Detectadas
+ """
         if diffs:
             for d in diffs:
                 markdown_report += f"- {d}\n"
         else:
             markdown_report += "- Nenhuma divergência relevante encontrada.\n"
             
-        report_md_path = os.path.join(project_dir, "visual_verification_report.md")
+        report_md_path = os.path.join(reports_dir, "visual_verification_report.md")
         with open(report_md_path, "w", encoding="utf-8") as f:
             f.write(markdown_report)
+            
+        # Atualiza/Gera o arquivo de índice JSON para incluir os relatórios de verificação visual
+        index_path = os.path.join(project_dir, "index_arquivos.json")
+        index_data = {}
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    index_data = json.load(f)
+            except:
+                pass
+        
+        if not index_data:
+            index_data = {
+                "component": "bot_execution",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "files": []
+            }
+            
+        files_list = index_data.setdefault("files", [])
+        
+        # Remove duplicados existentes para reinserir com a descrição correta
+        files_list = [f for f in files_list if f.get("path") not in ["reports/visual_verification_report.json", "reports/visual_verification_report.md"]]
+        
+        files_list.append({
+            "path": "reports/visual_verification_report.json",
+            "type": "visual_verification_report_json",
+            "description": "Relatório estruturado JSON contendo o resultado detalhado da homologação de interface por IA e o score de similaridade visual."
+        })
+        files_list.append({
+            "path": "reports/visual_verification_report.md",
+            "type": "visual_verification_report_markdown",
+            "description": "Relatório em formato Markdown exibindo de forma amigável as divergências de interface detectadas pela IA multimodal."
+        })
+        index_data["files"] = files_list
+        
+        try:
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(index_data, f, indent=4, ensure_ascii=False)
+            print(f"[AEGIS] Índice de arquivos atualizado em: {index_path}")
+        except Exception as ex:
+            print(f"[WARNING] Falha ao atualizar index_arquivos.json com relatórios visuais: {ex}")
             
         print("\n" + "=" * 60)
         print(f"VEREDITO VISUAL: {status_color} ({score}% de Similaridade)")

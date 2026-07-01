@@ -389,6 +389,57 @@ class SanitizerService:
         print("=" * 60)
         return True
 
+    def _update_datasets_with_new_keys(self, mapping: dict):
+        """Atualiza as chaves/colunas dos datasets com os novos nomes semânticos."""
+        if not mapping:
+            return
+            
+        # 1. Atualiza dataset_inicial.json
+        dataset_path = os.path.join(self.telemetry_dir, "dataset_inicial.json")
+        if os.path.exists(dataset_path):
+            try:
+                with open(dataset_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                if isinstance(data, list):
+                    new_data = []
+                    for row in data:
+                        new_row = {}
+                        for k, v in row.items():
+                            new_k = mapping.get(k, k)
+                            new_row[new_k] = v
+                        new_data.append(new_row)
+                    
+                    with open(dataset_path, "w", encoding="utf-8") as f:
+                        json.dump(new_data, f, indent=4, ensure_ascii=False)
+                    print(f"[AEGIS SANITIZER] dataset_inicial.json atualizado com as novas chaves semânticas: {mapping}")
+            except Exception as e:
+                print(f"[WARNING] Falha ao atualizar dataset_inicial.json: {e}")
+                
+        # 2. Atualiza arquivos CSV (template.csv, dados_entrada.csv)
+        for csv_name in ["template.csv", "dados_entrada.csv"]:
+            csv_path = os.path.join(self.telemetry_dir, csv_name)
+            if os.path.exists(csv_path):
+                try:
+                    import csv
+                    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                        reader = csv.reader(f)
+                        rows = list(reader)
+                        
+                    if rows:
+                        headers = rows[0]
+                        new_headers = []
+                        for h in headers:
+                            new_headers.append(mapping.get(h, h))
+                        rows[0] = new_headers
+                        
+                        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerows(rows)
+                        print(f"[AEGIS SANITIZER] {csv_name} atualizado com as novas colunas semânticas.")
+                except Exception as e:
+                    print(f"[WARNING] Falha ao atualizar {csv_name}: {e}")
+
     def refine_semantics_with_llm(self, dict_data: dict, raw_data: dict, business_desc: str, expected_outcome: str) -> tuple:
         """
         Usa LLM para refinar as chaves do dicionário para linguagem de negócio e traduzir
@@ -402,8 +453,28 @@ class SanitizerService:
 
         print("[COGNITIVE] Iniciando Higienização Cognitiva Semântica (Fase 2.5)...")
         
-        inputs = dict_data.get("inputs", [])
+        inputs = dict_data.get("fields", dict_data.get("inputs", []))
+        if isinstance(inputs, dict):
+            temp_inputs = []
+            for sem_key, inp_info in inputs.items():
+                temp_inputs.append({
+                    "semantic_key": sem_key,
+                    "type": inp_info.get("type"),
+                    "selector": inp_info.get("selector"),
+                    "observed_value": inp_info.get("observed_value")
+                })
+            inputs = temp_inputs
+            
         outputs = dict_data.get("outputs", [])
+        if isinstance(outputs, dict):
+            temp_outputs = []
+            for sem_key, out_info in outputs.items():
+                temp_outputs.append({
+                    "semantic_key": sem_key,
+                    "selector": out_info.get("selector")
+                })
+            outputs = temp_outputs
+            
         events = raw_data.get("events", [])
         
         simplified_inputs = []
@@ -507,6 +578,10 @@ class SanitizerService:
                     new_key = input_mapping.get(sem_key, sem_key)
                     new_fields[new_key] = field_info
                 dict_data["fields"] = new_fields
+                
+                # Dispara a atualização dos datasets com as novas chaves
+                combined_mapping = {**input_mapping, **output_mapping}
+                self._update_datasets_with_new_keys(combined_mapping)
                 
             # Atualiza eventos em raw_data
             for idx, ev in enumerate(events):

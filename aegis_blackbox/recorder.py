@@ -95,6 +95,12 @@ JS_MINIMAL_LISTENERS = """
         let interactive = element.closest('button, a, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="listbox"], [role="treeitem"], [role="gridcell"], [role="link"], mat-option, .mat-option, .mat-menu-item');
         if (interactive) {
             element = interactive;
+        } else {
+            // Se não for um elemento interativo padrão, tenta encontrar o ancestral mais próximo que possua um atributo de teste
+            let testIdAncestor = element.closest("[data-testid], [data-test-id], [data-test], [data-qa]");
+            if (testIdAncestor) {
+                element = testIdAncestor;
+            }
         }
 
         // --- DETECÇÃO DE SUBMENU / DROPDOWN HOVER-TO-REVEAL ---
@@ -420,14 +426,57 @@ JS_MINIMAL_LISTENERS = """
         document.addEventListener('DOMContentLoaded', injectIndicator);
     }
 
+    window.__aegis_last_recorded_values__ = {};
+    function recordFill(target) {
+        if (!target) return;
+        if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') return;
+        
+        let selector = getAegisSelector(target);
+        let val = target.value;
+        
+        // Evita duplicar se o valor já foi gravado recentemente
+        if (window.__aegis_last_recorded_values__[selector] === val) {
+            return;
+        }
+        window.__aegis_last_recorded_values__[selector] = val;
+        
+        let name = getSemanticFieldName(target);
+        window.pythonRecordAction(JSON.stringify({
+            type: 'fill',
+            tag: target.tagName,
+            selector: selector,
+            value: val,
+            name: name,
+            placeholder: target.getAttribute('placeholder') || "",
+            id: target.id || ""
+        }));
+    }
+
+    function flushAllInputs() {
+        const inputs = document.querySelectorAll('input, textarea, select');
+        for (let input of inputs) {
+            if (input.closest('#aegis-indicator-host')) continue;
+            let selector = getAegisSelector(input);
+            let val = input.value;
+            // Só grava se o elemento possuir valor e este diferir do último valor gravado
+            if (val && window.__aegis_last_recorded_values__[selector] !== val) {
+                recordFill(input);
+            }
+        }
+    }
+    window.flushAllInputs = flushAllInputs;
+
     // Listeners em fase de captura
     document.addEventListener('click', function(e) {
         if (window.__aegis_recording_paused__) return;
         if (e.target.closest('#aegis-indicator-host')) return;
         
+        // Garante a gravação de todos os inputs pendentes antes do clique
+        flushAllInputs();
+        
         let x_percent = e.clientX / window.innerWidth;
         let y_percent = e.clientY / window.innerHeight;
-
+ 
         let selector = getAegisSelector(e.target);
         window.pythonRecordAction(JSON.stringify({
             type: 'click',
@@ -442,19 +491,25 @@ JS_MINIMAL_LISTENERS = """
     document.addEventListener('change', function(e) {
         if (window.__aegis_recording_paused__) return;
         if (e.target.closest('#aegis-indicator-host')) return;
-        
-        let selector = getAegisSelector(e.target);
-        let name = getSemanticFieldName(e.target);
-        window.pythonRecordAction(JSON.stringify({
-            type: 'fill',
-            tag: e.target.tagName,
-            selector: selector,
-            value: e.target.value,
-            name: name,
-            placeholder: e.target.getAttribute('placeholder') || "",
-            id: e.target.id || ""
-        }));
+        recordFill(e.target);
     }, true);
+
+    document.addEventListener('blur', function(e) {
+        if (window.__aegis_recording_paused__) return;
+        if (e.target.closest('#aegis-indicator-host')) return;
+        recordFill(e.target);
+    }, true);
+
+    // Não gravamos no evento 'input' imediatamente para evitar gravar valores parciais enquanto digita (ex: "admin" -> "admin@...")
+    // O valor final será coletado socraticamente no 'blur', 'change', 'click' ou 'beforeunload'
+    document.addEventListener('input', function(e) {
+        if (window.__aegis_recording_paused__) return;
+        if (e.target.closest('#aegis-indicator-host')) return;
+    }, true);
+
+    window.addEventListener('beforeunload', function() {
+        flushAllInputs();
+    });
 
     // ── AEGIS ANTI-BOT DETECTOR ──────────────────────────────────────────────
     // Intercepta addEventListener para detectar campos input que registram
@@ -801,9 +856,49 @@ class AegisRecorder:
     def save_telemetry_files_disk(self, active_evaluate: bool = False):
         """Salva a telemetria, o dicionário estruturado e o dataset inicial no disco."""
         try:
+            # Consolida e limpa a lista de eventos para eliminar digitações parciais/duplicadas e cliques repetidos
+            cleaned_events = []
+            for event in self.events_log:
+                ev_type = event.get("type")
+                selector = event.get("selector")
+                
+                if ev_type == "fill" and selector:
+                    # Varre a lista de trás para frente para encontrar e remover preenchimentos anteriores redundantes do mesmo campo
+                    idx_to_remove = None
+                    for i in range(len(cleaned_events) - 1, -1, -1):
+                        prev_ev = cleaned_events[i]
+                        prev_type = prev_ev.get("type")
+                        prev_sel = prev_ev.get("selector")
+                        
+                        if prev_type == "fill" and prev_sel == selector:
+                            idx_to_remove = i
+                            break
+                        
+                        # Barreira de navegação/submissão: cliques em botões, links ou submissões reais
+                        if prev_type == "click" and prev_sel and ("button" in prev_sel or "submit" in prev_sel or "btn" in prev_sel or prev_ev.get("tag") in ["BUTTON", "A"]):
+                            break
+                            
+                    if idx_to_remove is not None:
+                        cleaned_events.pop(idx_to_remove)
+                        
+                    # Remove cliques/fills consecutivos remanescentes no próprio seletor
+                    while cleaned_events and cleaned_events[-1].get("selector") == selector and cleaned_events[-1].get("type") in ["fill", "click"]:
+                        cleaned_events.pop()
+                        
+                    cleaned_events.append(event)
+                else:
+                    cleaned_events.append(event)
+            self.events_log = cleaned_events
+
             # Coleta campos com keydown listeners detectados pelo interceptor JS
             anti_bot_detected = []
             if active_evaluate and not self.browser_closed and self.page:
+                try:
+                    # Força a gravação de qualquer input pendente na página antes de processar a telemetria
+                    self.page.evaluate("() => { if (window.flushAllInputs) { window.flushAllInputs(); } }")
+                except Exception:
+                    pass
+                
                 try:
                     anti_bot_detected = self.page.evaluate(
                         "() => window.__aegis_keydown_fields__ ? [...window.__aegis_keydown_fields__] : []"

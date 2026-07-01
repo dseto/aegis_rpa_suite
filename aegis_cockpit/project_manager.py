@@ -507,11 +507,20 @@ PORTAL_PASSWORD=
         for fname in files_to_move:
             src = os.path.join(proj_dir, fname)
             if os.path.exists(src):
-                shutil.move(src, os.path.join(test_dir, fname))
+                if fname in ["bot_producao.py", "robot.py", "run_bot.py", "skills_lib.py"]:
+                    dest_path = os.path.join(test_dir, "code", fname)
+                else:
+                    dest_path = os.path.join(test_dir, fname)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.move(src, dest_path)
                 
         for entry in os.listdir(proj_dir):
             if entry.endswith(".png") and os.path.isfile(os.path.join(proj_dir, entry)):
-                shutil.move(os.path.join(proj_dir, entry), os.path.join(test_dir, entry))
+                if entry == "screenshot_recorder.png":
+                    shutil.move(os.path.join(proj_dir, entry), os.path.join(test_dir, entry))
+                else:
+                    os.makedirs(os.path.join(test_dir, "screenshots"), exist_ok=True)
+                    shutil.move(os.path.join(proj_dir, entry), os.path.join(test_dir, "screenshots", entry))
                 
         test_meta = {
             "name": proj_name,
@@ -822,17 +831,29 @@ PORTAL_PASSWORD=
                 "relatorio_validacao.json",
                 "bot_producao.py",
                 "skills_lib.py",
+                "code/bot_producao.py",
+                "code/skills_lib.py",
+                "code/index_arquivos.json",
                 "project.json"
             ]
             for fname in files_to_copy:
                 src = os.path.join(test_dir, fname)
                 if os.path.exists(src):
-                    shutil.copy2(src, os.path.join(version_path, fname))
+                    dest_file = os.path.join(version_path, fname)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    shutil.copy2(src, dest_file)
                     
-            # Copia todos os prints de tela da pasta de teste (se houver)
-            for entry in os.listdir(test_dir):
-                if entry.endswith(".png") and os.path.isfile(os.path.join(test_dir, entry)):
-                    shutil.copy2(os.path.join(test_dir, entry), os.path.join(version_path, entry))
+            # Copia todos os prints de tela da pasta de teste e subpastas (se houver)
+            for root, dirs, files in os.walk(test_dir):
+                if "executions" in root or "versions" in root:
+                    continue
+                for file in files:
+                    if file.endswith(".png"):
+                        src_file = os.path.join(root, file)
+                        rel_path = os.path.relpath(src_file, test_dir)
+                        dest_file = os.path.join(version_path, rel_path)
+                        os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                        shutil.copy2(src_file, dest_file)
                     
             status = "empty"
             test_json = os.path.join(test_dir, "project.json")
@@ -942,18 +963,30 @@ PORTAL_PASSWORD=
             "relatorio_validacao.json",
             "bot_producao.py",
             "skills_lib.py",
+            "code/bot_producao.py",
+            "code/skills_lib.py",
+            "code/index_arquivos.json",
             "project.json"
         ]
         
         for fname in files_to_copy:
             src = os.path.join(test_dir, fname)
             if os.path.exists(src):
-                shutil.copy2(src, os.path.join(version_path, fname))
+                dest_file = os.path.join(version_path, fname)
+                os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                shutil.copy2(src, dest_file)
                 
-        # Copia todos os prints de tela da pasta de teste (se houver)
-        for entry in os.listdir(test_dir):
-            if entry.endswith(".png") and os.path.isfile(os.path.join(test_dir, entry)):
-                shutil.copy2(os.path.join(test_dir, entry), os.path.join(version_path, entry))
+        # Copia todos os prints de tela da pasta de teste e subpastas (se houver)
+        for root, dirs, files in os.walk(test_dir):
+            if "executions" in root or "versions" in root:
+                continue
+            for file in files:
+                if file.endswith(".png"):
+                    src_file = os.path.join(root, file)
+                    rel_path = os.path.relpath(src_file, test_dir)
+                    dest_file = os.path.join(version_path, rel_path)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    shutil.copy2(src_file, dest_file)
                 
         # Atualiza status no versions.json se mudou
         versions = self.list_versions(project_slug, test_slug)
@@ -987,6 +1020,9 @@ PORTAL_PASSWORD=
             "relatorio_validacao.json",
             "bot_producao.py",
             "skills_lib.py",
+            "code/bot_producao.py",
+            "code/skills_lib.py",
+            "code/index_arquivos.json",
             "project.json"
         ]
         
@@ -999,23 +1035,33 @@ PORTAL_PASSWORD=
                 except:
                     pass
                     
-        # Remove prints antigos
-        for entry in os.listdir(test_dir):
-            if entry.endswith(".png") and os.path.isfile(os.path.join(test_dir, entry)):
-                try:
-                    os.remove(os.path.join(test_dir, entry))
-                except:
-                    pass
+        # Remove prints antigos recursivamente (exceto nas pastas executions, versions e o screenshot_recorder.png)
+        for root, dirs, files in os.walk(test_dir, topdown=False):
+            if "executions" in root or "versions" in root:
+                continue
+            for file in files:
+                if file.endswith(".png") and file != "screenshot_recorder.png":
+                    try:
+                        os.remove(os.path.join(root, file))
+                    except:
+                        pass
                     
         # Copia de volta
         for fname in files_to_restore:
             src = os.path.join(version_path, fname)
             if os.path.exists(src):
-                shutil.copy2(src, os.path.join(test_dir, fname))
+                dest_file = os.path.join(test_dir, fname)
+                os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                shutil.copy2(src, dest_file)
                 
-        for entry in os.listdir(version_path):
-            if entry.endswith(".png") and os.path.isfile(os.path.join(version_path, entry)):
-                shutil.copy2(os.path.join(version_path, entry), os.path.join(test_dir, entry))
+        for root, dirs, files in os.walk(version_path):
+            for file in files:
+                if file.endswith(".png"):
+                    src_file = os.path.join(root, file)
+                    rel_path = os.path.relpath(src_file, version_path)
+                    dest_file = os.path.join(test_dir, rel_path)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    shutil.copy2(src_file, dest_file)
                 
         # Atualiza a marcação da versão ativa atual em project.json
         test_json = os.path.join(test_dir, "project.json")
@@ -1063,11 +1109,23 @@ PORTAL_PASSWORD=
         # Copia arquivos do código fonte atual para a pasta de execução
         # para garantir reprodutibilidade fiel e auditoria do código executado
         for fname in ["bot_producao.py", "skills_lib.py"]:
-            src = os.path.join(test_dir, fname)
+            # Tenta na pasta code/ primeiro, depois no root
+            src = os.path.join(test_dir, "code", fname)
+            if not os.path.exists(src):
+                src = os.path.join(test_dir, fname)
             if not os.path.exists(src) and not test_slug:
-                src = os.path.join(self.get_project_dir(project_slug), fname)
+                src = os.path.join(self.get_project_dir(project_slug), "code", fname)
+                if not os.path.exists(src):
+                    src = os.path.join(self.get_project_dir(project_slug), fname)
+                    
             if os.path.exists(src):
-                shutil.copy2(src, os.path.join(exec_dir, fname))
+                # Se o arquivo de origem estava em 'code', copia para a pasta 'code' na execução
+                if "code" in os.path.split(os.path.dirname(src)):
+                    dest_dir = os.path.join(exec_dir, "code")
+                else:
+                    dest_dir = exec_dir
+                os.makedirs(dest_dir, exist_ok=True)
+                shutil.copy2(src, os.path.join(dest_dir, fname))
                 
         # Tenta identificar qual a versão ativa/mais recente do cenário
         versions = self.list_versions(project_slug, test_slug)
@@ -1109,8 +1167,11 @@ PORTAL_PASSWORD=
         test_dir = os.path.join(self.get_project_dir(project_slug), "tests", test_slug)
         exec_dir = os.path.join(test_dir, "executions", execution_id)
         
-        # Salva o arquivo de log da execução
-        log_path = os.path.join(exec_dir, "execution.log")
+        # Salva o arquivo de log da execução na subpasta de relatórios
+        reports_dir = os.path.join(exec_dir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        
+        log_path = os.path.join(reports_dir, "execution.log")
         try:
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(log_content)
@@ -1118,7 +1179,9 @@ PORTAL_PASSWORD=
             print(f"[WARNING] Erro ao gravar execution.log: {ex}")
             
         # Analisa o relatorio_execucao.csv se existir para pegar os detalhes
-        report_csv = os.path.join(exec_dir, "relatorio_execucao.csv")
+        report_csv = os.path.join(reports_dir, "relatorio_execucao.csv")
+        if not os.path.exists(report_csv):
+            report_csv = os.path.join(exec_dir, "relatorio_execucao.csv")
         total_runs = 0
         passed_runs = 0
         status = "FAILED" if exit_code != 0 else "SUCCESS"

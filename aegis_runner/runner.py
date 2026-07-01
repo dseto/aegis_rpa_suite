@@ -4,6 +4,7 @@ import time
 import csv
 import re
 import json
+from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 try:
@@ -15,7 +16,19 @@ class TransactionRunner:
     def __init__(self, project_dir, error_message_selector=".toast-error, .alert-danger, #angular-field-status-message", cognitive_gateway=None, initial_url=None, **kwargs):
         self.project_dir = os.path.abspath(project_dir)
         self.error_message_selector = error_message_selector
+        
+        # Resolve initial_url a partir do project.json se não informado
         self.initial_url = initial_url
+        if not self.initial_url:
+            project_json = os.path.join(self.project_dir, "project.json")
+            if os.path.exists(project_json):
+                try:
+                    with open(project_json, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                        self.initial_url = meta.get("url")
+                except:
+                    pass
+        
         self.scenarios = {}
         
         # Direcionamento de logs de execução para pasta separada se configurado
@@ -26,10 +39,14 @@ class TransactionRunner:
         else:
             self.output_dir = self.project_dir
         
+        # Garante a existência das subpastas organizadas de execução
+        os.makedirs(os.path.join(self.output_dir, "reports"), exist_ok=True)
+        os.makedirs(os.path.join(self.output_dir, "screenshots"), exist_ok=True)
+        
         # Arquivos de dados do projeto
         self.dataset_json = os.path.join(self.project_dir, "dataset_inicial.json")
         self.dataset_csv = os.path.join(self.project_dir, "dados_entrada.csv")
-        self.report_csv = os.path.join(self.output_dir, "relatorio_execucao.csv")
+        self.report_csv = os.path.join(self.output_dir, "reports", "relatorio_execucao.csv")
         
         # Configura a saída UTF-8
         sys.stdout.reconfigure(encoding='utf-8')
@@ -59,7 +76,7 @@ class TransactionRunner:
             self.step_counter = getattr(self, "step_counter", 0) + 1
             # Substitui caracteres inválidos para nome de arquivo seguro
             clean_sel = re.sub(r'[^a-zA-Z0-9_\-]', '_', selector)[:30]
-            screenshot_filename = f"step_{row_id}_{self.step_counter}_{action}_{clean_sel}.png"
+            screenshot_filename = f"screenshots/step_{row_id}_{self.step_counter}_{action}_{clean_sel}.png"
             path = os.path.join(self.output_dir, screenshot_filename)
             try:
                 page.screenshot(path=path)
@@ -243,6 +260,7 @@ class TransactionRunner:
 
         # Nível 3: Self-Healing Cognitivo por IA
         healed_by_ia = False
+        cognitive_attempt_failed = False
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
             try:
@@ -252,9 +270,12 @@ class TransactionRunner:
                     return True
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
+                cognitive_attempt_failed = True
+        else:
+            cognitive_attempt_failed = True
 
         # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
-        if not healed_by_ia and original_coords and len(original_coords) == 2:
+        if not healed_by_ia and cognitive_attempt_failed and original_coords and len(original_coords) == 2:
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords[0])
@@ -439,6 +460,83 @@ class TransactionRunner:
             writer.writerows(reports)
         print(f"\n[AEGIS RUNNER] [SUCESSO] Relatório Transacional gravado em: {self.report_csv}\n")
 
+    def _write_index_file(self):
+        """Escreve um arquivo de índice em JSON com caminhos e descrições dos artefatos para consumo de IAs."""
+        index_path = os.path.join(self.output_dir, "index_arquivos.json")
+        
+        files_metadata = []
+        
+        # 1. Relatórios e logs
+        rel_exec_rel = "reports/relatorio_execucao.csv"
+        if os.path.exists(os.path.join(self.output_dir, rel_exec_rel)):
+            files_metadata.append({
+                "path": rel_exec_rel,
+                "type": "execution_report",
+                "description": "Relatório estruturado CSV com o status de sucesso/falha, tempo de duração e erros de cada transação processada."
+            })
+            
+        hist_passos_rel = "reports/historico_passos.json"
+        if os.path.exists(os.path.join(self.output_dir, hist_passos_rel)):
+            files_metadata.append({
+                "path": hist_passos_rel,
+                "type": "audit_trail",
+                "description": "Trilha de auditoria JSON com o detalhamento passo a passo da execução de cada ação física e cognitiva do robô."
+            })
+            
+        # O log de execução é gravado após a finalização do processo pelo Cockpit, mas prevemos sua existência
+        files_metadata.append({
+            "path": "reports/execution.log",
+            "type": "stdout_stderr_log",
+            "description": "Log de console bruto gerado pelo interpretador Python durante a execução do script do robô."
+        })
+        
+        # 2. Screenshots gerais
+        scr_script_rel = "screenshots/screenshot_script.png"
+        if os.path.exists(os.path.join(self.output_dir, scr_script_rel)):
+            files_metadata.append({
+                "path": scr_script_rel,
+                "type": "final_screenshot",
+                "description": "Captura de tela do estado final do navegador ao encerrar a execução do robô."
+            })
+            
+        # Procura por prints de erro e de passos
+        scr_dir = os.path.join(self.output_dir, "screenshots")
+        if os.path.exists(scr_dir):
+            for entry in sorted(os.listdir(scr_dir)):
+                if entry.endswith(".png"):
+                    rel_path = f"screenshots/{entry}"
+                    if entry.startswith("screenshot_erro_transacao_"):
+                        row_id = entry.replace("screenshot_erro_transacao_", "").replace(".png", "")
+                        files_metadata.append({
+                            "path": rel_path,
+                            "type": "error_screenshot",
+                            "description": f"Captura de tela do erro sistêmico ocorrido durante o processamento da transação de ID {row_id}."
+                        })
+                    elif entry.startswith("step_"):
+                        parts = entry.split("_")
+                        row_id = parts[1] if len(parts) > 1 else "?"
+                        step_num = parts[2] if len(parts) > 2 else "?"
+                        action = parts[3] if len(parts) > 3 else "ação"
+                        files_metadata.append({
+                            "path": rel_path,
+                            "type": "step_screenshot",
+                            "description": f"Evidência visual do passo {step_num} ({action}) na transação {row_id} executada com sucesso."
+                        })
+                        
+        index_data = {
+            "component": "bot_execution",
+            "execution_id": os.environ.get("AEGIS_EXECUTION_ID", "local"),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "files": files_metadata
+        }
+        
+        try:
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(index_data, f, indent=4, ensure_ascii=False)
+            print(f"[AEGIS RUNNER] Índice de arquivos (index_arquivos.json) gravado com sucesso em: {index_path}")
+        except Exception as ex:
+            print(f"[WARNING] Falha ao gravar index_arquivos.json: {ex}")
+
     def run(self, url=None, headless=True, slow_mo=50, channel="msedge"):
         """Inicia a orquestração centralizada de loops de transação Playwright."""
         # Override do headless via variável de ambiente (prioridade)
@@ -559,7 +657,7 @@ class TransactionRunner:
                         print(f"[✓ SUCESSO] Transação {row_id} executada com sucesso!")
                         
                         # Captura screenshot da última tela do robô
-                        screenshot_path = os.path.join(self.output_dir, "screenshot_script.png")
+                        screenshot_path = os.path.join(self.output_dir, "screenshots", "screenshot_script.png")
                         try:
                             page.screenshot(path=screenshot_path)
                             print(f"[AEGIS RUNNER] Screenshot da última tela do robô gravado em: {screenshot_path}")
@@ -644,7 +742,7 @@ class TransactionRunner:
                                 print(f"[AEGIS RUNNER] Falha ao executar diagnóstico de IA: {diag_err}")
                         
                         # Tira screenshot do erro
-                        screenshot_path = os.path.join(self.output_dir, f"screenshot_erro_transacao_{row_id}.png")
+                        screenshot_path = os.path.join(self.output_dir, "screenshots", f"screenshot_erro_transacao_{row_id}.png")
                         try:
                             page.screenshot(path=screenshot_path)
                             print(f"[❌ FALHA] Transação {row_id} quebrou por erro sistêmico. Screenshot salvo em: {screenshot_path}")
@@ -667,13 +765,15 @@ class TransactionRunner:
             self._write_report(reports)
             
             # Grava o histórico final de passos em JSON na pasta de execução
-            steps_json_path = os.path.join(self.output_dir, "historico_passos.json")
+            steps_json_path = os.path.join(self.output_dir, "reports", "historico_passos.json")
             try:
                 with open(steps_json_path, "w", encoding="utf-8") as sf:
                     json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
                 print(f"[AEGIS RUNNER] Trilha de auditoria final (historico_passos.json) gravada em: {steps_json_path}")
             except Exception as j_err:
                 print(f"[WARNING] Falha ao gravar {steps_json_path}: {j_err}")
+                
+            self._write_index_file()
                 
             if page:
                 try:

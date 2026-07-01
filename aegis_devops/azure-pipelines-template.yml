@@ -38,7 +38,7 @@ jobs:
         displayName: 'Instalar Dependências e Microsoft Edge'
 
       - script: |
-          python projects/{project_slug}/tests/$(SCENARIO)/bot_producao.py
+          python -c "import os; script = 'projects/{project_slug}/tests/$(SCENARIO)/code/bot_producao.py'; script = script if os.path.exists(script) else 'projects/{project_slug}/tests/$(SCENARIO)/bot_producao.py'; import subprocess; import sys; subprocess.run([sys.executable, script], check=True)"
         displayName: 'Executar Cenário: $(SCENARIO)'
         env:
           # --- Módulo Cognitivo (Aegis Self-Healing) ---
@@ -59,7 +59,7 @@ jobs:
           OKTA_TOTP_SECRET: $(OKTA_TOTP_SECRET)
 
       - script: |
-          python aegis_devops/junit_reporter.py projects/{project_slug}/tests/$(SCENARIO)/relatorio_execucao.csv projects/{project_slug}/tests/$(SCENARIO)/test-results.xml
+          python -c "import os; csv_path = 'projects/{project_slug}/tests/$(SCENARIO)/reports/relatorio_execucao.csv'; csv_path = csv_path if os.path.exists(csv_path) else 'projects/{project_slug}/tests/$(SCENARIO)/relatorio_execucao.csv'; import subprocess; import sys; subprocess.run([sys.executable, 'aegis_devops/junit_reporter.py', csv_path, 'projects/{project_slug}/tests/$(SCENARIO)/test-results.xml'], check=True)"
         displayName: 'Gerar Relatório JUnit XML'
         condition: always()
 

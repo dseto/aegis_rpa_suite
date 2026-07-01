@@ -100,7 +100,9 @@ class CodeGeneratorService:
         if skills_used:
             print(f"[INFO] Skills detectadas no cenário: {skills_used}")
             # Cria/limpa o arquivo skills_lib.py no diretório do projeto
-            skills_lib_path = os.path.join(self.project_dir, "skills_lib.py")
+            code_dir = os.path.join(self.project_dir, "code")
+            os.makedirs(code_dir, exist_ok=True)
+            skills_lib_path = os.path.join(code_dir, "skills_lib.py")
             with open(skills_lib_path, "w", encoding="utf-8") as lf:
                 lf.write("# 🛡️ Aegis Reusable Skills Library\n")
                 lf.write("# Este arquivo foi gerado automaticamente pelo Aegis Code Generator.\n\n")
@@ -279,12 +281,14 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        print("\\n[BOT] Iniciando automação do fluxo...")
        # [Implemente aqui o preenchimento passo a passo do cenário 'default']
        
-   if __name__ == "__main__":
-       current_dir = os.path.dirname(os.path.abspath(__file__))
-       runner = TransactionRunner(
-           project_dir=current_dir,
-           error_message_selector=".toast-error, .alert-danger"
-       )
+    if __name__ == "__main__":
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Se estiver na pasta 'code', o diretório do projeto é a pasta pai
+        project_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "code" else current_dir
+        runner = TransactionRunner(
+            project_dir=project_dir,
+            error_message_selector=".toast-error, .alert-danger"
+        )
        runner.register_scenario("default", execute_scenario_default)
        runner.run(headless=False)
    ```
@@ -379,10 +383,36 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             return False
 
         # 7. Grava o arquivo final
-        bot_path = os.path.join(self.project_dir, "bot_producao.py")
+        code_dir = os.path.join(self.project_dir, "code")
+        os.makedirs(code_dir, exist_ok=True)
+        bot_path = os.path.join(code_dir, "bot_producao.py")
         print(f"[INFO] Gravando arquivo do robô em: {bot_path}")
         with open(bot_path, "w", encoding="utf-8") as f:
             f.write(generated_code)
+
+        # 7.5. Grava o arquivo de índice JSON
+        index_data = {
+            "component": "code_generator",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "files": [
+                {
+                    "path": "code/bot_producao.py",
+                    "type": "source_code",
+                    "description": "Script Python principal contendo o fluxo linear da automação do robô RPA, utilizando cliques e preenchimentos resilientes."
+                }
+            ]
+        }
+        if os.path.exists(os.path.join(code_dir, "skills_lib.py")):
+            index_data["files"].append({
+                "path": "code/skills_lib.py",
+                "type": "source_code",
+                "description": "Biblioteca de Skills reutilizáveis (funções modulares) do projeto que foram compiladas via IA."
+            })
+        
+        index_path = os.path.join(code_dir, "index_arquivos.json")
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index_data, f, indent=4, ensure_ascii=False)
+        print(f"[INFO] Índice de arquivos do gerador de código salvo em: {index_path}")
 
         # 8. Atualiza o status do projeto no project.json
         if os.path.exists(project_json_path):
