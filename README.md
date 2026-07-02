@@ -117,6 +117,7 @@ python aegis_cockpit/cockpit.py
 * **Resolução Dinâmica de Caminhos:** O Cockpit substituiu fallbacks rígidos/estáticos para caminhos locais (antigo `C:\Projetos\Lab\...`) por caminhos dinâmicos gerados em tempo de execução relativos à raiz do framework (`PROJECT_ROOT`). Isso garante funcionamento imediato sem quebras de diretórios em máquinas limpas.
 * **Salvamento Seguro de Configuração (Merge):** O processo de atualização do arquivo de workspace (`aegis_config.json`) foi refatorado para realizar uma fusão (merge) de chaves em vez de sobrescrita destrutiva, preservando portas e parâmetros do SO durante o reinício.
 * **Carregamento Robusto do Módulo Cognitivo:** O parser do arquivo `.env` global foi aprimorado para suportar varreduras multi-diretórios (lendo da raiz do framework e do CWD atual) e sanitização automática de aspas simples/duplas para chaves de API, mitigando erros de autenticação na LLM.
+* **Controles de Colapso de Seções (Layout Expansível):** O header do Cockpit ganhou botões de recolhimento independentes para a coluna de Cenários (esquerda) e para o Painel de Operações/Console (centro). Ao recolher ambas as colunas, a seção da direita (Visualização / Dataset / Histórico) expande-se automaticamente para ocupar 100% da largura da tela, liberando espaço máximo para análise de evidências e datasets. O estado de cada coluna é persistido via `localStorage`.
 
 ### 📊 Gestão de Dataset (Aba Dataset)
 
@@ -155,6 +156,21 @@ Navegação em dois níveis para evitar sobrecarregar a tela em datasets com mui
 * **Nível 2 — Passos Auditados por Registro:** Ao clicar em um registro específico, exibe os passos auditados exclusivos daquele `row_id`. Botão `⬅ Voltar` retorna ao Nível 1.
 * **Visualizador de Screenshots:** Passos com evidências visuais exibem botão 📸 que carrega o screenshot no painel.
 * **Retrocompatibilidade:** Execuções antigas sem relatório transacional renderizam os passos diretamente em modo legado.
+* **Layout Redistribuído com Rolagem:** A aba Histórico ganhou rolagem vertical nativa em seu contêiner principal, deixando de ser limitada à altura da tela. A grade de Detalhes da Execução (Passos | Log | Screenshot) possui altura fixa garantida de `380px`. O painel de Insights & Propostas de Correção Cognitiva foi reorganizado em **2 colunas lado a lado**: à esquerda o campo de texto para o Analista QA e à direita a lista de correções sugeridas com rolagem interna dedicada.
+
+### 🔧 Histórico de Problemas & Auto-Healing (Painel de Rastreabilidade de Bugs)
+
+Novo painel permanente na aba **Histórico**, exibido logo após o painel de Evolução de Versões:
+
+* **Grid de Bugs em Aberto:** Exibe todos os problemas com status diferente de `resolved` do arquivo `correcoes_acumuladas.json`, ordenados por prioridade: `❌ Falhou` → `⏳ Aguardando` → `🔧 Aplicado`. Bugs resolvidos saem automaticamente do grid e nunca mais aparecem na listagem.
+* **Identificação do Passo (`# [PASSO X]`):** Cada bug exibe um badge roxo com o número do passo exato onde a falha ocorreu (ex: `Passo 69`), obtido do campo `index` do `historico_passos.json`. Registros aprovados antes desta funcionalidade exibem `sem nº` com tooltip explicativo. O campo `step_number` é persistido em `correcoes_acumuladas.json` a cada aprovação.
+* **Badge de Resumo:** Contador ao lado do título mostra quantos bugs estão em aberto e quantos tiveram tentativas fracassadas repetidas, ou exibe `✅ Todos resolvidos` em verde quando a lista estiver limpa.
+* **Coluna de Tentativas:** Cada linha exibe quantas vezes uma abordagem diferente foi tentada para o mesmo par `action + seletor` sem sucesso.
+* **Indicador de Insight QA (🧠):** Bugs que já receberam diagnóstico humano exibem ícone 🧠 com tooltip do texto registrado.
+* **Ação ✅ Resolver:** Marca o bug como `resolved` com **remoção otimista animada** (fade + slide em 250ms), sem aguardar a resposta do servidor. Se for o último bug em aberto, exibe mensagem verde de sucesso e atualiza o badge imediatamente. Em caso de falha na comunicação, o grid é restaurado automaticamente.
+* **Ação 🔁 Reenviar (Modal):** Disponível para qualquer bug que não esteja em `pending` (aplicado, falhou ou resolvido). Abre modal dedicado exibindo o seletor, a causa raiz e o insight QA pré-existente para edição. Permite atualizar o **Diagnóstico QA** (pré-preenchido com o conteúdo anterior) e opcionalmente fornecer uma nova proposta de correção técnica. Ao confirmar, o bug volta a `pending` com o diagnóstico atualizado e os timestamps de falha limpos.
+* **Auto-Invalidação de Correções Aplicadas:** Ao carregar os insights de uma nova execução com falhas, o Cockpit verifica automaticamente se algum seletor que falhou possuía uma correção com status `applied` ou `pending`. Se sim, o status é atualizado para `failed_attempt` com timestamp no `correcoes_acumuladas.json`, garantindo que a IA nunca repita uma abordagem já fracassada.
+* **Atualização Automática:** O painel é recarregado automaticamente ao mudar para a aba Histórico e ao carregar novas execuções.
 
 ---
 
@@ -171,9 +187,12 @@ O **Aegis Blackbox** permite documentar a intenção funcional do processo de ne
 
 O ecossistema introduz um motor de melhoria contínua orientado por feedback visual e cognitivo para automatizar e auditar a evolução da estabilidade do robô:
 
-* **Ciclo de Feedback Cognitivo (Retroalimentação):** Quando o robô apresenta falhas durante a execução (Fase 5), o módulo de visão computacional multimodal da IA analisa a tela, identifica a causa raiz e elabora propostas de correções (`proposed_fix`). Esses insights são apresentados na aba **Histórico** do Cockpit com miniaturas das telas dos erros.
+* **Ciclo de Feedback Cognitivo (Retroalimentação):** Quando o robô apresenta falhas durante a execução (Fase 5), o módulo de visão computacional multimodal da IA analisa a tela, identifica a causa raiz e elabora propostas de correções (`proposed_fix`). Esses insights são apresentados na aba **Histórico** do Cockpit com miniaturas das telas dos erros. Cada insight carrega obrigatoriamente o **número do passo** (`step_number`) obtido do `historico_passos.json`, que é persistido em `correcoes_acumuladas.json` ao aprovar a correção.
 * **Controle Humano (Aprovação de Insights):** O analista audita visualmente os erros e aprova as correções por meio de checkboxes. Durante a aprovação, o analista QA pode opcionalmente escrever um **Insight do Analista QA** (texto livre detalhando o diagnóstico humano da causa raiz e da solução). Uma vez aprovados, os insights automáticos da IA e a nota humana do QA são consolidados no arquivo `correcoes_acumuladas.json` com status `"pending"`.
-* **Retroalimentação na Geração de Código:** Ao rodar a Fase 4 (Gerador de Código), os insights aprovados pendentes são injetados no prompt da LLM. Se um **Insight do Analista QA** manual tiver sido preenchido, ele será destacado de forma contundente (caixa ASCII enfática) no início da seção de correções como instrução de **prioridade máxima** sobre o diagnóstico da IA. O gerador aplica as correções no código do `bot_producao.py` e atualiza o status das correções para `"applied"`, fechando o ciclo de melhoria contínua.
+* **Atualização de Diagnóstico em Qualquer Bug:** O endpoint `POST /api/projects/{slug}/tests/{test_slug}/correcoes/{id}/status` aceita os campos opcionais `qa_insight` e `proposed_fix` além do `status`. Isso permite ao QA atualizar o diagnóstico e a proposta de qualquer bug diretamente pelo modal de Reenvio, sem precisar de uma nova execução.
+* **Retroalimentação na Geração de Código:** Ao rodar a Fase 4 (Gerador de Código), os insights aprovados pendentes são injetados no prompt da LLM. Se um **Insight do Analista QA** manual tiver sido preenchido, ele será destacado de forma contundente (caixa ASCII enfática no prompt) como instrução de **prioridade máxima** sobre o diagnóstico automático da IA. O gerador aplica as correções no código do `bot_producao.py` e atualiza o status das correções para `"applied"`, fechando o ciclo de melhoria contínua.
+* **Histórico de Tentativas Fracassadas (Proibição de Repetição):** O fluxo de correção cirúrgica (`_surgical_correct`) coleta automaticamente todas as entradas com status `failed_attempt` para os mesmos pares `action + seletor` das correções pendentes. Esse histórico é injetado no prompt com uma caixa ASCII de aviso enfático, instruindo a LLM a criar uma **estratégia técnica completamente nova** sem repetir abordagens que já falharam anteriormente. A marcação de `failed_attempt` também ocorre **automaticamente** ao carregar os insights de uma nova execução com falhas — sem exigir ação do analista.
+* **Reenvio de Bugs para Nova Tentativa:** Após uma correção ser aplicada e o robô ainda falhar, o analista pode usar o botão 🔁 **Reenviar** no painel de Histórico de Problemas para colocar o bug de volta na fila (`status: pending`) com um diagnóstico QA atualizado e, opcionalmente, uma nova proposta técnica. O modal é acessível a partir de qualquer status diferente de `pending` — incluindo `resolved`. Na próxima execução da Fase 4, toda a cadeia de tentativas anteriores é automaticamente carregada como contexto proibitivo, garantindo que o processo seja evolutivo e nunca fique em loop.
 * **Evolução de Versões & Não Regressão:** Um painel de acompanhamento na aba **Histórico** exibe a linha do tempo evolutiva das versões geradas para o cenário de teste. O analista pode auditar métricas como taxa de sucesso de transações do lote, total de passos físicos concluídos, quantidade de auto-healing utilizado e status de estabilidade por versão, prevenindo regressões de código ao longo do tempo.
 
 ---
@@ -230,6 +249,11 @@ python aegis_sanitizer/code_generator.py --project-dir projects/seu_projeto
 * Compila `bot_producao.py` e `skills_lib.py` usando IA (Gemini via OpenRouter).
 * Valida sintaticamente o script gerado com `compile()` antes de salvar.
 * Requer `.env` com `AEGIS_COGNITIVE_API_KEY`, `AEGIS_COGNITIVE_PROVIDER` e `AEGIS_COGNITIVE_MODEL`.
+* **Modelo Dedicado para Codificação (`AEGIS_COGNITIVE_CODER_MODEL`):** Variável de ambiente opcional que define um modelo de LLM específico e mais poderoso exclusivamente para geração e correção de código (Fase 4). Se não configurada, usa o modelo geral (`AEGIS_COGNITIVE_MODEL`).
+* **Dois Fluxos Independentes (Karpathy Style):**
+  * **Fluxo 1 — Geração Nova (`_generate_new_code`):** Invocado quando não há nenhum `bot_producao.py` existente. Gera o código completo do zero a partir do relatório de telemetria sanitizado, garantindo ausência total de hardcodes (fallbacks de `.get()` sempre com string vazia `""`).
+  * **Fluxo 2 — Correção Cirúrgica (`_surgical_correct`):** Invocado quando já existe código e há correções pendentes aprovadas. A IA usa os comentários `# [PASSO X]` pré-existentes como âncoras para localizar e alterar **exclusivamente o bloco do passo problemático**, sem tocar em nenhuma linha funcionando.
+* **Comentários de Rastreabilidade `# [PASSO X]` (Obrigatório):** Todo passo de automação gerado ou corrigido é obrigatoriamente precedido por um comentário no formato `# [PASSO X] Descrição do Passo`, onde `X` é o índice do passo na telemetria. Essa diretriz é imposta via prompt tanto na geração nova (regra 12) quanto na correção cirúrgica (regra 5), garantindo que código funcional nunca seja modificado acidentalmente em futuras rodadas de correção.
 
 ### 5. Fase 5: Execução de Produção (Aegis Runner)
 ```powershell
@@ -243,6 +267,8 @@ python projects/seu_projeto/bot_producao.py
 | `AEGIS_STEP_LOGS_REALTIME` | `true` | `false` para suprimir `[AEGIS_STEP]` em tempo real (datasets grandes) |
 | `AEGIS_EXECUTION_DIR` | `project_dir` | Pasta de saída da execução (definido automaticamente pelo Cockpit) |
 | `AEGIS_EXECUTION_ID` | — | ID único da execução em lote (definido automaticamente pelo Cockpit) |
+| `AEGIS_COGNITIVE_MODEL` | — | Modelo de LLM para uso geral (self-healing em runtime) |
+| `AEGIS_COGNITIVE_CODER_MODEL` | — | Modelo de LLM dedicado para geração e correção de código (Fase 4). Sobrescreve `AEGIS_COGNITIVE_MODEL` apenas no Code Generator |
 
 ---
 
