@@ -268,7 +268,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    
    # Se não encontrar localmente, adiciona a pasta global padrão da suíte Aegis
    if not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):
-       global_path = r"C:\Projetos\aegis_rpa_suite"
+       global_path = r"C:\\Projetos\\aegis_rpa_suite"
        if os.path.exists(global_path):
            AEGIS_SUITE_ROOT = global_path
            

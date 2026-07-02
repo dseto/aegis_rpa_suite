@@ -65,6 +65,23 @@ class SanitizerService:
         with open(self.dict_file, "r", encoding="utf-8") as f:
             dict_data = json.load(f)
 
+        # Normalização de datas no formato YYYY-MM-DD para DD/MM/YYYY
+        # para garantir resiliência e retrocompatibilidade com gravações antigas
+        fields = dict_data.get("fields", {})
+        for field_name, field_info in fields.items():
+            if field_info.get("type") == "date" or field_info.get("is_date"):
+                val = field_info.get("observed_value")
+                if isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+                    parts = val.split("-")
+                    field_info["observed_value"] = f"{parts[2]}/{parts[1]}/{parts[0]}"
+
+        for ev in raw_data.get("events", []):
+            if ev.get("type") == "fill" and (ev.get("is_date") or ev.get("fieldType") == "date"):
+                val = ev.get("value")
+                if isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+                    parts = val.split("-")
+                    ev["value"] = f"{parts[2]}/{parts[1]}/{parts[0]}"
+
         initial_url = raw_data.get("initial_url", "")
         events = raw_data.get("events", [])
         
@@ -135,6 +152,55 @@ class SanitizerService:
 
         with open(self.dict_file, "w", encoding="utf-8") as f:
             json.dump(dict_data, f, indent=4, ensure_ascii=False)
+
+        # Normalização do dataset_inicial.json existente
+        dataset_path = os.path.join(self.telemetry_dir, "dataset_inicial.json")
+        if os.path.exists(dataset_path):
+            try:
+                with open(dataset_path, "r", encoding="utf-8") as f:
+                    ds_data = json.load(f)
+                
+                if isinstance(ds_data, list):
+                    ds_changed = False
+                    for row in ds_data:
+                        for k, v in row.items():
+                            if isinstance(v, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+                                parts = v.split("-")
+                                row[k] = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                                ds_changed = True
+                    if ds_changed:
+                        with open(dataset_path, "w", encoding="utf-8") as f:
+                            json.dump(ds_data, f, indent=4, ensure_ascii=False)
+                        print("[AEGIS SANITIZER] dataset_inicial.json normalizado com datas em formato DD/MM/YYYY.")
+            except Exception as e:
+                print(f"[WARNING] Falha ao normalizar dataset_inicial.json: {e}")
+
+        # Normalização de arquivos CSV correspondentes se existirem
+        for csv_name in ["template.csv", "dados_entrada.csv"]:
+            csv_path = os.path.join(self.telemetry_dir, csv_name)
+            if os.path.exists(csv_path):
+                try:
+                    import csv
+                    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                        reader = csv.reader(f)
+                        csv_rows = list(reader)
+                    
+                    if csv_rows:
+                        csv_changed = False
+                        for r_idx in range(1, len(csv_rows)):
+                            for c_idx in range(len(csv_rows[r_idx])):
+                                cell_val = csv_rows[r_idx][c_idx]
+                                if isinstance(cell_val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", cell_val):
+                                    parts = cell_val.split("-")
+                                    csv_rows[r_idx][c_idx] = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                                    csv_changed = True
+                        if csv_changed:
+                            with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                                writer = csv.writer(f)
+                                writer.writerows(csv_rows)
+                            print(f"[AEGIS SANITIZER] {csv_name} normalizado com datas em formato DD/MM/YYYY.")
+                except Exception as e:
+                    print(f"[WARNING] Falha ao normalizar {csv_name}: {e}")
 
         network = raw_data.get("network_payloads", {})
         anti_bot_fields = raw_data.get("anti_bot_fields", [])

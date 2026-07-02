@@ -206,6 +206,40 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
   - Seletor original na telemetria: `#menu-item-28904 .sub-menu #menu-item-141846 a`
   - Seletor compilado resiliente: `#menu-item-28904 >> #menu-item-141846 a`
 
+### 🔽 Padrão O: Interação com Custom Selects / Dropdowns Customizados
+* **Problema:** Portais modernos (Angular Material, Vuetify, Bootstrap Vue, etc.) não usam `<select>` nativo HTML. Em vez disso, usam `<div>` ou `<span>` customizados como trigger do dropdown. Na gravação, o clique no trigger gera um seletor genérico como `div` (com texto "Selecione" ou vazio), que casa com N elementos na página, tornando a automação frágil.
+* **Detecção:** Na telemetria, identifique pares de eventos consecutivos onde:
+  - Evento N: clique em `div`/`span` genérico com texto "Selecione" ou similar.
+  - Evento N+1: clique em `[role='option']:has-text('...')` ou `.mat-option:has-text('...')`.
+  Estes pares representam a abertura e a seleção de um custom dropdown.
+* **Solução:** Use `runner.select_option_resilient()` que encapsula ambos os passos (abrir + selecionar):
+  ```python
+  runner.select_option_resilient(
+      page,
+      dropdown_label="Sexo",
+      option_text=row.get("sexo_cliente", "Masculino"),
+      original_coords_trigger=(0.4531, 0.6782),
+      original_coords_option=(0.4617, 0.7420)
+  )
+  ```
+* **Regra OBRIGATÓRIA:** Quando a telemetria apresentar um clique em seletor `div` com texto "Selecione" (ou similar) seguido imediatamente de um clique em uma opção (`[role='option']:has-text(...)` ou `.mat-option`), você DEVE substituir ambos os passos por uma única chamada a `runner.select_option_resilient()`. Nunca use `runner.click_resilient(page, selector="div", ...)` para abrir dropdowns customizados.
+
+### 🔍 Padrão P: Correção de Inversão de Eventos em Autocomplete
+* **Problema:** Em campos de busca com autocomplete (Angular Material, etc.), o recorder pode registrar o clique na opção da lista (`#mat-autocomplete-panel-... div`) *antes* de registrar o preenchimento do input (`fill` na busca). Isso ocorre porque o evento de `blur` ou `change` do input que coleta o valor de digitação só dispara após o clique na opção que remove o foco do input.
+* **Detecção:** Na telemetria, se houver um clique em uma opção de autocomplete (`#mat-autocomplete-panel-...` ou similar) seguido imediatamente por um preenchimento (`FILL`) de um input de busca com o mesmo valor ou valor correspondente.
+* **Solução:** O compilador deve **inverter** a ordem de execução desses dois passos no script Python. A automação deve sempre:
+  1. Preencher o input de busca (usando `runner.fill_resilient` com estratégia DIRECT ou HUMAN_LIKE conforme o dicionário).
+  2. Aguardar brevemente (ex: `time.sleep(0.5)`) para que a lista de opções seja renderizada/filtrada.
+  3. Clicar na opção correspondente usando `runner.click_resilient`.
+* **Exemplo de código correto:**
+  ```python
+  # Primeiro: Preenche o campo de busca
+  runner.fill_resilient(page, selector="input[placeholder='Pesquisar Marca...']", text_val=row.get("marca_veiculo", ""), target_description="Campo 'Pesquisar Marca...'", strategy="DIRECT")
+  time.sleep(0.5) # Aguarda renderização
+  # Segundo: Clica na opção correspondente que apareceu
+  runner.click_resilient(page, selector="#mat-autocomplete-panel-marca div:has-text('Hyundai')", target_description="Opção 'Hyundai'", original_coords=(0.0984, 0.7614))
+  ```
+
 ---
 
 ## 🎯 2. Diretrizes de Codificação RPA de Produção

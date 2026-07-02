@@ -157,6 +157,10 @@ JS_MINIMAL_LISTENERS = """
                 let isInteractiveRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(elementRole);
                 let isMenuClass = el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
                 
+                let isDropdownTrigger = (el.tagName === 'DIV' || el.tagName === 'SPAN') && 
+                    el.innerText && 
+                    (/selecione/i.test(el.innerText) || /escolha/i.test(el.innerText) || el.classList.contains('select-trigger') || el.classList.contains('mat-select-trigger') || el.classList.contains('mat-select-value-text'));
+
                 if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) && 
                     el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
                     
@@ -164,13 +168,14 @@ JS_MINIMAL_LISTENERS = """
                     let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : el.tagName.toLowerCase();
                     baseSelector = `${tagPrefix}:has-text('${cleanText}')`;
                     
-                } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-                    if (el.getAttribute('placeholder')) {
+                } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || isDropdownTrigger) {
+                    if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('placeholder')) {
                         baseSelector = `${el.tagName.toLowerCase()}[placeholder='${el.getAttribute('placeholder')}']`;
-                    } else if (el.getAttribute('name')) {
+                    } else if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('name')) {
                         baseSelector = `${el.tagName.toLowerCase()}[name='${el.getAttribute('name')}']`;
                     } else {
                         // Resolvedor Universal de Rótulo de Formulário
+
                         let labelText = "";
                         let selectorType = "";
                         let labelNode = null;
@@ -1044,8 +1049,14 @@ class AegisRecorder:
             name = ev.get("name", "")
 
             if ev_type == "fill":
-                is_date = ev.get("tag", "").lower() == "input" and ev.get("id", "").lower().endswith("-date")
+                is_date = bool((ev.get("tag", "").lower() == "input" and ev.get("id", "").lower().endswith("-date")) or \
+                          (isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val)))
                 ev["is_date"] = is_date
+
+                if is_date and isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+                    parts = val.split("-")
+                    val = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                    ev["value"] = val
                 
                 # C4: Priorização de data-testid
                 semantic_key = name or selector
@@ -1070,6 +1081,14 @@ class AegisRecorder:
             elif ev_type == "scan_field":
                 # Varredura cooperativa: campos detectados já preenchidos
                 if val:
+                    is_date = bool((ev.get("fieldType") == "date") or \
+                               (isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val)))
+                              
+                    if is_date and isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+                        parts = val.split("-")
+                        val = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                        ev["value"] = val
+
                     semantic_key = name or selector
                     if "data-testid" in selector:
                         match = re.search(r"data-testid='([^']+)'", selector)
@@ -1082,7 +1101,6 @@ class AegisRecorder:
 
                     clean_sem_key = semantic_key.replace("-", "_").lower()
                     
-                    is_date = ev.get("fieldType") == "date"
                     self.schema_inputs[(self.active_scenario, selector)] = {
                         "semantic_key": clean_sem_key,
                         "observed_value": val,

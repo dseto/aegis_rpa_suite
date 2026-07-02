@@ -291,6 +291,132 @@ class TransactionRunner:
         self._log_step(page, "FAILED", "click", selector, target_description, str(e))
         raise e
 
+    def _slugify(self, text: str) -> str:
+        import unicodedata
+        text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+        text = re.sub(r'[^\w\s-]', '', text).strip().lower()
+        return re.sub(r'[-\s]+', '-', text)
+
+    def select_option_resilient(self, page, dropdown_label, option_text,
+                                original_coords_trigger=None,
+                                original_coords_option=None,
+                                timeout=5000) -> bool:
+        """
+        Seleciona uma opção de um dropdown/select customizado (não-nativo).
+        Abre o dropdown antes de clicar na opção desejada.
+        """
+        row_id = getattr(self, "current_row_id", "1")
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | select_option | {dropdown_label} -> {option_text} | Selecionar dropdown | | | {row_id}")
+            sys.stdout.flush()
+
+        slug = self._slugify(dropdown_label)
+        
+        # 1. Tenta abrir o dropdown (Trigger)
+        trigger_clicked = False
+        trigger_selectors = [
+            f"label:has-text('{dropdown_label}') ~ div",
+            f"label:has-text('{dropdown_label}') ~ select",
+            f"label:has-text('{dropdown_label}') ~ .select-trigger",
+            f"#field-{slug} div",
+            f"#field-{slug} .select-trigger",
+            f"mat-form-field:has-text('{dropdown_label}') .mat-select-trigger",
+            f"div:has-text('{dropdown_label}') >> div"
+        ]
+
+        print(f"[AEGIS RUNNER] Tentando abrir o dropdown para '{dropdown_label}'...")
+        for sel in trigger_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=500):
+                    loc.click(timeout=1000, force=True)
+                    trigger_clicked = True
+                    print(f"[AEGIS RUNNER] Dropdown '{dropdown_label}' aberto usando seletor: '{sel}'")
+                    break
+            except Exception:
+                continue
+
+        # Fallback de coordenadas para o trigger
+        if not trigger_clicked and original_coords_trigger and len(original_coords_trigger) == 2:
+            try:
+                viewport = page.viewport_size or {"width": 1280, "height": 720}
+                x = int(viewport["width"] * original_coords_trigger[0])
+                y = int(viewport["height"] * original_coords_trigger[1])
+                print(f"[AEGIS RUNNER] Abrindo dropdown via coordenadas de fallback: ({x}, {y})")
+                page.mouse.click(x, y)
+                trigger_clicked = True
+            except Exception as e:
+                print(f"[AEGIS RUNNER] Falha ao clicar nas coordenadas do trigger: {e}")
+
+        if not trigger_clicked:
+            print(f"[AEGIS RUNNER] [WARNING] Não foi possível abrir o dropdown '{dropdown_label}' pelos seletores conhecidos ou coordenadas.")
+
+        # Aguarda animação de abertura das opções
+        time.sleep(0.4)
+
+        # 2. Seleciona a opção
+        option_clicked = False
+        option_selectors = [
+            f"[role='option']:has-text('{option_text}')",
+            f".mat-option:has-text('{option_text}')",
+            f"[role='listbox'] [role='option']:has-text('{option_text}')",
+            f"li:has-text('{option_text}')",
+            f".select-option:has-text('{option_text}')"
+        ]
+
+        print(f"[AEGIS RUNNER] Tentando selecionar a opção '{option_text}'...")
+        for sel in option_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=500):
+                    loc.click(timeout=1000, force=True)
+                    option_clicked = True
+                    print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada usando seletor: '{sel}'")
+                    break
+            except Exception:
+                continue
+
+        # Fallback de coordenadas para a opção
+        if not option_clicked and original_coords_option and len(original_coords_option) == 2:
+            try:
+                viewport = page.viewport_size or {"width": 1280, "height": 720}
+                x = int(viewport["width"] * original_coords_option[0])
+                y = int(viewport["height"] * original_coords_option[1])
+                print(f"[AEGIS RUNNER] Selecionando opção via coordenadas de fallback: ({x}, {y})")
+                page.mouse.click(x, y)
+                option_clicked = True
+            except Exception as e:
+                print(f"[AEGIS RUNNER] Falha ao clicar nas coordenadas da opção: {e}")
+
+        # Se falhou, aciona o Cognitive Gateway se ativo
+        if not option_clicked and self.cognitive.is_active():
+            print(f"[AEGIS RUNNER] Falha nas tentativas normais. Acionando Self-Healing Cognitivo para a opção...")
+            try:
+                # Tenta localizar visualmente o texto da opção na tela
+                option_clicked = self.cognitive.self_healing_click(
+                    page, 
+                    selector=f"[role='option']:has-text('{option_text}')", 
+                    target_description=f"Opção {option_text} do dropdown {dropdown_label}",
+                    original_coords=original_coords_option
+                )
+            except Exception as ia_err:
+                print(f"[COGNITIVE WARNING] Erro no self-healing cognitivo para opção: {ia_err}")
+
+        if option_clicked:
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+            except Exception:
+                pass
+            self._log_step(page, "SUCCESS", "select_option", f"[role='option']:has-text('{option_text}')", f"Selecionar '{option_text}' no dropdown '{dropdown_label}'")
+            return True
+        else:
+            msg = f"Não foi possível selecionar a opção '{option_text}' no dropdown '{dropdown_label}'."
+            print(f"[AEGIS RUNNER] ❌ {msg}")
+            self._log_step(page, "FAILED", "select_option", f"[role='option']:has-text('{option_text}')", f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", msg)
+            raise RuntimeError(msg)
+
+
     def wait_for_selector(self, page, selector, state="visible", timeout=10000, target_description=None) -> bool:
         """Aguarda um seletor ficar visível ou oculto com suporte a logs resilientes."""
         desc = target_description or selector
@@ -319,6 +445,19 @@ class TransactionRunner:
         force_human_like = os.environ.get("AEGIS_FORCE_HUMAN_LIKE", "false").lower() in ("true", "1", "yes")
         if force_human_like:
             strategy = "HUMAN_LIKE"
+
+        # Tratamento de formato de data (converte de yyyy-mm-dd para dd/mm/yyyy se não for input nativo type="date")
+        is_native_date = False
+        try:
+            input_type = page.locator(selector).first.get_attribute("type", timeout=300)
+            if input_type == "date":
+                is_native_date = True
+        except Exception:
+            pass
+
+        if not is_native_date and isinstance(text_val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", text_val):
+            parts = text_val.split("-")
+            text_val = f"{parts[2]}/{parts[1]}/{parts[0]}"
 
         if strategy == "HUMAN_LIKE":
             res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout)
@@ -377,11 +516,25 @@ class TransactionRunner:
         if target_description is None:
             target_description = selector
         import time as _time
+
+        # Tratamento de formato de data (converte de yyyy-mm-dd para dd/mm/yyyy se não for input nativo type="date")
+        is_native_date = False
+        try:
+            input_type = page.locator(selector).first.get_attribute("type", timeout=300)
+            if input_type == "date":
+                is_native_date = True
+        except Exception:
+            pass
+
+        if not is_native_date and isinstance(text_val, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", text_val):
+            parts = text_val.split("-")
+            text_val = f"{parts[2]}/{parts[1]}/{parts[0]}"
+
         try:
             print(f"[AEGIS RUNNER] Digitacão cadenciada (HUMAN_LIKE) em '{selector}' ({len(str(text_val))} chars, {delay_ms}ms/tecla)...")
             element = page.locator(selector).first
             element.scroll_into_view_if_needed()
-            element.click(timeout=timeout)
+            element.click(timeout=timeout, force=True)
             page.keyboard.press("Control+A")
             page.keyboard.press("Backspace")
             _time.sleep(0.1)
