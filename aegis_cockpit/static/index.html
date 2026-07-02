@@ -3696,23 +3696,28 @@
                     row_id: s.row_id || null
                 }));
 
-                // Complementa com passos planejados que não chegaram a ser executados
-                const planned = buildPlannedFromRecording(recording, skillsRecordings);
-                const executedCount = robotSteps.length;
-                if (planned.length > executedCount) {
-                    for (let i = executedCount; i < planned.length; i++) {
-                        robotSteps.push({
-                            index: i + 1,
-                            exec_order: i + 1,
-                            type: planned[i].type,
-                            selector: planned[i].selector,
-                            desc: planned[i].desc,
-                            status: 'STOPPED',   // não foi alcançado
-                            error: '',
-                            usedHealing: false,
-                            screenshot: null,
-                            row_id: null
-                        });
+                // Complementa com passos planejados que não chegaram a ser executados.
+                // Só faz isso se o histórico é cru (sem STOPPED) — se já tem STOPPED,
+                // é porque foi mesclado ou editado antes e não deve ser re-expandido.
+                const alreadyMerged = robotSteps.some(s => s.status === 'STOPPED');
+                if (!alreadyMerged) {
+                    const planned = buildPlannedFromRecording(recording, skillsRecordings);
+                    const executedCount = robotSteps.length;
+                    if (planned.length > executedCount) {
+                        for (let i = executedCount; i < planned.length; i++) {
+                            robotSteps.push({
+                                index: i + 1,
+                                exec_order: i + 1,
+                                type: planned[i].type,
+                                selector: planned[i].selector,
+                                desc: planned[i].desc,
+                                status: 'STOPPED',   // não foi alcançado
+                                error: '',
+                                usedHealing: false,
+                                screenshot: null,
+                                row_id: null
+                            });
+                        }
                     }
                 }
 
@@ -3796,9 +3801,9 @@
             
             let html = '<div class="table-wrap"><table>';
             html += '<tr>';
-            html += `<th style="width:7%; cursor:pointer;" onclick="sortSteps('id')"># ${stepsSortKey === 'id' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
-            html += `<th style="width:10%; cursor:pointer;" onclick="sortSteps('exec_order')">Ordem ${stepsSortKey === 'exec_order' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
-            html += '<th style="width:12%">Registro</th><th style="width:13%">Tipo</th><th style="width:28%">Seletor Físico</th><th style="width:17%">Ação Esperada</th><th style="width:13%">Status</th>';
+            html += `<th style="width:5%; cursor:pointer;" onclick="sortSteps('id')"># ${stepsSortKey === 'id' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
+            html += `<th style="width:8%; cursor:pointer;" onclick="sortSteps('exec_order')">Ordem ${stepsSortKey === 'exec_order' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
+            html += '<th style="width:10%">Registro</th><th style="width:11%">Tipo</th><th style="width:25%">Seletor Físico</th><th style="width:16%">Ação Esperada</th><th style="width:11%">Status</th><th style="width:6%" title="Excluir passo">Ações</th>';
             html += '</tr>';
             
             sortedSteps.forEach(step => {
@@ -3838,7 +3843,7 @@
                 
                 const execOrderDisplay = step.exec_order ? `<strong>${step.exec_order}º</strong>` : '<span style="color:var(--text-muted);">-</span>';
                 
-                html += `<tr>
+                html += `<tr data-step-index="${step.index}">
                     <td><strong>${step.index}</strong></td>
                     <td>${execOrderDisplay}</td>
                     <td><span style="font-size: 10px; font-weight: bold; color: var(--accent);">${rowIdDisplay}</span></td>
@@ -3846,6 +3851,9 @@
                     <td style="font-family:monospace;font-size:10px;" title="${step.selector}">${selectorDisplay}</td>
                     <td ${titleAttr} ${styleErr}>${step.desc}</td>
                     <td><span class="status-badge-step ${statusClass}">${statusText}</span></td>
+                    <td style="text-align:center;">
+                        <button onclick="deleteStep(${step.index})" title="Excluir passo ${step.index}" style="background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;color:var(--text-muted);font-size:13px;transition:color .15s,background .15s;" onmouseover="this.style.color='#ef4444';this.style.background='rgba(239,68,68,0.1)'" onmouseout="this.style.color='var(--text-muted)';this.style.background='none'">🗑️</button>
+                    </td>
                 </tr>`;
             });
             
@@ -3873,6 +3881,55 @@
                 }).catch(e => console.error('Erro ao limpar historico no servidor:', e));
             }
         }
+
+        window.deleteStep = function(stepIdx) {
+            if (!confirm(`Deseja realmente remover o passo #${stepIdx}? Esta alteração será salva no histórico do cenário.`)) {
+                return;
+            }
+            
+            // Filtra e remove o passo com index correspondente
+            const beforeLen = robotSteps.length;
+            robotSteps = robotSteps.filter(s => s.index !== stepIdx);
+            
+            if (robotSteps.length === beforeLen) return; // nada a remover
+            
+            // Re-indexa os passos restantes sequencialmente
+            robotSteps.forEach((s, i) => {
+                s.index = i + 1;
+                if (s.exec_order) {
+                    s.exec_order = i + 1;
+                }
+            });
+            
+            // Mantém currentStepIndex dentro dos limites
+            if (currentStepIndex >= robotSteps.length) {
+                currentStepIndex = Math.max(0, robotSteps.length - 1);
+            }
+            
+            // Atualiza UI localmente de imediato
+            updateStepsUI();
+            
+            // Salva no backend
+            if (activeProjectSlug && activeTestSlug) {
+                fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/steps-history`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        test_slug: activeTestSlug,
+                        execution_id: activeExecutionId || '',
+                        steps: robotSteps
+                    })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.success) {
+                        console.error('Falha ao salvar exclusão no servidor:', data.message);
+                    }
+                })
+                .catch(e => console.error('Erro de rede ao salvar exclusão de passo:', e));
+            }
+        }
+
 
         function normalizeSelector(sel) {
             if (!sel) return '';
