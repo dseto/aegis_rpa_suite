@@ -4474,7 +4474,7 @@
                             ? `<span title="Insight QA: ${(c.qa_insight || '').replace(/"/g, '&quot;').substring(0,120)}" style="color:#fbbf24;font-size:9px;" >🧠</span>`
                             : '';
 
-                        html += `<tr title="Seletor completo: ${(c.failed_selector || '').replace(/"/g, '&quot;')}">
+                        html += `<tr data-corr-id="${c.id}" title="Seletor completo: ${(c.failed_selector || '').replace(/"/g, '&quot;')}">
                             <td style="font-family:'Fira Code',monospace;font-size:10px;">Passo ${c.step_number || '?'}</td>
                             <td style="font-size:10px;">
                                 <strong>${c.action || '—'}</strong> ${insightIndicator}<br>
@@ -4503,6 +4503,35 @@
             if (qaInsight !== undefined && qaInsight !== null) payload.qa_insight = qaInsight;
             if (proposedFix !== undefined && proposedFix !== null && proposedFix.trim()) payload.proposed_fix = proposedFix;
 
+            // ── Remoção otimista: remove a linha do DOM imediatamente ──
+            if (newStatus === 'resolved') {
+                const row = document.querySelector(`#problem-history-tbody tr[data-corr-id="${correcaoId}"]`);
+                if (row) {
+                    row.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+                    row.style.opacity = '0';
+                    row.style.transform = 'translateX(20px)';
+                    setTimeout(() => {
+                        row.remove();
+                        // Se não sobrou nenhuma linha visível, mostra mensagem de lista vazia
+                        const tbody = document.getElementById('problem-history-tbody');
+                        if (tbody && tbody.querySelectorAll('tr[data-corr-id]').length === 0) {
+                            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:12px;">
+                                <span style="color:#4ade80;font-size:12px;">✅ Nenhum bug em aberto neste cenário.</span>
+                            </td></tr>`;
+                            // Atualiza badge para verde
+                            const badge = document.getElementById('problem-stats-badge');
+                            if (badge) {
+                                badge.textContent = '✅ Todos resolvidos';
+                                badge.style.background = 'rgba(34,197,94,0.15)';
+                                badge.style.borderColor = 'rgba(34,197,94,0.35)';
+                                badge.style.color = '#4ade80';
+                                badge.style.display = 'inline-block';
+                            }
+                        }
+                    }, 260);
+                }
+            }
+
             fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes/${encodeURIComponent(correcaoId)}/status`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -4512,15 +4541,21 @@
             .then(data => {
                 if (data.success) {
                     showNotification(`✅ Problema ${label}.`, 'success');
-                    loadProblemHistory();
+                    // Para 'pending' (reenvio), faz reload completo para refletir mudança de status
+                    if (newStatus !== 'resolved') {
+                        loadProblemHistory();
+                    }
                     loadCorrecoesStatus();
                 } else {
-                    showNotification(`❌ Erro ao atualizar status: ${data.error || 'desconhecido'}`, 'error');
+                    // Reverte a remoção otimista em caso de erro do servidor
+                    showNotification(`❌ Erro ao atualizar status: ${data.error || data.message || 'desconhecido'}`, 'error');
+                    loadProblemHistory(); // reload para restaurar estado real
                 }
             })
             .catch(err => {
                 console.error('Erro ao atualizar status do problema:', err);
                 showNotification('❌ Falha de comunicação ao atualizar status.', 'error');
+                loadProblemHistory(); // reload para restaurar estado real
             });
         }
 
