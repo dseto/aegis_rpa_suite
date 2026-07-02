@@ -72,6 +72,39 @@
             display: grid;
             grid-template-columns: var(--sidebar-w) 1fr 1.4fr;
             overflow: hidden;
+            transition: grid-template-columns 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .main-layout.sidebar-collapsed {
+            grid-template-columns: 0px 1fr 1.4fr !important;
+        }
+        .main-layout.center-collapsed {
+            grid-template-columns: var(--sidebar-w) 0px 1.4fr !important;
+        }
+        .main-layout.sidebar-collapsed.center-collapsed {
+            grid-template-columns: 0px 0px 1fr !important;
+        }
+
+        .main-layout.sidebar-collapsed .sidebar {
+            width: 0px !important;
+            min-width: 0px !important;
+            max-width: 0px !important;
+            overflow: hidden !important;
+            border-right: none !important;
+            opacity: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            pointer-events: none !important;
+        }
+        .main-layout.center-collapsed .col-center {
+            width: 0px !important;
+            min-width: 0px !important;
+            max-width: 0px !important;
+            overflow: hidden !important;
+            border-right: none !important;
+            opacity: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            pointer-events: none !important;
         }
 
         /* ── Sidebar de Projetos ── */
@@ -880,6 +913,32 @@
             border-color: var(--accent);
             color: var(--accent);
         }
+        
+        .layout-toggle-btn {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: var(--text-muted);
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .layout-toggle-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: rgba(255,255,255,0.2);
+        }
+        .layout-toggle-btn.collapsed {
+            background: rgba(124, 58, 237, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        
         .devops-layout {
             display: none;
             grid-template-columns: 350px 1fr;
@@ -932,6 +991,14 @@
                 <button class="nav-btn active" id="nav-btn-workspace" onclick="showScreen('workspace')">📁 Workspace</button>
                 <button class="nav-btn" id="nav-btn-devops" onclick="showScreen('devops')">🚀 DevOps Pipelines</button>
             </nav>
+            <div class="layout-controls" id="layout-toggle-container" style="display: none; gap: 8px; margin-left: 20px; border-left: 1px solid rgba(124,58,237,0.2); padding-left: 15px; align-items: center;">
+                <button class="layout-toggle-btn" id="btn-toggle-sidebar" onclick="toggleSidebarLayout()" title="Recolher/Expandir Cenários (Esquerda)">
+                    <span id="sidebar-toggle-icon">◀</span> Cenários
+                </button>
+                <button class="layout-toggle-btn" id="btn-toggle-center" onclick="toggleCenterLayout()" title="Recolher/Expandir Painel & Terminal (Centro)">
+                    <span id="center-toggle-icon">◀</span> Painel & Console
+                </button>
+            </div>
         </div>
         <div class="header-right">
             <button id="btn-install-browsers" class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px; margin-right: 10px; cursor: pointer;" title="Baixar/Instalar navegadores necessários via Playwright CLI">🌐 Playwright Install</button>
@@ -1165,7 +1232,7 @@
             </div>
             
             <div id="tab-history" class="tab-content">
-                <div class="history-container" style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden; padding: 10px 0;">
+                <div class="history-container" style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; padding: 10px 0; padding-right: 5px;">
                     <!-- Painel de Evolução de Versões (Prevenção de Regressões) -->
                     <div class="card" id="versions-evolution-card" style="padding: 12px; margin-bottom: 4px; border: 1px solid rgba(139, 92, 246, 0.25); background: rgba(139, 92, 246, 0.02); flex: 0 0 auto;">
                         <div style="font-weight: 700; color: #fff; font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
@@ -1190,7 +1257,41 @@
                             </table>
                         </div>
                     </div>
-                    
+
+                    <!-- ══════════════════════════════════════════════════════════════ -->
+                    <!-- Card: Histórico e Resolução de Problemas (Auto-Healing)       -->
+                    <!-- ══════════════════════════════════════════════════════════════ -->
+                    <div class="card" id="problem-tracking-card" style="padding: 12px; margin-bottom: 4px; border: 1px solid rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.03); flex: 0 0 auto;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <div style="font-weight: 700; color: #fff; font-size: 12px; display: flex; align-items: center; gap: 6px;">
+                                <span>🔧 Histórico de Problemas &amp; Auto-Healing</span>
+                                <span id="problem-stats-badge" style="display:none; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.35); border-radius: 12px; padding: 2px 8px; font-size: 10px; color: #f87171;"></span>
+                            </div>
+                            <button onclick="loadProblemHistory()" title="Atualizar lista de problemas"
+                                style="background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.3); color: #a78bfa; border-radius: 6px; padding: 3px 8px; font-size: 10px; cursor: pointer;">
+                                🔄 Atualizar
+                            </button>
+                        </div>
+                        <div class="table-wrap" style="max-height: 180px; overflow-y: auto;">
+                            <table id="problem-history-table" style="font-size: 11px; width: 100%;">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 60px;">Passo</th>
+                                        <th>Ação / Seletor</th>
+                                        <th style="width: 90px;">Status</th>
+                                        <th>Causa Raiz</th>
+                                        <th style="width: 80px;">Tentativas</th>
+                                        <th style="width: 110px;">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="problem-history-tbody">
+                                    <tr><td colspan="6" class="empty-msg" style="text-align:center;">Selecione um cenário para ver o histórico de problemas.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <!-- ══════════════════════════════════════════════════════════════ -->
+
                     <div class="table-wrap" style="max-height: 180px; flex: 0 0 auto; overflow-y: auto;">
                         <table>
                             <thead>
@@ -1208,13 +1309,13 @@
                         </table>
                     </div>
                     
-                    <div id="history-detail-panel" class="card" style="display: none; flex-direction: column; min-height: 0; padding: 12px; gap: 10px; border-color: rgba(124,58,237,0.15); background: rgba(18,18,38,0.85); flex: 1 1 auto;">
+                    <div id="history-detail-panel" class="card" style="display: none; flex-direction: column; min-height: 0; padding: 12px; gap: 10px; border-color: rgba(124,58,237,0.15); background: rgba(18,18,38,0.85); flex: 0 0 auto;">
                         <div class="steps-header-info" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 6px; flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center;">
                             <div class="card-title" id="history-detail-title" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">🔍 Detalhes da Execução</div>
                             <div id="history-detail-badge" class="status-badge status-idle" style="padding: 2px 8px; font-size: 8px;"><span class="badge-dot"></span>N/A</div>
                         </div>
                         
-                        <div style="flex: 1; display: grid; grid-template-columns: 1.2fr 1fr 1.2fr; gap: 12px; min-height: 0;">
+                        <div style="height: 380px; display: grid; grid-template-columns: 1.2fr 1fr 1.2fr; gap: 12px; flex-shrink: 0; min-height: 0;">
                             <!-- Passos Executados -->
                             <div style="display: flex; flex-direction: column; min-height: 0;">
                                 <label id="history-steps-view-label" style="margin-bottom: 4px;">🤖 Transações Executadas</label>
@@ -1228,7 +1329,7 @@
                                 <label style="margin-bottom: 4px;">📟 Log do Processo</label>
                                 <pre id="history-log-view" class="terminal-box" style="flex: 1; margin-top: 0; padding: 8px; font-size: 10px; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; word-break: break-all; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; font-family: 'Fira Code', monospace;"></pre>
                             </div>
-
+                            
                             <!-- Evidência Visual (Screenshot) -->
                             <div style="display: flex; flex-direction: column; min-height: 0;">
                                 <label style="margin-bottom: 4px;">🖼️ Evidência Visual do Passo</label>
@@ -1239,8 +1340,8 @@
                         </div>
                         
                         <!-- Painel de Insights de Correção (Retroalimentação) -->
-                        <div id="feedback-insights-panel" style="display: none; background: rgba(124, 58, 237, 0.05); border: 1px solid var(--primary); border-radius: 8px; padding: 12px; margin-top: 10px; flex-direction: column; gap: 10px; flex: 0 0 auto;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255, 255, 255, 0.1); padding-bottom: 6px;">
+                        <div id="feedback-insights-panel" style="display: none; background: rgba(124, 58, 237, 0.05); border: 1px solid var(--primary); border-radius: 8px; padding: 12px; margin-top: 10px; flex-direction: column; gap: 10px; flex-shrink: 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255, 255, 255, 0.1); padding-bottom: 6px; flex-shrink: 0;">
                                 <span style="font-weight: 700; color: #fff; font-size: 12px; display: flex; align-items: center; gap: 6px;">
                                     💡 Insights & Propostas de Correção Cognitiva (Última Execução)
                                 </span>
@@ -1248,18 +1349,22 @@
                                     ✔️ Aprovar Correções Selecionadas
                                 </button>
                             </div>
-                            <!-- Campo de Insight QA (opcional, alta prioridade) -->
-                            <div id="qa-insight-container" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
-                                <label style="font-weight: 700; color: #f59e0b; font-size: 11px; display: flex; align-items: center; gap: 6px;">
-                                    🧠 Insight do Analista QA (Opcional — Alta Prioridade)
-                                </label>
-                                <textarea id="qa-insight-text" placeholder="Descreva aqui o que você identificou como causa real do problema. Ex: 'O portal exige um clique no botão Avançar antes de exibir o formulário de CPF...'" rows="3" style="width: 100%; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 4px; color: #fff; font-size: 11px; padding: 8px; resize: vertical; font-family: inherit; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='rgba(245, 158, 11, 0.5)'" onblur="this.style.borderColor='rgba(245, 158, 11, 0.2)'"></textarea>
-                                <span style="font-size: 9px; color: var(--text-muted); line-height: 1.3;">
-                                    ⚡ Se preenchido, este insight terá <strong style="color: #f59e0b;">prioridade máxima</strong> sobre a análise automática da IA no Gerador de Código (Fase 4).
-                                </span>
-                            </div>
-                            <div id="feedback-insights-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 350px; overflow-y: auto;">
-                                <!-- Preenchido via JavaScript -->
+                            
+                            <!-- Grid de 2 colunas para melhor aproveitamento horizontal -->
+                            <div style="display: grid; grid-template-columns: 1fr 1.3fr; gap: 12px; margin-top: 4px; min-height: 0; flex-shrink: 0;">
+                                <!-- Campo de Insight QA (opcional, alta prioridade) -->
+                                <div id="qa-insight-container" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-weight: 700; color: #f59e0b; font-size: 11px; display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                                        🧠 Insight do Analista QA (Opcional — Alta Prioridade)
+                                    </label>
+                                    <textarea id="qa-insight-text" placeholder="Descreva aqui o que você identificou como causa real do problema. Ex: 'O portal exige um clique no botão Avançar antes de exibir o formulário de CPF...'" style="width: 100%; height: 130px; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 4px; color: #fff; font-size: 11px; padding: 8px; resize: none; font-family: inherit; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='rgba(245, 158, 11, 0.5)'" onblur="this.style.borderColor='rgba(245, 158, 11, 0.2)'"></textarea>
+                                    <span style="font-size: 9px; color: var(--text-muted); line-height: 1.3; flex-shrink: 0;">
+                                        ⚡ Se preenchido, este insight terá <strong style="color: #f59e0b;">prioridade máxima</strong> sobre a análise automática da IA no Gerador de Código (Fase 4).
+                                    </span>
+                                </div>
+                                <div id="feedback-insights-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; background: rgba(5,5,10,0.2); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 8px;">
+                                    <!-- Preenchido via JavaScript -->
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1686,6 +1791,11 @@
                 if (btn) btn.classList.add('active');
             }
             document.getElementById(tabId).classList.add('active');
+
+            // Ao entrar na aba de histórico, atualiza o painel de problemas
+            if (tabId === 'tab-history') {
+                loadProblemHistory();
+            }
         }
 
         function fmtDate(iso) {
@@ -1729,6 +1839,7 @@
             const colCenter = document.querySelector('.col-center');
             const colRight = document.querySelector('.col-right');
 
+            const toggles = document.getElementById('layout-toggle-container');
             if (activeProjectSlug) {
                 layout.classList.remove('no-active-project');
                 layout.classList.add('has-active-project');
@@ -1738,6 +1849,7 @@
                 colCenter.style.display = 'flex';
                 colRight.style.display = 'flex';
                 dashboard.style.display = 'none';
+                if (toggles) toggles.style.display = 'flex';
 
                 renderWorkspaceSidebar();
             } else {
@@ -1749,6 +1861,7 @@
                 colCenter.style.display = 'none';
                 colRight.style.display = 'none';
                 dashboard.style.display = 'flex';
+                if (toggles) toggles.style.display = 'none';
 
                 renderProjectsDashboard();
             }
@@ -4160,6 +4273,161 @@
                     loadCorrecoesStatus();
                 })
                 .catch(err => console.error('Erro ao buscar execuções:', err));
+
+            // Ao carregar execuções, também atualiza o painel de problemas
+            loadProblemHistory();
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        //  Histórico e Resolução de Problemas (Auto-Healing)
+        // ──────────────────────────────────────────────────────────────
+        function loadProblemHistory() {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            const tbody = document.getElementById('problem-history-tbody');
+            const statsBadge = document.getElementById('problem-stats-badge');
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-msg" style="text-align:center;">Carregando...</td></tr>';
+
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes`)
+                .then(r => r.json())
+                .then(data => {
+                    const corrs = data.correcoes || [];
+                    if (corrs.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="6" class="empty-msg" style="text-align:center;">Nenhum problema registrado neste cenário.</td></tr>';
+                        statsBadge.style.display = 'none';
+                        return;
+                    }
+
+                    // Contadores para o badge de resumo
+                    const counts = { pending: 0, applied: 0, failed_attempt: 0, resolved: 0 };
+                    corrs.forEach(c => { if (counts[c.status] !== undefined) counts[c.status]++; });
+
+                    const openCount = counts.pending + counts.applied + counts.failed_attempt;
+                    if (openCount > 0) {
+                        statsBadge.textContent = `${openCount} em aberto · ${counts.failed_attempt} falha(s) repetida(s) · ${counts.resolved} resolvido(s)`;
+                        statsBadge.style.display = 'inline-block';
+                    } else {
+                        statsBadge.textContent = `${counts.resolved} problema(s) resolvido(s)`;
+                        statsBadge.style.background = 'rgba(34,197,94,0.15)';
+                        statsBadge.style.borderColor = 'rgba(34,197,94,0.35)';
+                        statsBadge.style.color = '#4ade80';
+                        statsBadge.style.display = 'inline-block';
+                    }
+
+                    // Agrupar por failed_selector + action para contar tentativas fracassadas
+                    const failedCountMap = {};
+                    corrs.forEach(c => {
+                        const key = `${c.action}||${c.failed_selector}`;
+                        if (c.status === 'failed_attempt') {
+                            failedCountMap[key] = (failedCountMap[key] || 0) + 1;
+                        }
+                    });
+
+                    let html = '';
+                    // Ordena: em aberto primeiro, depois resolvidos
+                    const sorted = [...corrs].sort((a, b) => {
+                        const order = { failed_attempt: 0, pending: 1, applied: 2, resolved: 3 };
+                        return (order[a.status] ?? 99) - (order[b.status] ?? 99);
+                    });
+
+                    sorted.forEach(c => {
+                        // Badge de status
+                        let badgeStyle = '';
+                        let badgeText = '';
+                        switch (c.status) {
+                            case 'pending':
+                                badgeStyle = 'background:rgba(251,191,36,0.18);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);';
+                                badgeText = '⏳ Aguardando';
+                                break;
+                            case 'applied':
+                                badgeStyle = 'background:rgba(139,92,246,0.18);color:#a78bfa;border:1px solid rgba(139,92,246,0.4);';
+                                badgeText = '🔧 Aplicado';
+                                break;
+                            case 'failed_attempt':
+                                badgeStyle = 'background:rgba(239,68,68,0.18);color:#f87171;border:1px solid rgba(239,68,68,0.4);';
+                                badgeText = '❌ Falhou';
+                                break;
+                            case 'resolved':
+                                badgeStyle = 'background:rgba(34,197,94,0.18);color:#4ade80;border:1px solid rgba(34,197,94,0.4);';
+                                badgeText = '✅ Resolvido';
+                                break;
+                            default:
+                                badgeStyle = 'background:rgba(100,116,139,0.18);color:#94a3b8;';
+                                badgeText = c.status;
+                        }
+
+                        const key = `${c.action}||${c.failed_selector}`;
+                        const failCount = failedCountMap[key] || 0;
+                        const failLabel = failCount > 0
+                            ? `<span style="color:#f87171;font-weight:bold;">${failCount} falha(s)</span>`
+                            : '<span style="color:#4ade80;">—</span>';
+
+                        const shortSel = (c.failed_selector || '').length > 40
+                            ? (c.failed_selector || '').substring(0, 40) + '…'
+                            : (c.failed_selector || '—');
+                        const rootCause = (c.root_cause || '').length > 60
+                            ? (c.root_cause || '').substring(0, 60) + '…'
+                            : (c.root_cause || '—');
+
+                        // Botões de ação
+                        let actionBtns = '';
+                        if (c.status !== 'resolved') {
+                            actionBtns += `<button onclick="setProblemStatus('${c.id}', 'resolved')"
+                                title="Marcar como resolvido (o robô executou com sucesso)"
+                                style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.35);color:#4ade80;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;margin-right:3px;">
+                                ✅ Resolver
+                            </button>`;
+                        }
+                        if (c.status === 'resolved') {
+                            actionBtns += `<button onclick="setProblemStatus('${c.id}', 'pending')"
+                                title="Reabrir este problema"
+                                style="background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);color:#fbbf24;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;">
+                                🔄 Reabrir
+                            </button>`;
+                        }
+
+                        html += `<tr title="Seletor completo: ${(c.failed_selector || '').replace(/"/g, '&quot;')}">
+                            <td style="font-family:'Fira Code',monospace;font-size:10px;">Passo ${c.step_number || '?'}</td>
+                            <td style="font-size:10px;">
+                                <strong>${c.action || '—'}</strong><br>
+                                <span style="color:var(--text-muted);font-size:9px;font-family:'Fira Code',monospace;">${shortSel}</span>
+                            </td>
+                            <td><span style="${badgeStyle}border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;">${badgeText}</span></td>
+                            <td style="font-size:10px;color:var(--text-muted);">${rootCause}</td>
+                            <td style="text-align:center;">${failLabel}</td>
+                            <td>${actionBtns}</td>
+                        </tr>`;
+                    });
+
+                    tbody.innerHTML = html;
+                })
+                .catch(err => {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-msg" style="text-align:center;color:var(--error);">Erro ao carregar histórico de problemas.</td></tr>';
+                    console.error('Erro loadProblemHistory:', err);
+                });
+        }
+
+        function setProblemStatus(correcaoId, newStatus) {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            const label = newStatus === 'resolved' ? 'resolvido' : 'reaberto';
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes/${encodeURIComponent(correcaoId)}/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification(`✅ Problema marcado como ${label}.`, 'success');
+                    loadProblemHistory();
+                    loadCorrecoesStatus(); // Atualiza contador na badge do cockpit
+                } else {
+                    showNotification(`❌ Erro ao atualizar status: ${data.error || 'desconhecido'}`, 'error');
+                }
+            })
+            .catch(err => {
+                console.error('Erro ao atualizar status do problema:', err);
+                showNotification('❌ Falha de comunicação ao atualizar status.', 'error');
+            });
         }
 
         function showStepScreenshot(executionId, screenshotFile) {
@@ -4702,6 +4970,7 @@
             const workspaceScreen = document.getElementById('main-layout');
             const dashboardScreen = document.getElementById('projects-dashboard');
             const devopsScreen = document.getElementById('devops-layout');
+            const toggles = document.getElementById('layout-toggle-container');
 
             if (screenId === 'workspace') {
                 document.getElementById('nav-btn-workspace').classList.add('active');
@@ -4713,11 +4982,13 @@
                     clearInterval(devopsLogsInterval);
                     devopsLogsInterval = null;
                 }
+                if (activeProjectSlug && toggles) toggles.style.display = 'flex';
             } else if (screenId === 'devops') {
                 document.getElementById('nav-btn-devops').classList.add('active');
                 workspaceScreen.style.display = 'none';
                 dashboardScreen.style.display = 'none';
                 devopsScreen.style.display = 'grid';
+                if (toggles) toggles.style.display = 'none';
                 
                 // Carrega projetos no dropdown do DevOps
                 loadDevOpsProjectsDropdown();
@@ -4974,7 +5245,70 @@
             }
         }
 
+        function toggleSidebarLayout() {
+            const layout = document.getElementById('main-layout');
+            const btn = document.getElementById('btn-toggle-sidebar');
+            const icon = document.getElementById('sidebar-toggle-icon');
+            
+            layout.classList.toggle('sidebar-collapsed');
+            const isCollapsed = layout.classList.contains('sidebar-collapsed');
+            localStorage.setItem('aegis_sidebar_collapsed', isCollapsed);
+            
+            if (isCollapsed) {
+                btn.classList.add('collapsed');
+                icon.textContent = '▶';
+                btn.title = "Expandir Cenários (Esquerda)";
+            } else {
+                btn.classList.remove('collapsed');
+                icon.textContent = '◀';
+                btn.title = "Recolher Cenários (Esquerda)";
+            }
+        }
+        
+        function toggleCenterLayout() {
+            const layout = document.getElementById('main-layout');
+            const btn = document.getElementById('btn-toggle-center');
+            const icon = document.getElementById('center-toggle-icon');
+            
+            layout.classList.toggle('center-collapsed');
+            const isCollapsed = layout.classList.contains('center-collapsed');
+            localStorage.setItem('aegis_center_collapsed', isCollapsed);
+            
+            if (isCollapsed) {
+                btn.classList.add('collapsed');
+                icon.textContent = '▶';
+                btn.title = "Expandir Painel & Terminal (Centro)";
+            } else {
+                btn.classList.remove('collapsed');
+                icon.textContent = '◀';
+                btn.title = "Recolher Painel & Terminal (Centro)";
+            }
+        }
+        
+        function initLayoutToggles() {
+            const sidebarCollapsed = localStorage.getItem('aegis_sidebar_collapsed') === 'true';
+            const centerCollapsed = localStorage.getItem('aegis_center_collapsed') === 'true';
+            
+            const layout = document.getElementById('main-layout');
+            
+            if (sidebarCollapsed) {
+                layout.classList.add('sidebar-collapsed');
+                const btn = document.getElementById('btn-toggle-sidebar');
+                const icon = document.getElementById('sidebar-toggle-icon');
+                if (btn) btn.classList.add('collapsed');
+                if (icon) icon.textContent = '▶';
+            }
+            if (centerCollapsed) {
+                layout.classList.add('center-collapsed');
+                const btn = document.getElementById('btn-toggle-center');
+                const icon = document.getElementById('center-toggle-icon');
+                if (btn) btn.classList.add('collapsed');
+                if (icon) icon.textContent = '▶';
+            }
+        }
+
         // ── Init ──
+        initLayoutToggles();
         updateLayoutState();
         fetchConfig();
         loadProjects();
