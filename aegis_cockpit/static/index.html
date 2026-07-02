@@ -1602,6 +1602,9 @@
         let justFinishedRun = false;
         let dontOverwriteSteps = false;
         let activeExecutionId = null;
+        let executionOrderCounter = 1;
+        let stepsSortKey = 'id';
+        let stepsSortAsc = true;
 
         // ── Utilities ──
         function updateStatusBadge(status, isRunning) {
@@ -2584,15 +2587,22 @@
 
                             // Classifica os passos remanescentes de acordo com o resultado da execução
                             // Se a execução teve sucesso: passos PENDING sem log correspondente foram
-                            // executados normalmente — o robô simplesmente não emitiu evento para eles.
-                            // Marcá-los como BYPASSED seria enganoso. Usar SUCCESS nesses casos.
+                            // ignorados/skipados — marcá-los como BYPASSED de fato.
                             // STOPPED é reservado para execuções que falharam antes de chegar ao passo.
-                            robotSteps.forEach(step => {
+                            robotSteps.forEach((step, idx) => {
                                 if (step.status === 'RUNNING') {
                                     step.status = runSucceeded ? 'SUCCESS' : 'FAILED';
                                 }
                                 if (step.status === 'PENDING') {
-                                    step.status = runSucceeded ? 'SUCCESS' : 'STOPPED';
+                                    if (runSucceeded) {
+                                        step.status = 'BYPASSED';
+                                    } else {
+                                        if (idx < currentStepIndex) {
+                                            step.status = 'BYPASSED';
+                                        } else {
+                                            step.status = 'STOPPED';
+                                        }
+                                    }
                                 }
                             });
                             updateStepsUI();
@@ -3498,6 +3508,16 @@
             updateStepsUI();
         }
 
+        window.sortSteps = function(key) {
+            if (stepsSortKey === key) {
+                stepsSortAsc = !stepsSortAsc;
+            } else {
+                stepsSortKey = key;
+                stepsSortAsc = true;
+            }
+            updateStepsUI();
+        };
+
         function updateStepsUI() {
             const div = document.getElementById('steps-view');
             if (robotSteps.length === 0) {
@@ -3505,10 +3525,25 @@
                 return;
             }
             
-            let html = '<div class="table-wrap"><table>';
-            html += '<tr><th style="width:7%">#</th><th style="width:12%">Registro</th><th style="width:13%">Tipo</th><th style="width:33%">Seletor Físico</th><th style="width:20%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
+            // Cria uma cópia ordenada para renderização
+            let sortedSteps = [...robotSteps];
+            sortedSteps.sort((a, b) => {
+                let valA = stepsSortKey === 'exec_order' ? (a.exec_order || Infinity) : a.index;
+                let valB = stepsSortKey === 'exec_order' ? (b.exec_order || Infinity) : b.index;
+                
+                if (valA < valB) return stepsSortAsc ? -1 : 1;
+                if (valA > valB) return stepsSortAsc ? 1 : -1;
+                return 0;
+            });
             
-            robotSteps.forEach(step => {
+            let html = '<div class="table-wrap"><table>';
+            html += '<tr>';
+            html += `<th style="width:7%; cursor:pointer;" onclick="sortSteps('id')"># ${stepsSortKey === 'id' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
+            html += `<th style="width:10%; cursor:pointer;" onclick="sortSteps('exec_order')">Ordem ${stepsSortKey === 'exec_order' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
+            html += '<th style="width:12%">Registro</th><th style="width:13%">Tipo</th><th style="width:28%">Seletor Físico</th><th style="width:17%">Ação Esperada</th><th style="width:13%">Status</th>';
+            html += '</tr>';
+            
+            sortedSteps.forEach(step => {
                 let statusClass = 'status-step-pending';
                 let statusText = 'Pendente';
                 
@@ -3543,8 +3578,11 @@
                 
                 const rowIdDisplay = step.row_id ? `Reg ${step.row_id}` : 'N/A';
                 
+                const execOrderDisplay = step.exec_order ? `<strong>${step.exec_order}º</strong>` : '<span style="color:var(--text-muted);">-</span>';
+                
                 html += `<tr>
                     <td><strong>${step.index}</strong></td>
+                    <td>${execOrderDisplay}</td>
                     <td><span style="font-size: 10px; font-weight: bold; color: var(--accent);">${rowIdDisplay}</span></td>
                     <td><span class="type-badge ${typeClass}">${step.type}</span></td>
                     <td style="font-family:monospace;font-size:10px;" title="${step.selector}">${selectorDisplay}</td>
@@ -3562,7 +3600,11 @@
                 step.status = 'PENDING';
                 step.error = '';
                 step.usedHealing = false;
+                delete step.exec_order;
             });
+            executionOrderCounter = 1;
+            stepsSortKey = 'id';
+            stepsSortAsc = true;
             currentStepIndex = 0;
             updateStepsUI();
             
@@ -3629,6 +3671,9 @@
                     if (rowId) {
                         robotSteps[foundIdx].row_id = rowId;
                     }
+                    if (!robotSteps[foundIdx].exec_order) {
+                        robotSteps[foundIdx].exec_order = executionOrderCounter++;
+                    }
                     currentStepIndex = foundIdx;
                 } else {
                     robotSteps[foundIdx].status = status;
@@ -3637,6 +3682,9 @@
                     }
                     if (rowId) {
                         robotSteps[foundIdx].row_id = rowId;
+                    }
+                    if (!robotSteps[foundIdx].exec_order) {
+                        robotSteps[foundIdx].exec_order = executionOrderCounter++;
                     }
                     if (status === 'HEALED') {
                         robotSteps[foundIdx].usedHealing = true;
@@ -3655,7 +3703,8 @@
                     error: errorMsg,
                     usedHealing: status === 'HEALED',
                     screenshot: screenshot || null,
-                    row_id: rowId || null
+                    row_id: rowId || null,
+                    exec_order: executionOrderCounter++
                 };
                 robotSteps.push(newStep);
                 currentStepIndex = robotSteps.length - 1;

@@ -141,7 +141,8 @@ python aegis_cockpit/cockpit.py
 * **Mapeamento Prévio e Expansão de Skills Inline:** O painel carrega a lista de eventos de `gravacao.json` e renderiza Skills inline com prefixo `[Skill: nome_da_skill]`.
 * **Algoritmo de Pareamento FIFO:** Correlaciona logs com passos mesmo quando seletores são otimizados ou alterados pelo self-healing.
 * **Vínculo de Registro do Dataset por Passo:** Cada passo exibido mostra qual linha (`Registro #N`) do dataset foi utilizada, garantindo rastreabilidade completa.
-* **Status em Runtime:** `⏳ Executando`, `✓ Sucesso`, `✨ Healed` (self-healing IA), `❌ Falhou`, `⏹ Parado`.
+* **Status em Runtime:** `⏳ Executando`, `✓ Sucesso`, `✨ Healed` (self-healing IA), `❌ Falhou`, `⏹ Parado`, `⏭ Ignorado` (passos pulados/bypassados).
+* **Ordenação por Ordem de Execução:** Permite alternar a ordenação do grid de passos clicando nos cabeçalhos `# ⇅` (ID original) ou `Ordem ⇅` (ordem de execução em tempo real).
 * **Trilha de Auditoria Persistida por Execução:** O `historico_passos.json` completo (com todos os passos de todas as transações) é preservado na pasta `executions/run_<timestamp>/` de cada execução. O arquivo armazena o `row_id` em cada passo para permitir filtragem precisa por registro no histórico.
 * **Zerar Status:** Permite redefinir os passos de volta ao estado `Pendente` e remover o histórico salvo.
 
