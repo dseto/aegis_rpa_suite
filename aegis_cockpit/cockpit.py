@@ -426,6 +426,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 insights.append({
                     "transaction_id": row_id,
+                    "step_number": failed_step.get("index") if failed_step else None,
                     "action": action,
                     "selector": selector,
                     "description": description,
@@ -1273,6 +1274,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     "id": f"corr_{ts_suffix}_{idx+1}",
                     "timestamp": now_str,
                     "execution_id": execution_id,
+                    "step_number": corr.get("step_number"),
                     "failed_selector": sel,
                     "action": act,
                     "root_cause": corr.get("root_cause"),
