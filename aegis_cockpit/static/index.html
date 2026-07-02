@@ -1292,6 +1292,66 @@
                     </div>
                     <!-- ══════════════════════════════════════════════════════════════ -->
 
+                    <!-- Modal: Reenviar Bug para Fila de Correção -->
+                    <div id="requeue-modal-overlay" onclick="closeRequeueModal()"
+                        style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9000; align-items:center; justify-content:center;">
+                        <div onclick="event.stopPropagation()"
+                            style="background:#12122a; border:1px solid rgba(139,92,246,0.4); border-radius:12px; padding:20px; width:520px; max-width:95vw; box-shadow:0 20px 60px rgba(0,0,0,0.8); display:flex; flex-direction:column; gap:14px;">
+
+                            <!-- Cabeçalho -->
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                                <div>
+                                    <div style="font-weight:700; font-size:13px; color:#fff; margin-bottom:3px;">🔁 Reenviar Bug para Fila de Correção</div>
+                                    <div id="requeue-modal-selector" style="font-size:10px; color:#a78bfa; font-family:'Fira Code',monospace; word-break:break-all;"></div>
+                                </div>
+                                <button onclick="closeRequeueModal()" style="background:transparent; border:none; color:#6b7280; font-size:18px; cursor:pointer; line-height:1;">✕</button>
+                            </div>
+
+                            <!-- Causa Raiz (somente leitura) -->
+                            <div style="background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:10px;">
+                                <div style="font-size:10px; color:#f87171; font-weight:600; margin-bottom:4px;">⚠️ CAUSA RAIZ IDENTIFICADA</div>
+                                <div id="requeue-modal-rootcause" style="font-size:11px; color:#e2e8f0; white-space:pre-wrap; word-break:break-word; max-height:80px; overflow-y:auto;"></div>
+                            </div>
+
+                            <!-- Insight QA -->
+                            <div>
+                                <label style="font-size:11px; font-weight:600; color:#fbbf24; margin-bottom:5px; display:block;">
+                                    🧠 Insight do Analista QA <span style="font-weight:400; color:#6b7280;">(atualizar diagnóstico — prioridade máxima para a IA)</span>
+                                </label>
+                                <textarea id="requeue-modal-insight" rows="4" placeholder="Descreva aqui o que você identificou como causa real do problema e a abordagem correta para corrigi-lo. Ex: 'O dropdown não estava visível porque o step anterior não aguardou o carregamento do iframe...'"
+                                    style="width:100%; box-sizing:border-box; background:rgba(251,191,36,0.05); border:1px solid rgba(251,191,36,0.3); border-radius:6px; color:#fef3c7; font-size:11px; font-family:inherit; padding:8px; resize:vertical; line-height:1.5;">
+                                </textarea>
+                            </div>
+
+                            <!-- Nova proposta (opcional) -->
+                            <div>
+                                <label style="font-size:11px; font-weight:600; color:#60a5fa; margin-bottom:5px; display:block;">
+                                    🛠️ Nova Proposta de Correção <span style="font-weight:400; color:#6b7280;">(opcional — deixe em branco para manter a atual)</span>
+                                </label>
+                                <textarea id="requeue-modal-fix" rows="2" placeholder="Ex: Usar wait_for_selector com timeout maior e verificar se o elemento está no viewport antes de interagir..."
+                                    style="width:100%; box-sizing:border-box; background:rgba(96,165,250,0.05); border:1px solid rgba(96,165,250,0.2); border-radius:6px; color:#dbeafe; font-size:11px; font-family:inherit; padding:8px; resize:vertical; line-height:1.5;">
+                                </textarea>
+                            </div>
+
+                            <!-- Botões -->
+                            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                                <button onclick="closeRequeueModal()"
+                                    style="background:rgba(100,116,139,0.15); border:1px solid rgba(100,116,139,0.3); color:#94a3b8; border-radius:6px; padding:6px 14px; font-size:11px; cursor:pointer;">
+                                    Cancelar
+                                </button>
+                                <button onclick="confirmRequeue()"
+                                    style="background:rgba(139,92,246,0.2); border:1px solid rgba(139,92,246,0.5); color:#c4b5fd; border-radius:6px; padding:6px 16px; font-size:11px; font-weight:600; cursor:pointer;">
+                                    🔁 Reenviar para Fila de Correção
+                                </button>
+                            </div>
+
+                            <div style="font-size:9px; color:#4b5563; text-align:center;">
+                                O bug será marcado como <strong style="color:#fbbf24;">⏳ Aguardando</strong> e o Gerador de Código receberá todas as tentativas anteriores como histórico proibido, forçando uma nova abordagem.
+                            </div>
+                        </div>
+                    </div>
+                    <!-- /Modal Reenvio -->
+
                     <div class="table-wrap" style="max-height: 180px; flex: 0 0 auto; overflow-y: auto;">
                         <table>
                             <thead>
@@ -4370,31 +4430,44 @@
 
                         // Botões de ação
                         let actionBtns = '';
+
+                        // Botão "Reenviar" — disponível para qualquer status exceto 'pending' (já está na fila)
+                        if (c.status !== 'pending') {
+                            // Escapa aspas simples da causa raiz para injeção segura no onclick
+                            const safeRootCause = (c.root_cause || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, ' ');
+                            const safeSelector = (c.failed_selector || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            const safeInsight = (c.qa_insight || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n');
+                            actionBtns += `<button onclick="openRequeueModal('${c.id}', '${safeSelector}', '${safeRootCause}', '${safeInsight}')"
+                                title="Reenviar este bug para a fila do Gerador de Código com novo insight"
+                                style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.35);color:#a78bfa;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;margin-right:3px;">
+                                🔁 Reenviar
+                            </button>`;
+                        }
+
+                        // Botão "Resolver" — para bugs ainda não resolvidos
                         if (c.status !== 'resolved') {
                             actionBtns += `<button onclick="setProblemStatus('${c.id}', 'resolved')"
-                                title="Marcar como resolvido (o robô executou com sucesso)"
-                                style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.35);color:#4ade80;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;margin-right:3px;">
+                                title="Marcar como resolvido — o robô executou este passo com sucesso"
+                                style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.35);color:#4ade80;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;">
                                 ✅ Resolver
                             </button>`;
                         }
-                        if (c.status === 'resolved') {
-                            actionBtns += `<button onclick="setProblemStatus('${c.id}', 'pending')"
-                                title="Reabrir este problema"
-                                style="background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);color:#fbbf24;border-radius:4px;padding:2px 6px;font-size:9px;cursor:pointer;">
-                                🔄 Reabrir
-                            </button>`;
-                        }
+
+                        // Indicador de insight QA existente
+                        const insightIndicator = c.qa_insight
+                            ? `<span title="Insight QA: ${(c.qa_insight || '').replace(/"/g, '&quot;').substring(0,120)}" style="color:#fbbf24;font-size:9px;" >🧠</span>`
+                            : '';
 
                         html += `<tr title="Seletor completo: ${(c.failed_selector || '').replace(/"/g, '&quot;')}">
                             <td style="font-family:'Fira Code',monospace;font-size:10px;">Passo ${c.step_number || '?'}</td>
                             <td style="font-size:10px;">
-                                <strong>${c.action || '—'}</strong><br>
+                                <strong>${c.action || '—'}</strong> ${insightIndicator}<br>
                                 <span style="color:var(--text-muted);font-size:9px;font-family:'Fira Code',monospace;">${shortSel}</span>
                             </td>
                             <td><span style="${badgeStyle}border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;">${badgeText}</span></td>
                             <td style="font-size:10px;color:var(--text-muted);">${rootCause}</td>
                             <td style="text-align:center;">${failLabel}</td>
-                            <td>${actionBtns}</td>
+                            <td style="white-space:nowrap;">${actionBtns}</td>
                         </tr>`;
                     });
 
@@ -4406,20 +4479,25 @@
                 });
         }
 
-        function setProblemStatus(correcaoId, newStatus) {
+        function setProblemStatus(correcaoId, newStatus, qaInsight, proposedFix) {
             if (!activeProjectSlug || !activeTestSlug) return;
-            const label = newStatus === 'resolved' ? 'resolvido' : 'reaberto';
+            const labelMap = { resolved: 'resolvido', pending: 'reenviado para fila', failed_attempt: 'marcado como tentativa falha' };
+            const label = labelMap[newStatus] || newStatus;
+            const payload = { status: newStatus };
+            if (qaInsight !== undefined && qaInsight !== null) payload.qa_insight = qaInsight;
+            if (proposedFix !== undefined && proposedFix !== null && proposedFix.trim()) payload.proposed_fix = proposedFix;
+
             fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes/${encodeURIComponent(correcaoId)}/status`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus })
+                body: JSON.stringify(payload)
             })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    showNotification(`✅ Problema marcado como ${label}.`, 'success');
+                    showNotification(`✅ Problema ${label}.`, 'success');
                     loadProblemHistory();
-                    loadCorrecoesStatus(); // Atualiza contador na badge do cockpit
+                    loadCorrecoesStatus();
                 } else {
                     showNotification(`❌ Erro ao atualizar status: ${data.error || 'desconhecido'}`, 'error');
                 }
@@ -4429,6 +4507,42 @@
                 showNotification('❌ Falha de comunicação ao atualizar status.', 'error');
             });
         }
+
+        // ──────────────────────────────────────────────────────────────
+        //  Modal: Reenviar Bug para Fila de Correção
+        // ──────────────────────────────────────────────────────────────
+        let _requeueCurrentId = null;
+
+        function openRequeueModal(correcaoId, selector, rootCause, existingInsight) {
+            _requeueCurrentId = correcaoId;
+            document.getElementById('requeue-modal-selector').textContent = selector || '—';
+            document.getElementById('requeue-modal-rootcause').textContent = rootCause || '—';
+            // Preenche o insight existente (se houver) para o QA editar
+            document.getElementById('requeue-modal-insight').value = (existingInsight || '').replace(/\\n/g, '\n');
+            document.getElementById('requeue-modal-fix').value = '';
+            const overlay = document.getElementById('requeue-modal-overlay');
+            overlay.style.display = 'flex';
+            // Foca no textarea de insight após um tick
+            setTimeout(() => document.getElementById('requeue-modal-insight').focus(), 80);
+        }
+
+        function closeRequeueModal() {
+            document.getElementById('requeue-modal-overlay').style.display = 'none';
+            _requeueCurrentId = null;
+        }
+
+        function confirmRequeue() {
+            if (!_requeueCurrentId) return;
+            const insight = document.getElementById('requeue-modal-insight').value.trim();
+            const fix = document.getElementById('requeue-modal-fix').value.trim();
+            setProblemStatus(_requeueCurrentId, 'pending', insight || null, fix || null);
+            closeRequeueModal();
+        }
+
+        // Fechar modal com Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeRequeueModal();
+        });
 
         function showStepScreenshot(executionId, screenshotFile) {
             const view = document.getElementById('history-screenshot-view');

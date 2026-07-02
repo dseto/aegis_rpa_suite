@@ -1310,33 +1310,52 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             if not new_status:
                 self._json({'success': False, 'message': 'Novo status não informado.'}, 400)
                 return
-                
+
+            # Campos opcionais que o QA pode atualizar ao recolocar na fila
+            new_qa_insight = body.get('qa_insight')       # None = não alterar
+            new_proposed_fix = body.get('proposed_fix')   # None = não alterar
+
             corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
             if not os.path.exists(corr_file):
                 self._json({'success': False, 'message': 'Nenhuma correção registrada.'}, 404)
                 return
-                
+
             try:
                 with open(corr_file, "r", encoding="utf-8") as f:
                     corrections = json.load(f)
-                    
+
                 found = False
                 for corr in corrections:
                     if corr.get("id") == corr_id:
                         corr["status"] = new_status
                         corr["updated_at"] = datetime.now().isoformat()
+
+                        # Atualiza insight QA se fornecido
+                        if new_qa_insight is not None:
+                            corr["qa_insight"] = new_qa_insight.strip()
+
+                        # Atualiza proposta de correção se fornecida
+                        if new_proposed_fix is not None and new_proposed_fix.strip():
+                            corr["proposed_fix"] = new_proposed_fix.strip()
+
+                        # Se está voltando para pending, limpa timestamps de falha
+                        if new_status == "pending":
+                            corr.pop("failed_at", None)
+                            corr.pop("applied_at", None)
+
                         found = True
                         break
-                        
+
                 if not found:
                     self._json({'success': False, 'message': f'Correção {corr_id} não encontrada.'}, 404)
                     return
-                    
+
                 with open(corr_file, "w", encoding="utf-8") as f:
                     json.dump(corrections, f, indent=4, ensure_ascii=False)
-                    
+
                 project_manager.update_project_activity(slug)
-                self._json({'success': True, 'message': f'Status da correção {corr_id} atualizado para {new_status}.'})
+                insight_note = " (com novo insight QA)" if new_qa_insight else ""
+                self._json({'success': True, 'message': f'Status da correção {corr_id} atualizado para {new_status}{insight_note}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao atualizar status: {e}'}, 500)
 
