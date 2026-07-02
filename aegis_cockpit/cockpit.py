@@ -435,7 +435,43 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     "error_message": err_msg,
                     "screenshot": screenshot_rel if has_screenshot else None
                 })
-                
+
+            # ── Marcação automática de failed_attempt ──────────────────────────
+            # Se um seletor que tinha uma correção 'applied' ou 'pending' voltou
+            # a falhar nesta execução, marcar automaticamente como 'failed_attempt'.
+            # Isso garante que o Code Generator nunca repita a mesma abordagem.
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            if insights and os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "r", encoding="utf-8") as cf:
+                        all_corrs = json.load(cf)
+
+                    # Monta conjunto de (ação, seletor) que falharam nesta execução
+                    failed_pairs = set()
+                    for ins in insights:
+                        a = (ins.get("action") or "").strip().lower()
+                        s = (ins.get("selector") or "").strip()
+                        if a and s:
+                            failed_pairs.add((a, s))
+
+                    invalidated = 0
+                    for corr in all_corrs:
+                        if corr.get("status") in ("applied", "pending"):
+                            ca = (corr.get("action") or "").strip().lower()
+                            cs = (corr.get("failed_selector") or "").strip()
+                            if (ca, cs) in failed_pairs:
+                                corr["status"] = "failed_attempt"
+                                corr["failed_at"] = datetime.now().isoformat()
+                                invalidated += 1
+
+                    if invalidated > 0:
+                        with open(corr_file, "w", encoding="utf-8") as cf:
+                            json.dump(all_corrs, cf, indent=4, ensure_ascii=False)
+                        print(f"[COCKPIT] ⚠️  {invalidated} correção(ões) marcada(s) como 'failed_attempt' — abordagem anterior não funcionou.")
+                except Exception as ex:
+                    print(f"[COCKPIT] Erro ao auto-invalidar correções: {ex}")
+            # ──────────────────────────────────────────────────────────────────
+
             self._json({
                 'success': True,
                 'execution_id': execution_id,
@@ -457,6 +493,8 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
             pending_count = 0
             applied_count = 0
+            failed_count = 0
+            resolved_count = 0
             corrections = []
             
             if os.path.exists(corr_file):
@@ -465,6 +503,8 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                         corrections = json.load(f)
                     pending_count = len([c for c in corrections if c.get("status") == "pending"])
                     applied_count = len([c for c in corrections if c.get("status") == "applied"])
+                    failed_count = len([c for c in corrections if c.get("status") == "failed_attempt"])
+                    resolved_count = len([c for c in corrections if c.get("status") == "resolved"])
                 except:
                     pass
                     
@@ -472,7 +512,34 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 'success': True,
                 'pending': pending_count,
                 'applied': applied_count,
+                'failed_attempt': failed_count,
+                'resolved': resolved_count,
                 'total': len(corrections)
+            })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/correcoes'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            corrections = []
+            if os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "r", encoding="utf-8") as f:
+                        corrections = json.load(f)
+                except:
+                    pass
+            self._json({
+                'success': True,
+                'correcoes': corrections
             })
 
         elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions-evolution'):
@@ -1193,12 +1260,21 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             ts_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             for idx, corr in enumerate(corrections_list):
+                sel = corr.get("selector")
+                act = corr.get("action")
+                # Se houver correção anterior aplicada para o mesmo seletor/ação, ela falhou.
+                # Atualiza seu status para 'failed_attempt'.
+                for ec in existing_corrections:
+                    if ec.get("failed_selector") == sel and ec.get("action") == act and ec.get("status") in ("applied", "pending"):
+                        ec["status"] = "failed_attempt"
+                        ec["failed_at"] = now_str
+                
                 new_corr = {
                     "id": f"corr_{ts_suffix}_{idx+1}",
                     "timestamp": now_str,
                     "execution_id": execution_id,
-                    "failed_selector": corr.get("selector"),
-                    "action": corr.get("action"),
+                    "failed_selector": sel,
+                    "action": act,
                     "root_cause": corr.get("root_cause"),
                     "proposed_fix": corr.get("proposed_fix"),
                     "qa_insight": qa_insight if qa_insight else None,
@@ -1216,6 +1292,53 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': True, 'message': f'{len(corrections_list)} correções aprovadas e registradas com sucesso{insight_msg}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao salvar correções: {e}'}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/correcoes/' in path and path.endswith('/status'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            corr_id = urllib.parse.unquote(parts[7])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            new_status = body.get('status')
+            if not new_status:
+                self._json({'success': False, 'message': 'Novo status não informado.'}, 400)
+                return
+                
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            if not os.path.exists(corr_file):
+                self._json({'success': False, 'message': 'Nenhuma correção registrada.'}, 404)
+                return
+                
+            try:
+                with open(corr_file, "r", encoding="utf-8") as f:
+                    corrections = json.load(f)
+                    
+                found = False
+                for corr in corrections:
+                    if corr.get("id") == corr_id:
+                        corr["status"] = new_status
+                        corr["updated_at"] = datetime.now().isoformat()
+                        found = True
+                        break
+                        
+                if not found:
+                    self._json({'success': False, 'message': f'Correção {corr_id} não encontrada.'}, 404)
+                    return
+                    
+                with open(corr_file, "w", encoding="utf-8") as f:
+                    json.dump(corrections, f, indent=4, ensure_ascii=False)
+                    
+                project_manager.update_project_activity(slug)
+                self._json({'success': True, 'message': f'Status da correção {corr_id} atualizado para {new_status}.'})
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao atualizar status: {e}'}, 500)
 
         else:
             self.send_response(404)
