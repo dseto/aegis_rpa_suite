@@ -906,11 +906,19 @@ class TransactionRunner:
                             "id": row_id,
                             "aegis_scenario": scenario,
                             "status": "SYSTEM_FAILED",
-                            "error_message": (str(e).replace("\n", " ")[:150] + diagnose_info)[:250],
+                            "error_message": f"{str(e).replace('\n', ' ')} {diagnose_info}".strip(),
                             "failed_field": failed_field,
                             "extracted_value": "None",
                             "duration_seconds": duration
                         })
+                        
+                        # Registra o passo falho no histórico se o último passo já não for uma falha
+                        has_failed_step = len(self.steps_history) > 0 and self.steps_history[-1]["status"] == "FAILED"
+                        if not has_failed_step:
+                            err_desc = f"Falha na execução: {cause}" if 'cause' in locals() and cause else f"Falha na execução: {str(e)}"
+                            inferred_action = "click" if "click" in str(e).lower() else ("fill" if "fill" in str(e).lower() or "type" in str(e).lower() else "action")
+                            self._log_step(page, "FAILED", inferred_action, failed_field, err_desc, error_msg=f"{str(e).replace('\n', ' ')} {diagnose_info}".strip())
+                            
                         print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
                         sys.stdout.flush()
             

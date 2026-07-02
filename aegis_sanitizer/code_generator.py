@@ -234,7 +234,32 @@ Exemplo de chamada de Skill:
 
         if pending_corrections:
             print(f"[INFO] Detectadas {len(pending_corrections)} correções pendentes aprovadas para aplicação.")
-            correcoes_prompt = "\n---\n\n### 🛠️ 5. FEEDBACK DE ERROS E CORREÇÕES OBRIGATÓRIAS (RETROALIMENTAÇÃO)\n"
+            
+            # ── Seção de Insight QA com prioridade máxima ──
+            qa_insights = list(set(
+                c.get("qa_insight") for c in pending_corrections
+                if c.get("qa_insight")
+            ))
+            
+            if qa_insights:
+                print(f"[INFO] 🧠 Insight(s) do Analista QA detectado(s): {len(qa_insights)} — Prioridade máxima ativada.")
+                correcoes_prompt += "\n---\n\n"
+                correcoes_prompt += "### ⚠️🧠 5. INSIGHT CRÍTICO DO ANALISTA QA (PRIORIDADE MÁXIMA)\n"
+                correcoes_prompt += "╔══════════════════════════════════════════════════════════════════╗\n"
+                correcoes_prompt += "║  ATENÇÃO: A INFORMAÇÃO ABAIXO FOI FORNECIDA POR UM ANALISTA     ║\n"
+                correcoes_prompt += "║  QA HUMANO QUE TESTOU MANUALMENTE O SISTEMA E IDENTIFICOU A     ║\n"
+                correcoes_prompt += "║  CAUSA REAL DO PROBLEMA. ESTA ANÁLISE TEM PRECEDÊNCIA ABSOLUTA   ║\n"
+                correcoes_prompt += "║  SOBRE QUALQUER DIAGNÓSTICO AUTOMÁTICO DA IA.                    ║\n"
+                correcoes_prompt += "╚══════════════════════════════════════════════════════════════════╝\n\n"
+                for i, insight in enumerate(qa_insights):
+                    correcoes_prompt += f"**DIAGNÓSTICO HUMANO #{i+1}:**\n"
+                    correcoes_prompt += f"> {insight}\n\n"
+                correcoes_prompt += "Você DEVE seguir esta orientação como diretriz principal para aplicar as correções abaixo. "
+                correcoes_prompt += "O código gerado deve refletir cirurgicamente o que o analista QA descreveu.\n"
+            
+            # ── Seção de correções técnicas (retroalimentação) ──
+            section_num = "6" if qa_insights else "5"
+            correcoes_prompt += f"\n---\n\n### 🛠️ {section_num}. FEEDBACK DE ERROS E CORREÇÕES OBRIGATÓRIAS (RETROALIMENTAÇÃO)\n"
             correcoes_prompt += "Na última execução deste robô, ocorreram falhas físicas e de sincronização. "
             correcoes_prompt += "Você deve obrigatoriamente aplicar as seguintes correções críticas no código gerado:\n\n"
             for idx, corr in enumerate(pending_corrections):
@@ -334,8 +359,8 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    Para upload de arquivos, use `with page.expect_file_chooser()` ou `page.set_input_files()`.
 8. **Espera de transições e Proibição de Seletores Inventados (Crítico):**
    Você é **ESTRITAMENTE PROIBIDO** de inventar, supor ou adivinhar seletores hipotéticos (como `h1:has-text(...)`, cabeçalhos de título, banners ou labels) para usar em `wait_for` ou qualquer espera de transição de tela. Se um elemento ou seletor não foi gravado de fato na lista de passos da telemetria (não consta na lista original de eventos), você **NÃO PODE** criar nenhuma instrução `wait_for` esperando por ele. Para aguardar transições, use apenas a sincronização do próprio passo de clique/preenchimento seguinte da telemetria. É **PROIBIDO** usar `wait_for_url` se o portal for uma SPA. Além disso, sempre adicione uma espera explícita (ex: `time.sleep(2.0)`) logo após preencher campos de identificação (como CPF, CNPJ, CEP) que notoriamente disparam buscas assíncronas no backend e autopreenchimento de outros campos na tela, evitando que o robô interaja com o formulário enquanto o backend ainda está reescrevendo valores. Evite outros `time.sleep` estáticos cegos, a não ser que seja para aguardar a conclusão de animações.
-9. **Proibição de Hardcode (Segurança):**
-   Não coloque credenciais ou tokens em texto fixo. Use as variáveis do `.env` carregadas pelo `TransactionRunner` ou passadas no dataset.
+9. **Proibição de Hardcode e Tratamento de Variáveis (Segurança):**
+   Não coloque credenciais em texto fixo. Priorize ler as credenciais e dados diretamente do dataset (`row`), por exemplo: `row.get("email_usuario")` ou `row.get("senha_usuario")`. Você é **PROIBIDO** de lançar exceções (`raise ValueError`, `raise Exception`, etc) que abortam a execução do robô caso variáveis de ambiente personalizadas inventadas por você (como EMAIL_LOGIN ou SENHA_LOGIN) não estejam definidas. Se precisar usar variáveis de ambiente, sempre utilize um fallback para os dados de `row` ou valores padrão.
 10. **Geração Unificada de Fluxo (Crítico):**
     A telemetria ou o relatório de passos pode conter marcações de diferentes sub-cenários (ex: 'login', 'passo_1_cliente', 'passo_2_veiculo'). Você é **PROIBIDO** de separar esses passos em funções de cenários diferentes no TransactionRunner. Você deve compilar todos os passos descritos no relatório, do primeiro ao último, sequencialmente de forma linear dentro de uma única função principal `execute_scenario_default`. Apenas o cenário `"default"` deve ser registrado e executado no runner.
 11. **Saída:**

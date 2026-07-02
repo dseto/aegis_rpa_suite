@@ -1248,7 +1248,17 @@
                                     ✔️ Aprovar Correções Selecionadas
                                 </button>
                             </div>
-                            <div id="feedback-insights-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 150px; overflow-y: auto;">
+                            <!-- Campo de Insight QA (opcional, alta prioridade) -->
+                            <div id="qa-insight-container" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
+                                <label style="font-weight: 700; color: #f59e0b; font-size: 11px; display: flex; align-items: center; gap: 6px;">
+                                    🧠 Insight do Analista QA (Opcional — Alta Prioridade)
+                                </label>
+                                <textarea id="qa-insight-text" placeholder="Descreva aqui o que você identificou como causa real do problema. Ex: 'O portal exige um clique no botão Avançar antes de exibir o formulário de CPF...'" rows="3" style="width: 100%; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 4px; color: #fff; font-size: 11px; padding: 8px; resize: vertical; font-family: inherit; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='rgba(245, 158, 11, 0.5)'" onblur="this.style.borderColor='rgba(245, 158, 11, 0.2)'"></textarea>
+                                <span style="font-size: 9px; color: var(--text-muted); line-height: 1.3;">
+                                    ⚡ Se preenchido, este insight terá <strong style="color: #f59e0b;">prioridade máxima</strong> sobre a análise automática da IA no Gerador de Código (Fase 4).
+                                </span>
+                            </div>
+                            <div id="feedback-insights-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 350px; overflow-y: auto;">
                                 <!-- Preenchido via JavaScript -->
                             </div>
                         </div>
@@ -4252,6 +4262,8 @@
             if (!hasErrors) {
                 panel.style.display = 'none';
                 activeExecutionInsights = [];
+                const qaTextarea = document.getElementById('qa-insight-text');
+                if (qaTextarea) qaTextarea.value = '';
                 return;
             }
             
@@ -4273,7 +4285,7 @@
                                 `;
                             }
                             html += `
-                                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 10px; display: flex; gap: 10px; align-items: center; margin-bottom: 6px;">
+                                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 10px; display: flex; gap: 10px; align-items: flex-start; margin-bottom: 6px;">
                                     <label class="checkbox-container" style="margin-top: 0; padding-left: 20px; flex: 0 0 auto;">
                                         <input type="checkbox" class="correction-checkbox" data-index="${idx}" checked onchange="updateApproveButtonState()" />
                                         <span class="checkmark"></span>
@@ -4284,8 +4296,8 @@
                                             <strong style="color: #fff;">Transação #${insight.transaction_id} &bull; Passo: ${insight.action} (${insight.selector})</strong>
                                             <span style="font-size: 9px; font-weight: bold; color: var(--accent); background: rgba(217,70,239,0.1); padding: 1px 4px; border-radius: 3px;">${insight.category}</span>
                                         </div>
-                                        <div style="margin-bottom: 4px;"><span style="color: var(--text-muted);">Causa Raiz:</span> ${insight.root_cause}</div>
-                                        <div style="font-weight: bold; color: #10b981;"><span style="color: var(--text-muted); font-weight: normal;">Correção Recomendada:</span> ${insight.proposed_fix}</div>
+                                        <div style="margin-bottom: 4px; word-break: break-word; white-space: pre-wrap;"><span style="color: var(--text-muted);">Causa Raiz:</span> ${insight.root_cause}</div>
+                                        <div style="font-weight: bold; color: #10b981; word-break: break-word; white-space: pre-wrap;"><span style="color: var(--text-muted); font-weight: normal;">Correção Recomendada:</span> ${insight.proposed_fix}</div>
                                     </div>
                                 </div>
                             `;
@@ -4320,9 +4332,12 @@
             const selectedIndices = Array.from(chks).map(chk => parseInt(chk.dataset.index));
             const correctionsToApprove = selectedIndices.map(idx => activeExecutionInsights[idx]);
             
+            const qaInsight = document.getElementById('qa-insight-text')?.value?.trim() || '';
+            
             const payload = {
                 execution_id: activeHistoryExecutionId,
-                corrections: correctionsToApprove
+                corrections: correctionsToApprove,
+                qa_insight: qaInsight
             };
             
             fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/execution-insights/approve`, {
@@ -4333,9 +4348,12 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    alert('🎉 Correções aprovadas com sucesso! Elas serão aplicadas pelo Gerador de Código na Fase 4.');
+                    const insightMsg = qaInsight ? '\n🧠 Seu insight QA foi registrado com prioridade máxima!' : '';
+                    alert('🎉 Correções aprovadas com sucesso! Elas serão aplicadas pelo Gerador de Código na Fase 4.' + insightMsg);
                     const panel = document.getElementById('feedback-insights-panel');
                     if (panel) panel.style.display = 'none';
+                    const qaTextarea = document.getElementById('qa-insight-text');
+                    if (qaTextarea) qaTextarea.value = '';
                     loadCorrecoesStatus();
                 } else {
                     alert('Erro ao aprovar correções: ' + data.message);

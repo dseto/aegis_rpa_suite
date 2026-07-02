@@ -371,7 +371,10 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     pass
                     
             insights = []
-            diag_regex = re.compile(r"IA DIAGNOSE \[(?P<cat>[^\]]+)\]:\s*(?P<cause>.*?)\s*\(Recomendação:\s*(?P<fix>.*?)\)")
+            diag_regex = re.compile(
+                r"IA DIAGNOSE \[(?P<cat>[^\]]+)\]:\s*(?P<cause>[\s\S]*?)\s*\(Recomendação:\s*(?P<fix>[\s\S]*?)\)",
+                re.DOTALL
+            )
             
             for tr in failed_transactions:
                 row_id = tr.get("id")
@@ -398,11 +401,20 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     proposed_fix = match.group("fix").strip()
                 else:
                     category = "UNKNOWN"
-                    root_cause = err_msg
+                    # Tenta isolar apenas a parte do diagnóstico da IA (após o separador ' | ')
+                    if " | IA DIAGNOSE" in err_msg:
+                        # Remove o prefixo técnico do Playwright, mantém só o diagnóstico
+                        ia_part = err_msg.split(" | IA DIAGNOSE", 1)[1]
+                        # Remove o cabeçalho da categoria ex: [TIMEOUT_SELECTOR]:
+                        ia_part = re.sub(r"^\s*\[[^\]]+\]:\s*", "", ia_part)
+                        root_cause = ia_part.strip()
+                    else:
+                        root_cause = err_msg
                     if "waiting for locator" in err_msg.lower():
                         proposed_fix = "Verificar se o seletor mudou no DOM da página alvo ou se há necessidade de espera adicional."
                     else:
                         proposed_fix = "Analisar o log e ajustar as propriedades do seletor ou a temporização do fluxo."
+
                 
                 screenshot_rel = f"screenshots/screenshot_erro_transacao_{row_id}.png"
                 screenshot_abs = os.path.join(exec_dir, screenshot_rel)
@@ -1162,6 +1174,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 
             execution_id = body.get('execution_id')
             corrections_list = body.get('corrections', [])
+            qa_insight = body.get('qa_insight', '').strip()
             
             if not corrections_list:
                 self._json({'success': False, 'message': 'Nenhuma correção informada.'}, 400)
@@ -1188,6 +1201,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     "action": corr.get("action"),
                     "root_cause": corr.get("root_cause"),
                     "proposed_fix": corr.get("proposed_fix"),
+                    "qa_insight": qa_insight if qa_insight else None,
                     "failed_screenshot": corr.get("screenshot"),
                     "status": "pending"
                 }
@@ -1198,7 +1212,8 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     json.dump(existing_corrections, f, indent=4, ensure_ascii=False)
                 
                 project_manager.update_project_activity(slug)
-                self._json({'success': True, 'message': f'{len(corrections_list)} correções aprovadas e registradas com sucesso.'})
+                insight_msg = " (com insight QA)" if qa_insight else ""
+                self._json({'success': True, 'message': f'{len(corrections_list)} correções aprovadas e registradas com sucesso{insight_msg}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao salvar correções: {e}'}, 500)
 
