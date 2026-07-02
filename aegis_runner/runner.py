@@ -933,6 +933,16 @@ class TransactionRunner:
                 print(f"[AEGIS RUNNER] Trilha de auditoria final (historico_passos.json) gravada em: {steps_json_path}")
             except Exception as j_err:
                 print(f"[WARNING] Falha ao gravar {steps_json_path}: {j_err}")
+
+            # Atualiza também o historico_passos.json na raiz do cenário com os dados reais do runner.
+            # Isso substitui o arquivo gerado por pareamento FIFO do frontend (que pode divergir do
+            # bot após correções cirúrgicas) com a trilha de auditoria precisa e confiável.
+            try:
+                root_steps_path = os.path.join(self.project_dir, "historico_passos.json")
+                with open(root_steps_path, "w", encoding="utf-8") as sf:
+                    json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
+            except Exception as j_err:
+                print(f"[WARNING] Falha ao atualizar historico_passos.json na raiz do cenário: {j_err}")
                 
             self._write_index_file()
                 

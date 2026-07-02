@@ -181,6 +181,38 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                                 except Exception:
                                     pass
 
+            # ── steps_history: usa o historico_passos.json da última execução completa ──
+            # O arquivo raiz (test_dir/historico_passos.json) é um espelho FIFO em tempo real
+            # e pode divergir do bot após correções cirúrgicas. O arquivo da pasta da execução
+            # é a fonte da verdade real — ele reflete exatamente o que o robô fez.
+            steps_history_data = None
+            if test_slug:
+                _exec_base = os.path.join(proj_dir, "executions")
+                if os.path.isdir(_exec_base):
+                    _execs = sorted(
+                        [d for d in os.listdir(_exec_base) if os.path.isdir(os.path.join(_exec_base, d))],
+                        reverse=True  # mais recente primeiro
+                    )
+                    for _eid in _execs:
+                        # Tenta primeiro na subpasta reports/, depois diretamente
+                        for _sp in [
+                            os.path.join(_exec_base, _eid, "reports", "historico_passos.json"),
+                            os.path.join(_exec_base, _eid, "historico_passos.json"),
+                        ]:
+                            if os.path.exists(_sp):
+                                try:
+                                    with open(_sp, "r", encoding="utf-8") as _f:
+                                        steps_history_data = json.load(_f)
+                                except Exception:
+                                    pass
+                                break
+                        if steps_history_data is not None:
+                            break
+
+            # Fallback: usa o arquivo raiz (em execução ativa ou sem histórico de execução)
+            if steps_history_data is None:
+                steps_history_data = load_json('historico_passos.json')
+
             self._json({
                 'dictionary': load_json('dicionario.json') or {},
                 'dataset': dataset if isinstance(dataset, list) else [dataset],
@@ -189,7 +221,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 'has_bot': has_bot,
                 'recording': recording,
                 'skills_recordings': skills_recordings,
-                'steps_history': load_json('historico_passos.json')
+                'steps_history': steps_history_data
             })
 
         elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions'):
