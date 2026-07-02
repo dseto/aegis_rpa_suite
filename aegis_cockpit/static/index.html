@@ -3638,25 +3638,106 @@
             const btnReset = document.getElementById('btn-reset-steps');
             const btnPromote = document.getElementById('btn-promote-skill');
             const summary = document.getElementById('steps-summary');
-            
-            // Se houver histórico salvo da última execução, use-o!
+
+            // ── Extrai passos planejados do recording (expanded com skills) ──────────
+            function buildPlannedFromRecording(rec, skillsRec) {
+                if (!rec || !rec.events || !rec.events.length) return [];
+                const steps = [];
+                const events = rec.events || [];
+                events.forEach(evt => {
+                    if (evt.type === 'call_skill') {
+                        const skillSlug = evt.skill_slug;
+                        const skillRec = skillsRec ? skillsRec[skillSlug] : null;
+                        if (skillRec && skillRec.events) {
+                            skillRec.events.forEach(sev => {
+                                if (sev.type === 'click' || sev.type === 'fill' || sev.type === 'change' || sev.type === 'select') {
+                                    let actionDesc = '';
+                                    if (sev.type === 'fill' || sev.type === 'change') {
+                                        actionDesc = sev.value ? `Preencher: "${sev.value}"` : 'Preencher campo';
+                                    } else if (sev.type === 'click') {
+                                        actionDesc = sev.text ? `Clicar em: "${sev.text}"` : 'Clique físico';
+                                    } else {
+                                        actionDesc = sev.text || sev.value || 'Interação';
+                                    }
+                                    steps.push({ type: sev.type, selector: sev.selector || '', desc: `[Skill: ${skillSlug}] ${actionDesc}` });
+                                }
+                            });
+                        } else {
+                            steps.push({ type: 'click', selector: '', desc: `Executar Skill: ${skillSlug}` });
+                        }
+                    } else if (evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select') {
+                        let actionDesc = '';
+                        if (evt.type === 'fill' || evt.type === 'change') {
+                            actionDesc = evt.value ? `Preencher: "${evt.value}"` : 'Preencher campo';
+                        } else if (evt.type === 'click') {
+                            actionDesc = evt.text ? `Clicar em: "${evt.text}"` : 'Clique físico';
+                        } else {
+                            actionDesc = evt.text || evt.value || 'Interação';
+                        }
+                        steps.push({ type: evt.type, selector: evt.selector || '', desc: actionDesc });
+                    }
+                });
+                return steps;
+            }
+
+            // ── Caso 1: Há histórico real da última execução ──────────────────────────
             if (stepsHistory && stepsHistory.length > 0) {
-                robotSteps = stepsHistory;
+                // Usa os passos reais como base (status preciso do runner)
+                robotSteps = stepsHistory.map((s, idx) => ({
+                    index: s.index || idx + 1,
+                    exec_order: s.index || idx + 1,
+                    type: s.type,
+                    selector: s.selector,
+                    desc: s.desc,
+                    status: s.status,
+                    error: s.error || '',
+                    usedHealing: s.usedHealing || false,
+                    screenshot: s.screenshot || null,
+                    row_id: s.row_id || null
+                }));
+
+                // Complementa com passos planejados que não chegaram a ser executados
+                const planned = buildPlannedFromRecording(recording, skillsRecordings);
+                const executedCount = robotSteps.length;
+                if (planned.length > executedCount) {
+                    for (let i = executedCount; i < planned.length; i++) {
+                        robotSteps.push({
+                            index: i + 1,
+                            exec_order: i + 1,
+                            type: planned[i].type,
+                            selector: planned[i].selector,
+                            desc: planned[i].desc,
+                            status: 'STOPPED',   // não foi alcançado
+                            error: '',
+                            usedHealing: false,
+                            screenshot: null,
+                            row_id: null
+                        });
+                    }
+                }
+
                 const firstPending = robotSteps.findIndex(s => s.status === 'PENDING' || s.status === 'RUNNING');
                 currentStepIndex = firstPending !== -1 ? firstPending : robotSteps.length - 1;
-                
-                const total = robotSteps.length;
-                const success = robotSteps.filter(s => s.status === 'SUCCESS').length;
-                const failed = robotSteps.filter(s => s.status === 'FAILED' || s.status === 'STOPPED').length;
-                const healed = robotSteps.filter(s => s.usedHealing).length;
-                
-                summary.innerHTML = `📋 Histórico da Última Execução | Total: <strong>${total}</strong> &nbsp;|&nbsp; Sucesso: <strong style="color:var(--success);">${success}</strong> &nbsp;|&nbsp; Falhas/Parados: <strong style="color:var(--error);">${failed}</strong> &nbsp;|&nbsp; Healed: <strong style="color:var(--accent);">${healed}</strong>`;
+
+                const total    = robotSteps.length;
+                const success  = robotSteps.filter(s => s.status === 'SUCCESS').length;
+                const failed   = robotSteps.filter(s => s.status === 'FAILED').length;
+                const stopped  = robotSteps.filter(s => s.status === 'STOPPED').length;
+                const healed   = robotSteps.filter(s => s.usedHealing).length;
+
+                summary.innerHTML = `📋 Histórico da Última Execução | Total: <strong>${total}</strong> &nbsp;|&nbsp; ` +
+                    `Sucesso: <strong style="color:var(--success);">${success}</strong> &nbsp;|&nbsp; ` +
+                    `Falhou: <strong style="color:var(--error);">${failed}</strong> &nbsp;|&nbsp; ` +
+                    `Não alcançado: <strong style="color:var(--text-muted);">${stopped}</strong> &nbsp;|&nbsp; ` +
+                    `Healed: <strong style="color:var(--accent);">${healed}</strong>`;
+
                 btnReset.style.display = 'inline-block';
                 if (btnPromote) btnPromote.style.display = 'inline-block';
                 updateStepsUI();
                 return;
             }
-            
+
+            // ── Caso 2: Sem histórico — constrói a partir do recording (estado inicial) ──
             if (!recording || !recording.events || !recording.events.length) {
                 div.innerHTML = '<div class="empty-msg">Nenhum passo gravado para este cenário.</div>';
                 summary.innerText = 'Passos do robô não gravados.';
@@ -3666,69 +3747,18 @@
                 currentStepIndex = 0;
                 return;
             }
-            
-            // Map recorded events to robotSteps (expanding skills inline if available)
-            const steps = [];
-            const events = recording.events || [];
-            
-            events.forEach(evt => {
-                if (evt.type === 'call_skill') {
-                    const skillSlug = evt.skill_slug;
-                    const skillRec = skillsRecordings ? skillsRecordings[skillSlug] : null;
-                    if (skillRec && skillRec.events) {
-                        skillRec.events.forEach(sev => {
-                            if (sev.type === 'click' || sev.type === 'fill' || sev.type === 'change' || sev.type === 'select') {
-                                let actionDesc = '';
-                                if (sev.type === 'fill' || sev.type === 'change') {
-                                    actionDesc = sev.value ? `Preencher: "${sev.value}"` : 'Preencher campo';
-                                } else if (sev.type === 'click') {
-                                    actionDesc = sev.text ? `Clicar em: "${sev.text}"` : 'Clique físico';
-                                } else {
-                                    actionDesc = sev.text || sev.value || 'Interação';
-                                }
-                                steps.push({
-                                    type: sev.type,
-                                    selector: sev.selector || '',
-                                    desc: `[Skill: ${skillSlug}] ${actionDesc}`
-                                });
-                            }
-                        });
-                    } else {
-                        steps.push({
-                            type: 'click',
-                            selector: '',
-                            desc: `Executar Skill: ${skillSlug}`
-                        });
-                    }
-                } else if (evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select') {
-                    let actionDesc = '';
-                    if (evt.type === 'fill' || evt.type === 'change') {
-                        actionDesc = evt.value ? `Preencher: "${evt.value}"` : 'Preencher campo';
-                    } else if (evt.type === 'click') {
-                        actionDesc = evt.text ? `Clicar em: "${evt.text}"` : 'Clique físico';
-                    } else {
-                        actionDesc = evt.text || evt.value || 'Interação';
-                    }
-                    steps.push({
-                        type: evt.type,
-                        selector: evt.selector || '',
-                        desc: actionDesc
-                    });
-                }
-            });
 
-            robotSteps = steps.map((s, idx) => {
-                return {
-                    index: idx + 1,
-                    type: s.type,
-                    selector: s.selector,
-                    desc: s.desc,
-                    status: 'PENDING',
-                    error: '',
-                    usedHealing: false
-                };
-            });
-            
+            const planned = buildPlannedFromRecording(recording, skillsRecordings);
+            robotSteps = planned.map((s, idx) => ({
+                index: idx + 1,
+                type: s.type,
+                selector: s.selector,
+                desc: s.desc,
+                status: 'PENDING',
+                error: '',
+                usedHealing: false
+            }));
+
             currentStepIndex = 0;
             summary.innerHTML = `📋 Total de Passos Mapeados: <strong>${robotSteps.length}</strong>`;
             btnReset.style.display = 'inline-block';
