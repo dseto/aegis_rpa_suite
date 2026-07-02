@@ -78,7 +78,7 @@ graph TD
 * **Mecanismos Internos (`cognitive_fallback.py` & `runner.py`):**
   * **Zero-LLM Runtime por Padrão:** O robô executa de forma offline com seletores estáticos e performance máxima.
   * **Self-Healing Cognitivo (`self_healing_click`):** Se um seletor estático falhar (por exemplo, devido a um redesign do portal), o robô ativa o gateway cognitivo, captura uma screenshot e solicita à LLM (via LiteLLM ou OpenRouter) coordenadas percentuais do elemento para emular o clique físico do mouse.
-  * **Diagnóstico de Falhas (`diagnose_failure`):** Caso ocorra um erro fatal insolúvel, o robô envia a screenshot da tela e o fragmento do DOM para que a LLM faça um diagnóstico visual de causa raiz antes do encerramento.
+  * **Diagnóstico de Falhas (`diagnose_failure`):** Caso ocorra um erro fatal insolúvel, o robô envia a screenshot da tela e o histórico de passos executados para que a LLM faça um diagnóstico puramente visual e semântico de causa raiz antes do encerramento.
   * **Visibilidade Forçada de Submenus (Dropdown Expansion):** Em modo headed, o runner força estilos CSS que mantêm todas as tags de submenu (`.sub-menu`, dropdowns, etc.) permanentemente visíveis. Isso elimina timeouts de cliques físicos por elementos ocultos e garante que a execução ocorra sem atrasos de transições hover.
   * **Captura de Evidências:** Gravação síncrona de logs e traces compactados (`.zip`) em `telemetry_data/`.
 

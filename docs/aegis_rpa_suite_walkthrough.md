@@ -160,7 +160,7 @@ Quando habilitada, a camada cognitiva (`cognitive_fallback.py`) atua como uma co
 * **Ativação:** Defina a variável de ambiente `AEGIS_COGNITIVE_ENABLED="true"`.
 * **Provedores Suportados:** Compatível com gateways OpenAI-like (OpenRouter ou instâncias LiteLLM locais).
 * **Self-Healing de Cliques:** Se um seletor estático falhar no Playwright, a função `self_healing_click` captura uma screenshot e solicita à LLM as coordenadas percentuais baseadas no contexto textual do elemento, clicando nas coordenadas via mouse Playwright.
-* **Diagnóstico de Falhas:** No bloco final de exceções do robô (`except Exception`), o método `diagnose_failure` envia a imagem e o fragmento de DOM do erro para a LLM gerar um diagnóstico imediato da causa raiz da quebra.
+* **Diagnóstico de Falhas:** No bloco final de exceções do robô (`except Exception`), o método `diagnose_failure` envia a imagem e o histórico de passos do erro para a LLM gerar um diagnóstico imediato, puramente visual e semântico, da causa raiz da quebra.
 
 ```python
 from cognitive_fallback import CognitiveGateway

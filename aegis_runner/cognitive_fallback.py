@@ -175,7 +175,7 @@ class CognitiveGateway:
             raise RuntimeError(f"Resposta inválida da API: {json.dumps(res_json)}")
 
     def _clean_json_response(self, text: str) -> dict:
-        """Limpa blocos de código markdown do JSON retornado e faz o parser."""
+        """Limpa blocos de código markdown do JSON retornado e faz o parser robusto."""
         text_clean = text.strip()
         # Remove encapsulamento ```json ... ``` se houver
         if text_clean.startswith("```"):
@@ -188,7 +188,60 @@ class CognitiveGateway:
         if start != -1 and end != -1:
             text_clean = text_clean[start:end+1]
 
-        return json.loads(text_clean)
+        # Tenta o parser JSON comum
+        try:
+            return json.loads(text_clean)
+        except Exception as e:
+            print(f"[COGNITIVE WARNING] Falha no parser JSON padrão: {e}. Iniciando parser tolerante a aspas...")
+
+        # Parser tolerante a aspas duplas não escapadas em chaves conhecidas
+        result = {}
+        
+        # 1. Extração de category
+        cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', text_clean)
+        if cat_match:
+            result["category"] = cat_match.group(1).strip()
+        else:
+            result["category"] = "UNKNOWN"
+
+        # 2. Extração de root_cause_summary e actionable_fix por corte de posições
+        rc_start = text_clean.find('"root_cause_summary"')
+        af_start = text_clean.find('"actionable_fix"')
+        
+        if rc_start != -1 and af_start != -1:
+            # Captura bloco de root_cause_summary
+            rc_block = text_clean[rc_start:af_start].strip()
+            # Remove a chave e o separador ':'
+            rc_val = re.sub(r'^"root_cause_summary"\s*:\s*', '', rc_block).strip()
+            if rc_val.startswith('"'):
+                rc_val = rc_val[1:]
+            # Remove vírgula e aspas finais do bloco
+            rc_val = re.sub(r'",?\s*$', '', rc_val).strip()
+            result["root_cause_summary"] = rc_val
+            
+            # Captura bloco de actionable_fix
+            af_block = text_clean[af_start:].strip()
+            af_val = re.sub(r'^"actionable_fix"\s*:\s*', '', af_block).strip()
+            if af_val.startswith('"'):
+                af_val = af_val[1:]
+            # Remove chaves/aspas/espaços de fechamento
+            af_val = re.sub(r'"\s*\}?\s*$', '', af_val).strip()
+            result["actionable_fix"] = af_val
+        else:
+            # Fallback para regex simples não-guloso
+            rc_match = re.search(r'"root_cause_summary"\s*:\s*"(.*?)"(?=\s*,\s*"actionable_fix"|\s*\})', text_clean, re.DOTALL)
+            if rc_match:
+                result["root_cause_summary"] = rc_match.group(1).strip()
+            else:
+                result["root_cause_summary"] = ""
+                
+            af_match = re.search(r'"actionable_fix"\s*:\s*"(.*?)"(?=\s*\})', text_clean, re.DOTALL)
+            if af_match:
+                result["actionable_fix"] = af_match.group(1).strip()
+            else:
+                result["actionable_fix"] = ""
+                
+        return result
 
     def self_healing_click(self, page: Page, selector: str, target_description: str, original_coords: tuple = None) -> bool:
         """
@@ -285,43 +338,59 @@ class CognitiveGateway:
                 except Exception:
                     pass
 
-    def diagnose_failure(self, page: Page, error_msg: str) -> dict:
+    def diagnose_failure(self, page: Page, error_msg: str, steps_history: list = None) -> dict:
         """
         Captura a screenshot da tela no momento do erro e faz uma triagem cognitiva
-        com a LLM para diagnosticar a causa do erro (ex: CAPTCHA, queda de servidor, modal de bloqueio).
+        com a LLM baseada puramente em análise visual e semântica (visão computacional multimodal)
+        para diagnosticar a causa do erro de forma holística (como um analista de QA humano).
         """
         if not self.is_active():
             return {"status": "disabled", "message": "Módulo cognitivo desativado."}
 
-        print("[COGNITIVE] Iniciando Diagnóstico de Falha via LLM...")
+        print("[COGNITIVE] Iniciando Diagnóstico de Falha Visual via LLM...")
         temp_img = "temp_diagnose_failure.png"
         
         try:
             page.screenshot(path=temp_img)
             
-            # Limita a leitura do HTML para não estourar contexto e economizar tokens
-            try:
-                html_snippet = page.content()[:3000]
-            except Exception:
-                html_snippet = "DOM inacessível"
+            # Formata o resumo do histórico de passos executados
+            steps_summary = "Histórico de passos executados até o momento:\n"
+            if steps_history:
+                for step in steps_history:
+                    idx = step.get("index", "?")
+                    status = step.get("status", "")
+                    action = step.get("type", "")
+                    desc = step.get("desc", "")
+                    selector = step.get("selector", "")
+                    steps_summary += f"- Passo {idx}: [{status}] {action} em '{selector}' ({desc})\n"
+            else:
+                steps_summary += "(Nenhum histórico de passos disponível)"
 
             prompt = f"""
-            Você é um especialista em garantia de qualidade e auditoria de RPA.
-            Uma automação corporativa falhou com o seguinte erro técnico:
-            '{error_msg}'
-            
-            Analise a imagem da tela no momento da falha e o trecho de código HTML abaixo:
-            ---
-            {html_snippet}
-            ---
-            
-            Identifique qual é a causa raiz provável da quebra e retorne um objeto JSON contendo:
-            - "category": Categoria do erro ("CAPTCHA" | "TIMEOUT_SELECTOR" | "SERVER_ERROR" | "BUSINESS_VALIDATION" | "AUTH_FAILED" | "UNKNOWN")
-            - "root_cause_summary": Breve explicação amigável do que ocorreu.
-            - "actionable_fix": O que o robô ou desenvolvedor deve fazer para contornar ou corrigir (ex: "Verificar credenciais", "Aguardar o servidor retornar", "Remover modal de aviso").
-            
-            Retorne EXCLUSIVAMENTE o JSON estruturado.
-            """
+Você é um especialista sênior em garantia de qualidade (QA) e auditoria de RPA (Robotic Process Automation).
+Uma automação de processo corporativo falhou com o seguinte erro técnico/sistêmico:
+'{error_msg}'
+
+Abaixo está o histórico funcional das ações do robô executadas nesta transação:
+---
+{steps_summary}
+---
+
+INSTRUÇÕES DE ANÁLISE VISUAL (QA HUMANO):
+Examine com atenção a captura de tela (screenshot) no momento do erro e identifique a causa raiz funcional da falha:
+1. Analise a tela de forma holística: não se limite ao elemento exato ou passo técnico do erro.
+2. Procure por inconsistências em etapas anteriores: verifique se há campos obrigatórios vazios ou não preenchidos (por exemplo: selects/dropdowns sem opção selecionada, inputs em branco) que deveriam ter sido preenchidos em etapas anteriores.
+3. Identifique mensagens de erro visuais ou validações ativas: procure por alertas na tela, textos em vermelho, bordas de campos destacadas em vermelho ou banners de validação.
+4. Detecte bloqueios visuais na interface: verifique se há popups, modais, caixas de diálogo abertas ou loaders/spinners que impedem a interação com a tela principal.
+5. Verifique desalinhamento de etapas: analise se o robô tentou interagir com elementos de uma etapa posterior (ex: Passo 3) mas a tela visualmente ainda está travada em uma etapa anterior (ex: Passo 2) devido a erros de preenchimento.
+
+Identifique qual é a causa raiz provável da quebra e retorne um objeto JSON contendo:
+- "category": Categoria do erro ("CAPTCHA" | "TIMEOUT_SELECTOR" | "SERVER_ERROR" | "BUSINESS_VALIDATION" | "AUTH_FAILED" | "UNKNOWN")
+- "root_cause_summary": Breve explicação funcional e amigável da causa raiz real (ex: "O robô tentou preencher o Passo 3, mas a página continua travada no Passo 2 porque o campo 'Nível da Blindagem' ficou em branco após marcar 'Possui Blindagem?'").
+- "actionable_fix": O que o robô, desenvolvedor ou gerador de código IA deve corrigir ou ajustar de forma precisa e acionável no fluxo (ex: "Ajustar o preenchimento do campo 'Nível da Blindagem' no Passo 2 antes de tentar avançar").
+
+Retorne EXCLUSIVAMENTE o JSON estruturado.
+"""
             
             raw_response = self._call_llm_api(prompt, temp_img)
             return self._clean_json_response(raw_response)

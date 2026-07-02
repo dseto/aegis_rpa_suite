@@ -503,7 +503,7 @@ class TransactionRunner:
                     self._log_step(page, "HEALED", "fill", selector, target_description)
                     return True
                 self._log_step(page, "FAILED", "fill", selector, target_description, "IA self-healing failed")
-                return False
+                raise e
             else:
                 print(f"[AEGIS RUNNER] Falha ao preencher em '{selector}' e módulo cognitivo inativo.")
                 self._log_step(page, "FAILED", "fill", selector, target_description, str(e))
@@ -569,7 +569,7 @@ class TransactionRunner:
         """Diagnóstico de falha cognitivo compatível com chamadas externas."""
         if self.cognitive.is_active():
             try:
-                diag = self.cognitive.diagnose_failure(page, str(error))
+                diag = self.cognitive.diagnose_failure(page, str(error), steps_history=getattr(self, "steps_history", None))
                 if diag and isinstance(diag, dict):
                     category = diag.get("category", "UNKNOWN")
                     cause = diag.get("root_cause_summary", "")
@@ -884,7 +884,7 @@ class TransactionRunner:
                         if self.cognitive.is_active():
                             try:
                                 print(f"[AEGIS RUNNER] Acionando diagnóstico de falha via IA...")
-                                diag = self.cognitive.diagnose_failure(page, str(e))
+                                diag = self.cognitive.diagnose_failure(page, str(e), steps_history=self.steps_history)
                                 if diag and isinstance(diag, dict):
                                     category = diag.get("category", "UNKNOWN")
                                     cause = diag.get("root_cause_summary", "")
