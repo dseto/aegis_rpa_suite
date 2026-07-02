@@ -204,7 +204,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             test_slug = urllib.parse.unquote(parts[5])
             self._json({'executions': project_manager.list_executions(slug, test_slug)})
 
-        elif path.startswith('/api/projects/') and '/tests/' in path and '/executions/' in path:
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/executions/' in path and '/files/' not in path:
             parts = path.split('/')
             slug = urllib.parse.unquote(parts[3])
             test_slug = urllib.parse.unquote(parts[5])
@@ -264,7 +264,13 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             slug = urllib.parse.unquote(parts[3])
             test_slug = urllib.parse.unquote(parts[5])
             execution_id = urllib.parse.unquote(parts[7])
-            filename = urllib.parse.unquote(parts[9])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            exec_dir = os.path.join(test_dir, "executions", execution_id)
+            
+            files_idx = path.find('/files/')
+            filename = urllib.parse.unquote(path[files_idx + 7:])
             
             # Sanitiza filename de forma segura permitindo subpastas
             # Remove qualquer tentativa de usar '..' para subir de nível
@@ -272,7 +278,9 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             file_path = os.path.abspath(os.path.join(exec_dir, clean_filename))
             
             # Garante que o caminho final ainda está dentro de exec_dir
-            if not file_path.startswith(os.path.abspath(exec_dir)):
+            norm_file_path = os.path.normcase(os.path.abspath(file_path))
+            norm_exec_dir = os.path.normcase(os.path.abspath(exec_dir))
+            if not norm_file_path.startswith(norm_exec_dir):
                 self.send_response(403)
                 self.end_headers()
                 return
@@ -300,6 +308,270 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
                 return
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/execution-insights'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            import csv
+            import re
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            executions = project_manager.list_executions(slug, test_slug)
+            completed = [ex for ex in executions if ex.get("status") != "RUNNING"]
+            
+            if not completed:
+                self._json({'success': True, 'execution_id': None, 'insights': []})
+                return
+                
+            latest_exec = completed[-1]
+            execution_id = latest_exec["id"]
+            exec_dir = os.path.join(test_dir, "executions", execution_id)
+            
+            report_csv = os.path.join(exec_dir, "reports", "relatorio_execucao.csv")
+            if not os.path.exists(report_csv):
+                report_csv = os.path.join(exec_dir, "relatorio_execucao.csv")
+                
+            steps_json = os.path.join(exec_dir, "reports", "historico_passos.json")
+            if not os.path.exists(steps_json):
+                steps_json = os.path.join(exec_dir, "historico_passos.json")
+                
+            if not os.path.exists(report_csv):
+                self._json({'success': True, 'execution_id': execution_id, 'insights': []})
+                return
+                
+            failed_transactions = []
+            try:
+                with open(report_csv, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row.get("status") not in ["SUCCESS", "SUCCESS_BLOCKED"]:
+                            failed_transactions.append(row)
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao ler CSV de relatório: {e}'}, 500)
+                return
+                
+            if not failed_transactions:
+                self._json({'success': True, 'execution_id': execution_id, 'insights': []})
+                return
+                
+            steps_history = []
+            if os.path.exists(steps_json):
+                try:
+                    with open(steps_json, "r", encoding="utf-8") as f:
+                        steps_history = json.load(f)
+                except:
+                    pass
+                    
+            insights = []
+            diag_regex = re.compile(r"IA DIAGNOSE \[(?P<cat>[^\]]+)\]:\s*(?P<cause>.*?)\s*\(Recomendação:\s*(?P<fix>.*?)\)")
+            
+            for tr in failed_transactions:
+                row_id = tr.get("id")
+                err_msg = tr.get("error_message") or ""
+                failed_field = tr.get("failed_field") or "Unknown"
+                
+                failed_step = None
+                tr_steps = [s for s in steps_history if str(s.get("row_id")) == str(row_id)]
+                if tr_steps:
+                    failed_steps = [s for s in tr_steps if s.get("status") == "FAILED"]
+                    if failed_steps:
+                        failed_step = failed_steps[-1]
+                    else:
+                        failed_step = tr_steps[-1]
+                
+                action = failed_step.get("type", "Unknown") if failed_step else "Unknown"
+                selector = failed_step.get("selector", failed_field) if failed_step else failed_field
+                description = failed_step.get("desc", "") if failed_step else ""
+                
+                match = diag_regex.search(err_msg)
+                if match:
+                    category = match.group("cat").strip()
+                    root_cause = match.group("cause").strip()
+                    proposed_fix = match.group("fix").strip()
+                else:
+                    category = "UNKNOWN"
+                    root_cause = err_msg
+                    if "waiting for locator" in err_msg.lower():
+                        proposed_fix = "Verificar se o seletor mudou no DOM da página alvo ou se há necessidade de espera adicional."
+                    else:
+                        proposed_fix = "Analisar o log e ajustar as propriedades do seletor ou a temporização do fluxo."
+                
+                screenshot_rel = f"screenshots/screenshot_erro_transacao_{row_id}.png"
+                screenshot_abs = os.path.join(exec_dir, screenshot_rel)
+                if not os.path.exists(screenshot_abs):
+                    screenshot_rel = f"screenshot_erro_transacao_{row_id}.png"
+                    screenshot_abs = os.path.join(exec_dir, screenshot_rel)
+                
+                has_screenshot = os.path.exists(screenshot_abs)
+
+                insights.append({
+                    "transaction_id": row_id,
+                    "action": action,
+                    "selector": selector,
+                    "description": description,
+                    "category": category,
+                    "root_cause": root_cause,
+                    "proposed_fix": proposed_fix,
+                    "error_message": err_msg,
+                    "screenshot": screenshot_rel if has_screenshot else None
+                })
+                
+            self._json({
+                'success': True,
+                'execution_id': execution_id,
+                'insights': insights
+            })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/correcoes-status'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            pending_count = 0
+            applied_count = 0
+            corrections = []
+            
+            if os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "r", encoding="utf-8") as f:
+                        corrections = json.load(f)
+                    pending_count = len([c for c in corrections if c.get("status") == "pending"])
+                    applied_count = len([c for c in corrections if c.get("status") == "applied"])
+                except:
+                    pass
+                    
+            self._json({
+                'success': True,
+                'pending': pending_count,
+                'applied': applied_count,
+                'total': len(corrections)
+            })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions-evolution'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            versions = project_manager.list_versions(slug, test_slug)
+            executions = project_manager.list_executions(slug, test_slug)
+            
+            evolution = []
+            
+            all_versions_ids = [v["id"] for v in versions]
+            if any(ex.get("scenario_version") in [None, "draft", ""] for ex in executions):
+                all_versions_ids.insert(0, "draft")
+                
+            for v_id in all_versions_ids:
+                if v_id == "draft":
+                    v_meta = {
+                        "id": "draft",
+                        "name": "Rascunho Inicial",
+                        "description": "Estado inicial antes do congelamento da versão v1",
+                        "created_at": None,
+                        "status": "draft"
+                    }
+                else:
+                    v_meta = next((v for v in versions if v["id"] == v_id), None)
+                    if not v_meta:
+                        continue
+                        
+                v_execs = [ex for ex in executions if ex.get("scenario_version") == v_id and ex.get("status") != "RUNNING"]
+                
+                if not v_execs:
+                    evolution.append({
+                        "version_id": v_id,
+                        "version_name": v_meta["name"],
+                        "created_at": v_meta["created_at"],
+                        "has_execution": False,
+                        "metrics": None
+                    })
+                    continue
+                    
+                latest_exec = v_execs[-1]
+                execution_id = latest_exec["id"]
+                
+                total_transactions = latest_exec.get("total_runs", 0)
+                passed_transactions = latest_exec.get("passed_runs", 0)
+                failed_transactions = total_transactions - passed_transactions
+                
+                exec_dir = os.path.join(test_dir, "executions", execution_id)
+                steps_json = os.path.join(exec_dir, "reports", "historico_passos.json")
+                if not os.path.exists(steps_json):
+                    steps_json = os.path.join(exec_dir, "historico_passos.json")
+                    
+                success_steps = 0
+                healed_steps = 0
+                failed_steps = 0
+                has_steps_info = False
+                
+                if os.path.exists(steps_json):
+                    try:
+                        with open(steps_json, "r", encoding="utf-8") as sf:
+                            steps = json.load(sf)
+                        if isinstance(steps, list):
+                            has_steps_info = True
+                            for step in steps:
+                                status = step.get("status", "").upper()
+                                if status == "SUCCESS":
+                                    success_steps += 1
+                                elif status == "HEALED":
+                                    healed_steps += 1
+                                elif status == "FAILED":
+                                    failed_steps += 1
+                    except:
+                        pass
+                        
+                evolution.append({
+                    "version_id": v_id,
+                    "version_name": v_meta["name"],
+                    "created_at": v_meta["created_at"],
+                    "has_execution": True,
+                    "execution_id": execution_id,
+                    "timestamp": latest_exec.get("timestamp"),
+                    "status": latest_exec.get("status"),
+                    "duration_seconds": latest_exec.get("duration_seconds", 0),
+                    "metrics": {
+                        "transactions": {
+                            "total": total_transactions,
+                            "passed": passed_transactions,
+                            "failed": failed_transactions
+                        },
+                        "steps": {
+                            "has_data": has_steps_info,
+                            "success": success_steps,
+                            "healed": healed_steps,
+                            "failed": failed_steps
+                        }
+                    }
+                })
+                
+            self._json({
+                'success': True,
+                'evolution': evolution
+            })
 
         else:
             self.send_response(404)
@@ -875,6 +1147,60 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': True, 'project': meta})
             except Exception as e:
                 self._json({'success': False, 'message': str(e)}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/execution-insights/approve'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+            
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+                
+            execution_id = body.get('execution_id')
+            corrections_list = body.get('corrections', [])
+            
+            if not corrections_list:
+                self._json({'success': False, 'message': 'Nenhuma correção informada.'}, 400)
+                return
+                
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            existing_corrections = []
+            if os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "r", encoding="utf-8") as f:
+                        existing_corrections = json.load(f)
+                except:
+                    pass
+                    
+            now_str = datetime.now().isoformat()
+            ts_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            for idx, corr in enumerate(corrections_list):
+                new_corr = {
+                    "id": f"corr_{ts_suffix}_{idx+1}",
+                    "timestamp": now_str,
+                    "execution_id": execution_id,
+                    "failed_selector": corr.get("selector"),
+                    "action": corr.get("action"),
+                    "root_cause": corr.get("root_cause"),
+                    "proposed_fix": corr.get("proposed_fix"),
+                    "failed_screenshot": corr.get("screenshot"),
+                    "status": "pending"
+                }
+                existing_corrections.append(new_corr)
+                
+            try:
+                with open(corr_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_corrections, f, indent=4, ensure_ascii=False)
+                
+                project_manager.update_project_activity(slug)
+                self._json({'success': True, 'message': f'{len(corrections_list)} correções aprovadas e registradas com sucesso.'})
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao salvar correções: {e}'}, 500)
 
         else:
             self.send_response(404)

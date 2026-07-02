@@ -167,6 +167,17 @@ O **Aegis Blackbox** permite documentar a intenção funcional do processo de ne
 
 ---
 
+## 💡 Ciclo de Retroalimentação & Evolução de Versões (Melhoria Contínua)
+
+O ecossistema introduz um motor de melhoria contínua orientado por feedback visual e cognitivo para automatizar e auditar a evolução da estabilidade do robô:
+
+* **Ciclo de Feedback Cognitivo (Retroalimentação):** Quando o robô apresenta falhas durante a execução (Fase 5), o módulo de visão computacional multimodal da IA analisa a tela, identifica a causa raiz e elabora propostas de correções (`proposed_fix`). Esses insights são apresentados na aba **Histórico** do Cockpit com miniaturas das telas dos erros.
+* **Controle Humano (Aprovação de Insights):** O analista audita visualmente os erros e aprova as correções por meio de checkboxes. Uma vez aprovados, os insights são salvos em `correcoes_acumuladas.json` com status `"pending"`.
+* **Retroalimentação na Geração de Código:** Ao rodar a Fase 4 (Gerador de Código), os insights aprovados pendentes são injetados no prompt da LLM. O gerador aplica as correções no código do `bot_producao.py` e atualiza o status das correções para `"applied"`, fechando o ciclo de melhoria contínua.
+* **Evolução de Versões & Não Regressão:** Um painel de acompanhamento na aba **Histórico** exibe a linha do tempo evolutiva das versões geradas para o cenário de teste. O analista pode auditar métricas como taxa de sucesso de transações do lote, total de passos físicos concluídos, quantidade de auto-healing utilizado e status de estabilidade por versão, prevenindo regressões de código ao longo do tempo.
+
+---
+
 ## 🔗 Módulo Aegis DevOps (REST API v7.1)
 
 O módulo `aegis_devops/` fornece integração nativa com o **Azure DevOps** utilizando estritamente a API REST v7.1 (autenticação por PAT):

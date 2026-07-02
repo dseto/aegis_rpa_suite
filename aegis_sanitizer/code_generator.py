@@ -220,6 +220,28 @@ Exemplo de chamada de Skill:
 `run_skill_login(page, usuario=row["email_usuario"], senha=row["senha_usuario"], runner=runner)`
 """
 
+        # Leitura das correções pendentes acumuladas do ciclo de feedback
+        correcoes_prompt = ""
+        correcoes_acumuladas_path = os.path.join(self.project_dir, "correcoes_acumuladas.json")
+        pending_corrections = []
+        if os.path.exists(correcoes_acumuladas_path):
+            try:
+                with open(correcoes_acumuladas_path, "r", encoding="utf-8") as cf:
+                    all_corrs = json.load(cf)
+                pending_corrections = [c for c in all_corrs if c.get("status") == "pending"]
+            except Exception as e:
+                print(f"[WARNING] Falha ao ler correcoes_acumuladas.json: {e}")
+
+        if pending_corrections:
+            print(f"[INFO] Detectadas {len(pending_corrections)} correções pendentes aprovadas para aplicação.")
+            correcoes_prompt = "\n---\n\n### 🛠️ 5. FEEDBACK DE ERROS E CORREÇÕES OBRIGATÓRIAS (RETROALIMENTAÇÃO)\n"
+            correcoes_prompt += "Na última execução deste robô, ocorreram falhas físicas e de sincronização. "
+            correcoes_prompt += "Você deve obrigatoriamente aplicar as seguintes correções críticas no código gerado:\n\n"
+            for idx, corr in enumerate(pending_corrections):
+                correcoes_prompt += f"{idx+1}. Para a ação de '{corr.get('action')}' no seletor '{corr.get('failed_selector')}':\n"
+                correcoes_prompt += f"   - Problema Identificado: {corr.get('root_cause')}\n"
+                correcoes_prompt += f"   - Correção Solicitada: {corr.get('proposed_fix')}\n\n"
+
         # 4. Constrói o Prompt de Compilação para a LLM
         print("[INFO] Montando prompt estruturado para o motor de IA...")
         prompt = f"""
@@ -245,6 +267,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
 {report_content}
 ```
 {skills_info_prompt}
+{correcoes_prompt}
 
 ---
 
@@ -389,6 +412,21 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         print(f"[INFO] Gravando arquivo do robô em: {bot_path}")
         with open(bot_path, "w", encoding="utf-8") as f:
             f.write(generated_code)
+
+        # 7.2. Atualiza o status das correções aplicadas no JSON histórico
+        if pending_corrections and os.path.exists(correcoes_acumuladas_path):
+            try:
+                with open(correcoes_acumuladas_path, "r", encoding="utf-8") as cf:
+                    all_corrs = json.load(cf)
+                for corr in all_corrs:
+                    if corr.get("status") == "pending":
+                        corr["status"] = "applied"
+                        corr["applied_at"] = datetime.now().isoformat()
+                with open(correcoes_acumuladas_path, "w", encoding="utf-8") as cf:
+                    json.dump(all_corrs, cf, indent=4, ensure_ascii=False)
+                print(f"[INFO] {len(pending_corrections)} correções foram marcadas como 'aplicadas' (applied) no histórico.")
+            except Exception as e:
+                print(f"[WARNING] Falha ao atualizar status de correções em correcoes_acumuladas.json: {e}")
 
         # 7.5. Grava o arquivo de índice JSON
         index_data = {

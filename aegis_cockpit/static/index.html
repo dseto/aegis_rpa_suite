@@ -1057,6 +1057,11 @@
                         <p class="step-desc">Gera o robô resiliente via Inteligência Artificial.</p>
                         <div style="margin-top: auto;">
                             <button id="btn-run-generator" class="btn btn-accent" style="background: linear-gradient(135deg, #ec4899 0%, #be185d 100%); width: 100%;" disabled>🤖 Gerar Robô</button>
+                            <div id="feedback-badge-container" style="margin-top: 8px; display: none; text-align: center;">
+                                <span style="background: var(--accent); color: #fff; font-size: 10px; padding: 4px 8px; border-radius: 4px; display: inline-block; font-weight: bold; box-shadow: 0 2px 8px rgba(217,70,239,0.3);">
+                                    ✨ <span id="feedback-pending-count">0</span> correções pendentes
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -1161,6 +1166,31 @@
             
             <div id="tab-history" class="tab-content">
                 <div class="history-container" style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden; padding: 10px 0;">
+                    <!-- Painel de Evolução de Versões (Prevenção de Regressões) -->
+                    <div class="card" id="versions-evolution-card" style="padding: 12px; margin-bottom: 4px; border: 1px solid rgba(139, 92, 246, 0.25); background: rgba(139, 92, 246, 0.02); flex: 0 0 auto;">
+                        <div style="font-weight: 700; color: #fff; font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                            <span>📈 Evolução das Versões do Robô (Controle de Regressões)</span>
+                        </div>
+                        <div class="table-wrap" style="max-height: 120px; overflow-y: auto;">
+                            <table style="font-size: 11px;">
+                                <thead>
+                                    <tr>
+                                        <th>Versão</th>
+                                        <th>Data/Hora Snapshot</th>
+                                        <th>Última Execução</th>
+                                        <th>Transações (Sucesso / Total)</th>
+                                        <th>Passes Físicos (Sucesso / Total)</th>
+                                        <th>Auto-Healing Físico</th>
+                                        <th>Status de Qualidade</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="evolution-list-tbody">
+                                    <tr><td colspan="7" class="empty-msg" style="text-align:center;">Nenhuma versão registrada.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
                     <div class="table-wrap" style="max-height: 180px; flex: 0 0 auto; overflow-y: auto;">
                         <table>
                             <thead>
@@ -1196,7 +1226,7 @@
                             <!-- Logs do Terminal -->
                             <div style="display: flex; flex-direction: column; min-height: 0;">
                                 <label style="margin-bottom: 4px;">📟 Log do Processo</label>
-                                <pre id="history-log-view" class="terminal-box" style="flex: 1; margin-top: 0; padding: 8px; font-size: 10px; overflow-y: auto; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; font-family: 'Fira Code', monospace;"></pre>
+                                <pre id="history-log-view" class="terminal-box" style="flex: 1; margin-top: 0; padding: 8px; font-size: 10px; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; word-break: break-all; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; font-family: 'Fira Code', monospace;"></pre>
                             </div>
 
                             <!-- Evidência Visual (Screenshot) -->
@@ -1205,6 +1235,21 @@
                                 <div id="history-screenshot-view" style="flex: 1; display: flex; align-items: center; justify-content: center; background: #04040a; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; overflow: hidden; position: relative;">
                                     <div class="empty-msg" style="text-align: center;">Clique em um passo com 📸 para ver o screenshot correspondente.</div>
                                 </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Painel de Insights de Correção (Retroalimentação) -->
+                        <div id="feedback-insights-panel" style="display: none; background: rgba(124, 58, 237, 0.05); border: 1px solid var(--primary); border-radius: 8px; padding: 12px; margin-top: 10px; flex-direction: column; gap: 10px; flex: 0 0 auto;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255, 255, 255, 0.1); padding-bottom: 6px;">
+                                <span style="font-weight: 700; color: #fff; font-size: 12px; display: flex; align-items: center; gap: 6px;">
+                                    💡 Insights & Propostas de Correção Cognitiva (Última Execução)
+                                </span>
+                                <button class="btn btn-accent btn-sm" id="btn-approve-corrections" onclick="approveSelectedCorrections()" style="width: auto; padding: 4px 12px; font-size: 11px; display: flex; align-items: center; gap: 4px;" disabled>
+                                    ✔️ Aprovar Correções Selecionadas
+                                </button>
+                            </div>
+                            <div id="feedback-insights-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 150px; overflow-y: auto;">
+                                <!-- Preenchido via JavaScript -->
                             </div>
                         </div>
                     </div>
@@ -4101,6 +4146,8 @@
                         </tr>`;
                     });
                     tbody.innerHTML = html;
+                    loadVersionsEvolution();
+                    loadCorrecoesStatus();
                 })
                 .catch(err => console.error('Erro ao buscar execuções:', err));
         }
@@ -4145,10 +4192,13 @@
                     
                     const badge = document.getElementById('history-detail-badge');
                     let status = 'SUCCESS';
+                    let hasErrors = false;
                     if (data.report && data.report.length > 0) {
-                        const anyFail = data.report.some(r => r.status === 'SYSTEM_FAILED' || r.status === 'FAILED_WRONG_BUSINESS_ERROR');
-                        status = anyFail ? 'FAILED' : 'SUCCESS';
+                        hasErrors = data.report.some(r => r.status === 'SYSTEM_FAILED' || r.status === 'FAILED_WRONG_BUSINESS_ERROR');
+                        status = hasErrors ? 'FAILED' : 'SUCCESS';
                     }
+                    
+                    loadExecutionInsights(executionId, hasErrors);
                     
                     if (status === 'SUCCESS') {
                         badge.className = 'status-badge status-idle';
@@ -4163,6 +4213,216 @@
                     document.getElementById('history-detail-panel').style.display = 'flex';
                 })
                 .catch(err => console.error('Erro ao buscar detalhes da execução:', err));
+        }
+
+        // ── Funções de Retroalimentação (Feedback Loop) e Evolução de Versões ──
+        
+        function loadCorrecoesStatus() {
+            if (!activeProjectSlug || !activeTestSlug) {
+                const container = document.getElementById('feedback-badge-container');
+                if (container) container.style.display = 'none';
+                return;
+            }
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes-status`)
+                .then(r => r.json())
+                .then(data => {
+                    const badgeContainer = document.getElementById('feedback-badge-container');
+                    const countSpan = document.getElementById('feedback-pending-count');
+                    if (badgeContainer && countSpan) {
+                        if (data.success && data.pending > 0) {
+                            countSpan.innerText = data.pending;
+                            badgeContainer.style.display = 'block';
+                        } else {
+                            badgeContainer.style.display = 'none';
+                        }
+                    }
+                })
+                .catch(err => console.error('Erro ao buscar status de correções:', err));
+        }
+
+        let activeExecutionInsights = [];
+
+        function loadExecutionInsights(executionId, hasErrors) {
+            const panel = document.getElementById('feedback-insights-panel');
+            const listDiv = document.getElementById('feedback-insights-list');
+            const btnApprove = document.getElementById('btn-approve-corrections');
+            
+            if (!panel || !listDiv || !btnApprove) return;
+            
+            if (!hasErrors) {
+                panel.style.display = 'none';
+                activeExecutionInsights = [];
+                return;
+            }
+            
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/execution-insights`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.insights && data.insights.length > 0) {
+                        activeExecutionInsights = data.insights;
+                        
+                        let html = '';
+                        data.insights.forEach((insight, idx) => {
+                            let imgHtml = '';
+                            if (insight.screenshot) {
+                                const imgUrl = `/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/executions/${encodeURIComponent(executionId)}/files/${encodeURIComponent(insight.screenshot)}`;
+                                imgHtml = `
+                                    <div style="flex: 0 0 60px; height: 60px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); cursor: pointer;" title="Visualizar print de erro" onclick="showStepScreenshot('${executionId}', '${insight.screenshot}')">
+                                        <img src="${imgUrl}" style="width: 100%; height: 100%; object-fit: cover;" />
+                                    </div>
+                                `;
+                            }
+                            html += `
+                                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 10px; display: flex; gap: 10px; align-items: center; margin-bottom: 6px;">
+                                    <label class="checkbox-container" style="margin-top: 0; padding-left: 20px; flex: 0 0 auto;">
+                                        <input type="checkbox" class="correction-checkbox" data-index="${idx}" checked onchange="updateApproveButtonState()" />
+                                        <span class="checkmark"></span>
+                                    </label>
+                                    ${imgHtml}
+                                    <div style="flex: 1; font-size: 11px;">
+                                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                            <strong style="color: #fff;">Transação #${insight.transaction_id} &bull; Passo: ${insight.action} (${insight.selector})</strong>
+                                            <span style="font-size: 9px; font-weight: bold; color: var(--accent); background: rgba(217,70,239,0.1); padding: 1px 4px; border-radius: 3px;">${insight.category}</span>
+                                        </div>
+                                        <div style="margin-bottom: 4px;"><span style="color: var(--text-muted);">Causa Raiz:</span> ${insight.root_cause}</div>
+                                        <div style="font-weight: bold; color: #10b981;"><span style="color: var(--text-muted); font-weight: normal;">Correção Recomendada:</span> ${insight.proposed_fix}</div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        listDiv.innerHTML = html;
+                        panel.style.display = 'flex';
+                        btnApprove.disabled = false;
+                    } else {
+                        panel.style.display = 'none';
+                        activeExecutionInsights = [];
+                    }
+                })
+                .catch(err => {
+                    console.error('Erro ao buscar insights:', err);
+                    panel.style.display = 'none';
+                    activeExecutionInsights = [];
+                });
+        }
+        
+        function updateApproveButtonState() {
+            const chks = document.querySelectorAll('.correction-checkbox:checked');
+            const btn = document.getElementById('btn-approve-corrections');
+            if (btn) btn.disabled = chks.length === 0;
+        }
+
+        function approveSelectedCorrections() {
+            if (!activeProjectSlug || !activeTestSlug || activeExecutionInsights.length === 0) return;
+            
+            const chks = document.querySelectorAll('.correction-checkbox:checked');
+            if (chks.length === 0) return;
+            
+            const selectedIndices = Array.from(chks).map(chk => parseInt(chk.dataset.index));
+            const correctionsToApprove = selectedIndices.map(idx => activeExecutionInsights[idx]);
+            
+            const payload = {
+                execution_id: activeHistoryExecutionId,
+                corrections: correctionsToApprove
+            };
+            
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/execution-insights/approve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('🎉 Correções aprovadas com sucesso! Elas serão aplicadas pelo Gerador de Código na Fase 4.');
+                    const panel = document.getElementById('feedback-insights-panel');
+                    if (panel) panel.style.display = 'none';
+                    loadCorrecoesStatus();
+                } else {
+                    alert('Erro ao aprovar correções: ' + data.message);
+                }
+            })
+            .catch(err => {
+                console.error('Erro ao enviar aprovação:', err);
+                alert('Erro ao conectar ao servidor para salvar correções.');
+            });
+        }
+
+        function loadVersionsEvolution() {
+            if (!activeProjectSlug || !activeTestSlug) return;
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/versions-evolution`)
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('evolution-list-tbody');
+                    if (!tbody) return;
+                    
+                    if (!data.success || !data.evolution || data.evolution.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="7" class="empty-msg" style="text-align:center;">Nenhuma versão executada no histórico.</td></tr>';
+                        return;
+                    }
+                    
+                    let html = '';
+                    data.evolution.forEach(ev => {
+                        let versionDisplay = `<strong>${ev.version_id}</strong>`;
+                        if (ev.version_id !== 'draft') {
+                            versionDisplay += ` &bull; ${ev.version_name}`;
+                        } else {
+                            versionDisplay = `<strong>Rascunho</strong>`;
+                        }
+                        
+                        let dateDisplay = ev.created_at ? fmtDate(ev.created_at) : 'N/A';
+                        
+                        if (!ev.has_execution) {
+                            html += `
+                                <tr class="proj-grid-card-row">
+                                    <td>${versionDisplay}</td>
+                                    <td style="font-size:11px;">${dateDisplay}</td>
+                                    <td colspan="5" class="empty-msg" style="text-align:center;font-size:10px;">Sem execuções concluídas para esta versão</td>
+                                </tr>
+                            `;
+                            return;
+                        }
+                        
+                        const tx = ev.metrics.transactions;
+                        const txSuccessPercent = tx.total > 0 ? Math.round((tx.passed / tx.total) * 100) : 0;
+                        const txDisplay = `${txSuccessPercent}% (${tx.passed}/${tx.total})`;
+                        
+                        let stepsDisplay = 'N/A';
+                        let healingDisplay = 'N/A';
+                        if (ev.metrics.steps.has_data) {
+                            const st = ev.metrics.steps;
+                            const totalSteps = st.success + st.healed + st.failed;
+                            stepsDisplay = `${st.success + st.healed}/${totalSteps} passos`;
+                            healingDisplay = st.healed > 0 ? `<span style="color:var(--accent);font-weight:bold;">${st.healed} passos healed</span>` : 'Nenhum';
+                        }
+                        
+                        let statusHtml = '';
+                        if (txSuccessPercent === 100) {
+                            statusHtml = '<span class="status-pill pill-executed" style="font-size:9px;padding:2px 6px;">✓ 100% Estável</span>';
+                        } else {
+                            statusHtml = '<span class="status-pill pill-recorded" style="font-size:9px;padding:2px 6px;background:rgba(217,70,239,0.1);color:var(--accent);border:1px solid rgba(217,70,239,0.3);">⚠️ Falhas de Execução</span>';
+                        }
+                        
+                        html += `
+                            <tr class="proj-grid-card-row">
+                                <td>${versionDisplay}</td>
+                                <td style="font-size:11px;">${dateDisplay}</td>
+                                <td style="font-size:11px;font-family:monospace;">${ev.execution_id}</td>
+                                <td><span class="status-pill ${txSuccessPercent === 100 ? 'pill-executed' : 'pill-recorded'}" style="font-size:10px;">${txDisplay}</span></td>
+                                <td>${stepsDisplay}</td>
+                                <td>${healingDisplay}</td>
+                                <td>${statusHtml}</td>
+                            </tr>
+                        `;
+                    });
+                    tbody.innerHTML = html;
+                })
+                .catch(err => {
+                    console.error('Erro ao carregar evolução de versões:', err);
+                    const tbody = document.getElementById('evolution-list-tbody');
+                    if (tbody) {
+                        tbody.innerHTML = '<tr><td colspan="7" class="empty-msg" style="text-align:center;">Erro ao carregar dados de evolução.</td></tr>';
+                    }
+                });
         }
 
         function updateVersionAndOpsPanel() {
