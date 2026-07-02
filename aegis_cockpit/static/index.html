@@ -4357,23 +4357,39 @@
                         return;
                     }
 
-                    // Contadores para o badge de resumo
+                    // Contadores para o badge de resumo (considera todos, incluindo resolvidos)
                     const counts = { pending: 0, applied: 0, failed_attempt: 0, resolved: 0 };
                     corrs.forEach(c => { if (counts[c.status] !== undefined) counts[c.status]++; });
 
                     const openCount = counts.pending + counts.applied + counts.failed_attempt;
                     if (openCount > 0) {
-                        statsBadge.textContent = `${openCount} em aberto · ${counts.failed_attempt} falha(s) repetida(s) · ${counts.resolved} resolvido(s)`;
+                        statsBadge.textContent = `${openCount} em aberto · ${counts.failed_attempt} falha(s) repetida(s)`;
+                        statsBadge.style.background = 'rgba(239,68,68,0.15)';
+                        statsBadge.style.borderColor = 'rgba(239,68,68,0.35)';
+                        statsBadge.style.color = '#f87171';
                         statsBadge.style.display = 'inline-block';
-                    } else {
-                        statsBadge.textContent = `${counts.resolved} problema(s) resolvido(s)`;
+                    } else if (counts.resolved > 0) {
+                        statsBadge.textContent = `✅ ${counts.resolved} problema(s) resolvido(s)`;
                         statsBadge.style.background = 'rgba(34,197,94,0.15)';
                         statsBadge.style.borderColor = 'rgba(34,197,94,0.35)';
                         statsBadge.style.color = '#4ade80';
                         statsBadge.style.display = 'inline-block';
+                    } else {
+                        statsBadge.style.display = 'none';
                     }
 
-                    // Agrupar por failed_selector + action para contar tentativas fracassadas
+                    // Filtra: mostra apenas bugs em aberto (resolved sai do grid)
+                    const openCorrs = corrs.filter(c => c.status !== 'resolved');
+
+                    if (openCorrs.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:12px;">
+                            <span style="color:#4ade80;font-size:12px;">✅ Nenhum bug em aberto neste cenário.</span><br>
+                            <span style="color:#4b5563;font-size:10px;">${counts.resolved > 0 ? counts.resolved + ' problema(s) já foram resolvidos.' : ''}</span>
+                        </td></tr>`;
+                        return;
+                    }
+
+                    // Agrupar por failed_selector + action para contar tentativas fracassadas (base completa)
                     const failedCountMap = {};
                     corrs.forEach(c => {
                         const key = `${c.action}||${c.failed_selector}`;
@@ -4383,9 +4399,9 @@
                     });
 
                     let html = '';
-                    // Ordena: em aberto primeiro, depois resolvidos
-                    const sorted = [...corrs].sort((a, b) => {
-                        const order = { failed_attempt: 0, pending: 1, applied: 2, resolved: 3 };
+                    // Ordena por prioridade: falhou primeiro, depois aguardando, depois aplicado
+                    const sorted = [...openCorrs].sort((a, b) => {
+                        const order = { failed_attempt: 0, pending: 1, applied: 2 };
                         return (order[a.status] ?? 99) - (order[b.status] ?? 99);
                     });
 
