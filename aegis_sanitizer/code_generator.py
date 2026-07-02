@@ -427,11 +427,17 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
 10. **Geração Unificada de Fluxo (Crítico):**
     A telemetria ou o relatório de passos pode conter marcações de diferentes sub-cenários (ex: 'login', 'passo_1_cliente', 'passo_2_veiculo'). Você é **PROIBIDO** de separar esses passos em funções de cenários diferentes no TransactionRunner. Você deve compilar todos os passos descritos no relatório, do primeiro ao último, sequencialmente de forma linear dentro de uma única função principal `execute_scenario_default`. Apenas o cenário `"default"` deve ser registrado e executado no runner.
 11. **Saída:**
-    Retorne **EXCLUSIVAMENTE** o código Python estruturado, embalado em um bloco de código markdown:
+    Retorne **EXCLUSIVAMENTE** o código Python estruturado, envelopado em um bloco de código markdown:
     ```python
     # código aqui
     ```
-    Não forneça explicações, observações ou introduções. Apenas o código.
+    Não dê explicações ou introduções. Apenas o código.
+12. **Comentários de Identificação de Passos (Obrigatório):**
+    Cada passo de automação implementado no código DEVE ser obrigatoriamente precedido por um comentário de linha iniciando exatamente no formato `# [PASSO X] Descrição do Passo`, onde `X` é o número (index) do respectivo passo conforme descrito no relatório de telemetria/passos. Isso é essencial para manter a rastreabilidade e permitir que correções cirúrgicas futuras saibam exatamente onde aplicar modificações sem danificar partes funcionais do robô. Exemplo:
+    ```python
+    # [PASSO 1] E-mail de Login
+    runner.fill_resilient(page, selector="#username", text_val=row.get("email_login", ""), target_description="E-mail de Login")
+    ```
 """
         print(f"[INFO] Conectando ao Gateway de IA ({gateway.provider} / {gateway.model})...")
         print("[INFO] Solicitando geração de código baseada em resiliência técnica...")
@@ -548,6 +554,10 @@ Você DEVE seguir rigorosamente os princípios de simplicidade e alteração cir
 4. **Proibição Absoluta de Hardcodes**:
    - NUNCA insira valores fixos/hardcoded como CPFs, nomes, datas ou opções nas chamadas de interação (ex: use `row.get("cpf_cliente", "")` ou `row["campo"]`, nunca strings de teste).
    - É terminantemente proibido utilizar valores de dados do negócio observados como fallback de `.get()` (ex: usar `row.get("sexo_cliente", "Masculino")` é proibido; use `row.get("sexo_cliente", "")`).
+5. **Comentários de Rastreabilidade e Isolamento de Passos**:
+   - Você DEVE manter e adicionar comentários do formato `# [PASSO X] Descrição do Passo` precedendo cada ação alterada ou inserida.
+   - Use os comentários de passo pré-existentes no código fonte para se guiar de forma cirúrgica, alterando unicamente o bloco de comandos associado ao passo problemático e preservando intactos todos os demais passos funcionais.
+
 
 ---
 
