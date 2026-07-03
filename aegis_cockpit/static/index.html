@@ -3644,7 +3644,7 @@
                 if (!rec || !rec.events || !rec.events.length) return [];
                 const steps = [];
                 const events = rec.events || [];
-                events.forEach(evt => {
+                events.forEach((evt, idx) => {
                     if (evt.type === 'call_skill') {
                         const skillSlug = evt.skill_slug;
                         const skillRec = skillsRec ? skillsRec[skillSlug] : null;
@@ -3659,11 +3659,11 @@
                                     } else {
                                         actionDesc = sev.text || sev.value || 'Interação';
                                     }
-                                    steps.push({ type: sev.type, selector: sev.selector || '', desc: `[Skill: ${skillSlug}] ${actionDesc}` });
+                                    steps.push({ type: sev.type, selector: sev.selector || '', desc: `[Skill: ${skillSlug}] ${actionDesc}`, event_index: idx });
                                 }
                             });
                         } else {
-                            steps.push({ type: 'click', selector: '', desc: `Executar Skill: ${skillSlug}` });
+                            steps.push({ type: 'click', selector: '', desc: `Executar Skill: ${skillSlug}`, event_index: idx });
                         }
                     } else if (evt.type === 'click' || evt.type === 'fill' || evt.type === 'change' || evt.type === 'select') {
                         let actionDesc = '';
@@ -3674,7 +3674,7 @@
                         } else {
                             actionDesc = evt.text || evt.value || 'Interação';
                         }
-                        steps.push({ type: evt.type, selector: evt.selector || '', desc: actionDesc });
+                        steps.push({ type: evt.type, selector: evt.selector || '', desc: actionDesc, event_index: idx });
                     }
                 });
                 return steps;
@@ -3683,18 +3683,37 @@
             // ── Caso 1: Há histórico real da última execução ──────────────────────────
             if (stepsHistory && stepsHistory.length > 0) {
                 // Usa os passos reais como base (status preciso do runner)
-                robotSteps = stepsHistory.map((s, idx) => ({
-                    index: s.index || idx + 1,
-                    exec_order: s.index || idx + 1,
-                    type: s.type,
-                    selector: s.selector,
-                    desc: s.desc,
-                    status: s.status,
-                    error: s.error || '',
-                    usedHealing: s.usedHealing || false,
-                    screenshot: s.screenshot || null,
-                    row_id: s.row_id || null
-                }));
+                // Se o histórico não tem event_index (legado do runner), tenta inferir do recording
+                const needsEventIndex = stepsHistory.length > 0 && stepsHistory[0].event_index === undefined;
+                const recordingEvents = (recording && recording.events) ? recording.events : [];
+                const usedEventIndices = new Set();
+
+                robotSteps = stepsHistory.map((s, idx) => {
+                    let evIdx = s.event_index !== undefined ? s.event_index : null;
+                    if (evIdx === null && needsEventIndex && recordingEvents.length > 0) {
+                        // Tenta match por selector + type contra gravacao.json, pulando índices já usados
+                        const matchIdx = recordingEvents.findIndex((ev, i) =>
+                            !usedEventIndices.has(i) && ev.type === s.type && ev.selector === s.selector
+                        );
+                        if (matchIdx !== -1) {
+                            evIdx = matchIdx;
+                            usedEventIndices.add(matchIdx);
+                        }
+                    }
+                    return {
+                        index: s.index || idx + 1,
+                        exec_order: s.index || idx + 1,
+                        type: s.type,
+                        selector: s.selector,
+                        desc: s.desc,
+                        status: s.status,
+                        error: s.error || '',
+                        usedHealing: s.usedHealing || false,
+                        screenshot: s.screenshot || null,
+                        row_id: s.row_id || null,
+                        event_index: evIdx
+                    };
+                });
 
                 // Complementa com passos planejados que não chegaram a ser executados.
                 // Só faz isso se o histórico é cru (sem STOPPED) — se já tem STOPPED,
@@ -3715,7 +3734,8 @@
                                 error: '',
                                 usedHealing: false,
                                 screenshot: null,
-                                row_id: null
+                                row_id: null,
+                                event_index: planned[i].event_index !== undefined ? planned[i].event_index : null
                             });
                         }
                     }
@@ -3761,7 +3781,8 @@
                 desc: s.desc,
                 status: 'PENDING',
                 error: '',
-                usedHealing: false
+                usedHealing: false,
+                event_index: s.event_index !== undefined ? s.event_index : null
             }));
 
             currentStepIndex = 0;

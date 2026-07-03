@@ -39,6 +39,107 @@ def get_html_content() -> bytes:
     return _html_cache
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _regenerate_report_safe(proj_dir: str, gravacao_data: dict):
+    """Regenera relatorio.md a partir de gravacao.json e dicionario.json,
+    sem disparar refine_semantics_with_llm (sem chamadas LLM)."""
+    dict_path = os.path.join(proj_dir, "dicionario.json")
+    if not os.path.exists(dict_path):
+        print("[WARNING] dicionario.json nao encontrado, pulando regeneracao de relatorio.md")
+        return
+
+    with open(dict_path, "r", encoding="utf-8") as f:
+        dict_data = json.load(f)
+
+    events = gravacao_data.get("events", [])
+    initial_url = gravacao_data.get("initial_url", dict_data.get("initial_url", ""))
+    network = gravacao_data.get("network_payloads", {})
+
+    markdown = []
+    markdown.append(f"# Relatorio de Telemetria Aegis RPA Suite V2")
+    markdown.append(f"\n* **URL Alvo:** {initial_url}")
+    markdown.append(f"* **Total de Acoes Gravadas:** {len(events)}")
+    markdown.append(f"* **Respostas de Rede Interceptadas:** {len(network.keys())}")
+    markdown.append("\n" + "-" * 60)
+
+    # Dicionario de Dados
+    markdown.append("\n## Dicionario de Dados Parametrizado (Sintetizado)")
+    markdown.append("\nMapeamento fisico-semantico de campos de entrada e extracao:\n")
+    markdown.append("| Cenario | Chave Semantica (Coluna CSV) | Elemento | Seletor Fisico Mapeado | Confiabilidade | Tipo de Seletor | Valor Observado | Fill Strategy |")
+    markdown.append("| :---: | :--- | :---: | :--- | :---: | :---: | :--- | :---: |")
+
+    inputs_list = dict_data.get("inputs", [])
+    if not inputs_list and "fields" in dict_data:
+        for sem_key, field_info in dict_data["fields"].items():
+            inputs_list.append({
+                "scenario": "default",
+                "semantic_key": sem_key,
+                "type": field_info.get("type", "string"),
+                "selector": field_info.get("selector", ""),
+                "observed_value": field_info.get("observed_value", ""),
+                "confidence": field_info.get("confidence", 40),
+                "selector_type": field_info.get("selector_type", "tag"),
+                "fill_strategy": field_info.get("fill_strategy", "DIRECT")
+            })
+
+    for inp in inputs_list:
+        conf = inp.get("confidence", 40)
+        badge = "🟢 ALTA" if conf >= 90 else "🟡 MÉDIA" if conf >= 70 else "🔴 BAIXA"
+        strategy = inp.get("fill_strategy", "DIRECT")
+        strategy_badge = "🧱 HUMAN_LIKE" if strategy == "HUMAN_LIKE" else "DIRECT"
+        markdown.append(f"| `{inp['scenario']}` | **`{inp['semantic_key']}`** | `{inp['type']}` | `{inp['selector']}` | {badge} ({conf}%) | `{inp.get('selector_type', 'tag')}` | \"{inp['observed_value']}\" | `{strategy_badge}` |")
+
+    # Fluxo de Passos
+    markdown.append("\n" + "-" * 60)
+    markdown.append("\n## Fluxo de Passos e Bifurcacoes por Cenario")
+    markdown.append(f"\n### Cenario Logico: `DEFAULT`")
+    markdown.append(f"\nTotal de acoes neste caminho: {len(events)}\n")
+    markdown.append("| Passo | Tipo | Elemento | Seletor Resiliente Sugerido | Valor / Acao |")
+    markdown.append("| :---: | :---: | :---: | :--- | :--- |")
+
+    for i, ev in enumerate(events):
+        ev_type = ev.get("type", "").upper()
+        if ev_type == "CALL_SKILL":
+            skill_slug = ev.get("skill_slug", "")
+            params_str = ", ".join([f"{k}={v}" for k, v in ev.get("parameters", {}).items()])
+            markdown.append(f"| **👉 CALL** | **SKILL** | `{skill_slug}` | *Parametros:* | `{params_str}` |")
+        elif ev_type == "ANNOTATION":
+            markdown.append(f"| **📝 REGRA** | **VALIDACAO** | `-` | *N/A (Nota de Negocio)* | **\"{ev.get('text', '')}\"** |")
+        else:
+            tag = ev.get("tag", "").lower()
+            if ev.get("is_date"):
+                tag = "input (data)"
+            selector = ev.get("selector", "")
+            val_text = ""
+            if ev_type == "CLICK":
+                x = ev.get("x_percent")
+                y = ev.get("y_percent")
+                coords_str = f" [coords: ({x:.4f}, {y:.4f})]" if (x is not None and y is not None) else ""
+                val_text = f"Clique em: '{ev.get('text', '')}'{coords_str}"
+            elif ev_type == "FILL":
+                if ev.get("is_date"):
+                    val_text = f"Preencheu data: '{ev.get('value', '')}'"
+                else:
+                    val_text = f"Preencheu com: '{ev.get('value', '')}'"
+            elif ev_type == "FILECHOOSER":
+                val_text = "Abriu o dialogo de selecao de arquivo"
+            elif ev_type == "CHANGE":
+                val_text = f"Alterou para: '{ev.get('value', '')}'"
+            elif ev_type == "SELECT":
+                val_text = f"Selecionou: '{ev.get('value', '')}'"
+
+            sel_display = f"`{selector}`"
+            if " >> " in selector:
+                sel_display = f"🧬 **Shadow DOM:** `{selector}`"
+            markdown.append(f"| {i+1} | `{ev_type}` | `{tag}` | {sel_display} | {val_text} |")
+
+    report_path = os.path.join(proj_dir, "relatorio.md")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(markdown))
+    print(f"[STEPS-HISTORY] relatorio.md regenerado em: {report_path}")
+
+
 # ─── HTTP Handler ─────────────────────────────────────────────────────────────
 
 class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -816,7 +917,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             try:
                 with open(history_path, "w", encoding="utf-8") as f:
                     json.dump(steps_data, f, indent=4, ensure_ascii=False)
-                
+
                 # Se houver um execution_id ativo, grava também dentro da pasta da execução
                 if execution_id:
                     exec_history_path = os.path.join(proj_dir, "executions", execution_id, "historico_passos.json")
@@ -826,7 +927,45 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                             json.dump(steps_data, f, indent=4, ensure_ascii=False)
                     except Exception as ex:
                         print(f"[WARNING] Falha ao gravar historico_passos na execucao: {ex}")
-                        
+
+                # Sincroniza gravacao.json e relatorio.md com os passos editados
+                # Coleta os event_index sobreviventes para filtrar gravacao.json
+                surviving_indices = set()
+                for step in steps_data:
+                    ei = step.get("event_index")
+                    if ei is not None:
+                        surviving_indices.add(int(ei))
+
+                if surviving_indices:
+                    gravacao_path = os.path.join(proj_dir, "gravacao.json")
+                    if os.path.exists(gravacao_path):
+                        try:
+                            with open(gravacao_path, "r", encoding="utf-8") as gf:
+                                gravacao_data = json.load(gf)
+                            events = gravacao_data.get("events", [])
+                            original_count = len(events)
+
+                            # Filtra mantendo apenas eventos cujos índices estão nos sobreviventes
+                            filtered_events = [
+                                ev for i, ev in enumerate(events)
+                                if i in surviving_indices
+                            ]
+
+                            if len(filtered_events) < original_count:
+                                gravacao_data["events"] = filtered_events
+                                with open(gravacao_path, "w", encoding="utf-8") as gf:
+                                    json.dump(gravacao_data, gf, indent=4, ensure_ascii=False)
+                                print(f"[STEPS-HISTORY] gravacao.json sincronizado: {original_count} -> {len(filtered_events)} eventos")
+
+                                # Regenera relatorio.md sem disparar refine_semantics_with_llm
+                                try:
+                                    _regenerate_report_safe(proj_dir, gravacao_data)
+                                    print(f"[STEPS-HISTORY] relatorio.md regenerado")
+                                except Exception as san_err:
+                                    print(f"[WARNING] Falha ao regenerar relatorio.md: {san_err}")
+                        except Exception as gv_err:
+                            print(f"[WARNING] Falha ao sincronizar gravacao.json: {gv_err}")
+
                 self._json({'success': True, 'message': 'Histórico de passos gravado.'})
             except Exception as e:
                 self._json({'success': False, 'message': str(e)}, 500)

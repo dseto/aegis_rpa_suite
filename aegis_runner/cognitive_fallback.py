@@ -91,6 +91,7 @@ class CognitiveGateway:
         # Define modelos padrão
         default_model = "google/gemini-2.5-flash" if self.provider == "openrouter" else "gemini-2.5-flash"
         self.model = os.getenv("AEGIS_COGNITIVE_MODEL", default_model)
+        self.coder_model = os.getenv("AEGIS_COGNITIVE_CODER_MODEL", self.model)
 
         # Se houver chave configurada mas ENABLED não foi explicitamente setado como false, ativa
         if self.api_key and os.getenv("AEGIS_COGNITIVE_ENABLED") is None:

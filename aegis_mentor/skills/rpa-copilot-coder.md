@@ -217,7 +217,7 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
   runner.select_option_resilient(
       page,
       dropdown_label="Sexo",
-      option_text=row.get("sexo_cliente", "Masculino"),
+      option_text=row.get("sexo_cliente", ""),
       original_coords_trigger=(0.4531, 0.6782),
       original_coords_option=(0.4617, 0.7420)
   )
@@ -247,7 +247,7 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
 * **Operação Offline em Runtime:** Os scripts gerados devem rodar puramente de forma estática com Playwright + Python, sem uso de LLMs ou conectores cognitivos em tempo de execução. Todo o conhecimento de interface deve estar embutido nos seletores CSS estáveis e lógica determinística.
 * **Canal Heading Microsoft Edge:** Utilize o canal oficial do Edge corporativo (`channel="msedge"`) e a exibição headed (`headless=False`) em ambiente de produção/homologação local do usuário.
 * **Manutenção do Estado de Sessão:** Sempre grave o estado de autenticação (cookies e storage) via `storage_state` do contexto após logins complexos ou autenticações MFA para economizar tempo de execução em rodadas subsequentes.
-* **Proibição Absoluta de Hardcodes e Configurações Fixas:** NUNCA escreva credenciais, chaves de API, tokens, URLs de portais, rotas ou caminhos de arquivos de forma fixa (hardcoded) no código-fonte final dos robôs. Todos esses parâmetros de configuração devem ser obtidos dinamicamente em runtime através de variáveis de ambiente (`os.getenv`) ou de arquivos de configuração externos (`.env`, `.json`, `.yaml`). Se um parâmetro de configuração obrigatório não estiver definido, o script deve levantar imediatamente uma exceção clara (`ValueError`) detalhando a ausência da variável, evitando valores padrão (fallbacks) que possam mascarar falhas de configuração ou expor credenciais padrão em produção.
+* **Proibição Absoluta de Hardcodes e Configurações Fixas:** NUNCA escreva credenciais, chaves de API, tokens, URLs de portais, rotas, caminhos de arquivos ou QUALQUER VALOR DE PREENCHIMENTO OU SELEÇÃO DE CAMPOS (como CPFs, CNPJs, nomes, datas, opções de dropdown) de forma fixa (hardcoded) no código-fonte final dos robôs. Todos os valores a serem preenchidos ou selecionados na interface devem ser obtidos dinamicamente em runtime a partir do dataset de entrada através da variável `row` (ex: `row.get("chave")` ou `row["chave"]`). É terminantemente proibido utilizar strings literais de teste no código gerado, mesmo que elas constem no relatório de telemetria (ex: 'Preencheu com: 123...'). Se um parâmetro de configuração global ou credencial obrigatória de ambiente não estiver definido, o script deve levantar imediatamente uma exceção clara (`ValueError`) detalhando a ausência da variável.
 * **Isolamento de Projetos e Proteção do Framework (Aegis Suite Blindado):**
   * **Não Geração de Arquivos na Raiz:** Não devem ser gerados arquivos na raiz do projeto (exceto em casos de extrema necessidade, como atualizações do `requirements.txt` ou metadados de infraestrutura).
   * **Artefatos Específicos Isolados:** Artefatos específicos de um sistema (como logs de execução, capturas de tela, templates de CSV, datasets e relatórios temporários do portal de destino) só podem ser gerados e salvos dentro da sua própria estrutura de pastas do projeto (ex: subpastas em `projects/`), nunca dentro de pastas da suíte do Aegis.
