@@ -129,8 +129,19 @@ def _regenerate_report_safe(proj_dir: str, gravacao_data: dict):
             elif ev_type == "SELECT":
                 val_text = f"Selecionou: '{ev.get('value', '')}'"
 
-            sel_display = f"`{selector}`"
-            if " >> " in selector:
+            # Check for parent context (chained locator)
+            p_ev = ev.get("parent")
+            if p_ev:
+                p_sel = p_ev.get("selector", "")
+                p_text = p_ev.get("has_text")
+                parent_prefix = f"⬆ `{p_sel}[{p_text}]` ➜ " if p_text else f"⬆ `{p_sel}` ➜ "
+            else:
+                parent_prefix = ""
+
+            sel_display = f"{parent_prefix}`{selector}`"
+            if parent_prefix:
+                pass  # já formatado com parent
+            elif " >> " in selector:
                 sel_display = f"🧬 **Shadow DOM:** `{selector}`"
             markdown.append(f"| {i+1} | `{ev_type}` | `{tag}` | {sel_display} | {val_text} |")
 
@@ -282,12 +293,13 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                                 except Exception:
                                     pass
 
-            # ── steps_history: usa o historico_passos.json da última execução completa ──
-            # O arquivo raiz (test_dir/historico_passos.json) é um espelho FIFO em tempo real
-            # e pode divergir do bot após correções cirúrgicas. O arquivo da pasta da execução
-            # é a fonte da verdade real — ele reflete exatamente o que o robô fez.
-            steps_history_data = None
-            if test_slug:
+            # ── steps_history: prioriza arquivo raiz (em tempo real) para polling ativo ──
+            # Durante execução, runner escreve incrementalmente em historico_passos.json (raiz)
+            # Só usa histórico de execuções completas se arquivo raiz não existir ou estiver vazio
+            steps_history_data = load_json('historico_passos.json') or None
+
+            # Se arquivo raiz está vazio/inexistente, tenta buscar da última execução completa
+            if not steps_history_data and test_slug:
                 _exec_base = os.path.join(proj_dir, "executions")
                 if os.path.isdir(_exec_base):
                     _execs = sorted(
@@ -310,9 +322,10 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                         if steps_history_data is not None:
                             break
 
-            # Fallback: usa o arquivo raiz (em execução ativa ou sem histórico de execução)
-            if steps_history_data is None:
-                steps_history_data = load_json('historico_passos.json')
+            # Filtra por row_id se fornecido no query (para evitar mistura de transações durante polling em tempo real)
+            current_row_id = query.get('current_row_id', [None])[0]
+            if current_row_id and steps_history_data and isinstance(steps_history_data, list):
+                steps_history_data = [s for s in steps_history_data if str(s.get('row_id', '')) == str(current_row_id)]
 
             self._json({
                 'dictionary': load_json('dicionario.json') or {},

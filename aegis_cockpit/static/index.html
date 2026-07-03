@@ -2764,21 +2764,24 @@
                         }
                     }
                     
-                    if (l.includes('[AEGIS_STEP]')) {
-                        const parts = l.split('|').map(p => p.trim());
-                        if (parts.length >= 4) {
-                            const statusPart = parts[0].split(' ');
-                            const status = statusPart[1]; // START, SUCCESS, HEALED, FAILED
-                            const type = parts[1];
-                            const selector = parts[2];
-                            const desc = parts[3];
-                            const errorMsg = parts[4] || '';
-                            const screenshot = parts[5] || '';
-                            const rowId = parts[6] || '';
-                            
-                            updateRobotStep(status, type, selector, desc, errorMsg, screenshot, rowId);
-                        }
-                    }
+                    // DESATIVADO: Log parsing causava mistura de múltiplos passos como "simultâneos"
+                    // Agora Frontend lê TUDO do JSON via polling (historico_passos.json atualizado em tempo real)
+                    // Por isto não precisa fazer matching manual de logs
+                    // if (l.includes('[AEGIS_STEP]')) {
+                    //     const parts = l.split('|').map(p => p.trim());
+                    //     if (parts.length >= 4) {
+                    //         const statusPart = parts[0].split(' ');
+                    //         const status = statusPart[1]; // START, SUCCESS, HEALED, FAILED
+                    //         const type = parts[1];
+                    //         const selector = parts[2];
+                    //         const desc = parts[3];
+                    //         const errorMsg = parts[4] || '';
+                    //         const screenshot = parts[5] || '';
+                    //         const rowId = parts[6] || '';
+                    //
+                    //         updateRobotStep(status, type, selector, desc, errorMsg, screenshot, rowId);
+                    //     }
+                    // }
                 });
                 t.scrollTop = t.scrollHeight;
             }
@@ -3041,9 +3044,8 @@
                     renderDataset(data.dataset);
                     renderReport(data.report);
                     renderValidation(data.validation);
-                    if (!keepStepsState) {
-                        renderSteps(data.recording, data.steps_history, data.skills_recordings);
-                    }
+                    // SEMPRE re-renderiza passos (a heurística de "executando" depende de dados frescos)
+                    renderSteps(data.recording, data.steps_history, data.skills_recordings);
                     
                     const runBotBtn = document.getElementById('btn-run-bot');
                     if (runBotBtn) {
@@ -3688,7 +3690,12 @@
                 const recordingEvents = (recording && recording.events) ? recording.events : [];
                 const usedEventIndices = new Set();
 
-                robotSteps = stepsHistory.map((s, idx) => {
+                // Filtra passos pela primeira transação presente para evitar mistura de passos de transações diferentes
+                const activeRowIds = [...new Set(stepsHistory.map(s => s.row_id).filter(r => r !== null && r !== undefined))];
+                const primaryRowId = activeRowIds.length > 0 ? activeRowIds[0] : null;
+                const filteredStepsHistory = primaryRowId ? stepsHistory.filter(s => s.row_id === primaryRowId) : stepsHistory;
+
+                robotSteps = filteredStepsHistory.map((s, idx) => {
                     let evIdx = s.event_index !== undefined ? s.event_index : null;
                     if (evIdx === null && needsEventIndex && recordingEvents.length > 0) {
                         // Tenta match por selector + type contra gravacao.json, pulando índices já usados
@@ -3827,11 +3834,22 @@
             html += '<th style="width:10%">Registro</th><th style="width:11%">Tipo</th><th style="width:25%">Seletor Físico</th><th style="width:16%">Ação Esperada</th><th style="width:11%">Status</th><th style="width:6%" title="Excluir passo">Ações</th>';
             html += '</tr>';
             
-            sortedSteps.forEach(step => {
+            sortedSteps.forEach((step, idx) => {
                 let statusClass = 'status-step-pending';
                 let statusText = 'Pendente';
-                
+
+                // Heurística: se há passos com status final (SUCCESS/HEALED/FAILED) mas ainda há PENDING depois,
+                // o passo PENDING posterior está sendo executado agora
+                const hasCompletedSteps = sortedSteps.slice(0, idx).some(s =>
+                    ['SUCCESS', 'HEALED', 'FAILED'].includes(s.status)
+                );
+                const isNextPending = !['SUCCESS', 'HEALED', 'FAILED', 'STOPPED', 'BYPASSED'].includes(step.status);
+
                 if (step.status === 'RUNNING') {
+                    statusClass = 'status-step-running';
+                    statusText = '⏳ Executando';
+                } else if (isNextPending && hasCompletedSteps) {
+                    // Passo pendente após passos completados = está sendo executado agora
                     statusClass = 'status-step-running';
                     statusText = '⏳ Executando';
                 } else if (step.status === 'SUCCESS') {

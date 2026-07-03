@@ -399,14 +399,16 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        runner.register_scenario("default", execute_scenario_default)
        runner.run(headless=False)
    ```
-2. **Uso Obrigatório de `runner.click_resilient`:**
-   Você é **PROIBIDO** de usar `.click()` diretamente do objeto `page` ou `locator`. Todos os cliques em botões, links ou abas devem ser executados através da função:
-   `runner.click_resilient(page, selector="<seletor>", target_description="<descrição_curta_do_campo>", original_coords=...)`
+2. **Uso Obrigatório de `runner.click_resilient` e `runner.click_chained`:`
+   Você é **PROIBIDO** de usar `.click()` diretamente do objeto `page` ou `locator`. Todos os cliques devem ser executados através do runner:
+   - Se o passo no relatório tiver **prefixo `⬆`** (parent context), use `runner.click_chained(page, parent=..., child=..., target_description=..., original_coords=...)`
+   - Caso contrário, use `runner.click_resilient(page, selector="<seletor>", target_description="<descrição>", original_coords=...)`
    - **Extração de Coordenadas (Crucial)**: Verifique se o passo no relatório de telemetria possui marcação de coordenadas, como `[coords: (0.2452, 0.4563)]`. Se houver, passe a tupla exata em `original_coords`, exemplo: `original_coords=(0.2452, 0.4563)`. Se não houver coordenadas descritas para aquele passo no relatório, omita o argumento `original_coords`.
    - **Menus Suspensos (Padrão N)**: Se um seletor na telemetria pertencer a um menu suspenso ou dropdown (geralmente contendo `.sub-menu`, `.dropdown-menu` ou similar), você é obrigado a convertê-lo em um seletor composto encadeado com ` >> ` separando o item do menu pai (geralmente `#menu-item-XXXXX` ou similar) do item do submenu (exemplo: `#menu-item-28904 >> #menu-item-141846 a:has-text(...)`), ativando a expansão automática por hover do runner. **NÃO** divida o seletor na tag `ul` ou contêiner mais externo (como `#menu-1-43939cc >> ...`), pois isso não disparará o hover no item correto.
-3. **Uso Obrigatório de `runner.fill_resilient`:**
-   Você é **PROIBIDO** de usar `.fill()` diretamente do objeto `page` ou `locator`. Todos os preenchimentos comuns devem ser executados através de:
-   `runner.fill_resilient(page, selector="<seletor>", text_val=row["<chave_semantica>"], target_description="<descrição>", strategy="DIRECT")`
+3. **Uso Obrigatório de `runner.fill_resilient` e `runner.fill_chained`:`
+   Você é **PROIBIDO** de usar `.fill()` diretamente do objeto `page` ou `locator`. Todos os preenchimentos comuns devem ser executados através do runner:
+   - Se o passo no relatório tiver **prefixo `⬆`** (parent context), use `runner.fill_chained(page, parent=..., child=..., text_val=row["<chave>"], target_description=..., strategy="DIRECT")`
+   - Caso contrário, use `runner.fill_resilient(page, selector="<seletor>", text_val=row["<chave_semantica>"], target_description="<descrição>", strategy="DIRECT")`
    - **Proibição Absoluta de Valores Fixos**: Você é **PROIBIDO** de passar strings fixas/literais de teste (ex: `text_val="valor_gravado"`) no parâmetro `text_val`. Use obrigatoriamente referências ao registro do dataset `row`, ex: `text_val=row.get("chave", "")`.
 4. **Padrão M (Detecção Anti-Bot Comportamental / HUMAN_LIKE):**
    Verifique o campo `fill_strategy` no `dicionario.json`. Se o campo tiver `"fill_strategy": "HUMAN_LIKE"`, ou se o campo for um input de texto que precede um autocomplete ou dropdown dinâmico (onde o usuário digita e depois clica em uma opção da lista correspondente), você é **PROIBIDO** de usar preenchimento direto. Você deve usar **obrigatoriamente** `strategy="HUMAN_LIKE"` para simular a digitação cadenciada humana e disparar os eventos de busca corretos no portal. Você é **PROIBIDO** de usar strings fixas/literais aqui; use sempre a referência à variável `row`, ex:

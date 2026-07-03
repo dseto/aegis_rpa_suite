@@ -65,9 +65,56 @@ class SanitizerService:
         with open(self.dict_file, "r", encoding="utf-8") as f:
             dict_data = json.load(f)
 
+        # Helper para corrigir codificação quebrada (double encoding)
+        def fix_encoding(text: str) -> str:
+            if not isinstance(text, str):
+                return text
+            replacements = {
+                "Ã¡": "á", "Ã ": "à", "Ã¢": "â", "Ã£": "ã",
+                "Ã‰": "É", "Ã©": "é", "Ãª": "ê",
+                "Ã": "Í", "Ã­": "í",
+                "Ã“": "Ó", "Ã³": "ó", "Ã´": "ô", "Ãµ": "õ",
+                "Ãš": "Ú", "Ãº": "ú",
+                "Ã‡": "Ç", "Ã§": "ç",
+                "Ã‘": "Ñ", "Ã±": "ñ",
+                "Ãlcool": "Álcool", "Ãl": "Ál",
+            }
+            for bad, good in replacements.items():
+                text = text.replace(bad, good)
+            return text
+
+        # Corrige codificação nos dados brutos do dicionário e eventos
+        fields = dict_data.get("fields", {})
+        for field_name, field_info in fields.items():
+            if "observed_value" in field_info:
+                field_info["observed_value"] = fix_encoding(field_info["observed_value"])
+            if "selector" in field_info:
+                field_info["selector"] = fix_encoding(field_info["selector"])
+
+        for inp in dict_data.get("inputs", []):
+            if "observed_value" in inp:
+                inp["observed_value"] = fix_encoding(inp["observed_value"])
+            if "selector" in inp:
+                inp["selector"] = fix_encoding(inp["selector"])
+        for out in dict_data.get("outputs", []):
+            if "selector" in out:
+                out["selector"] = fix_encoding(out["selector"])
+
+        for ev in raw_data.get("events", []):
+            if "selector" in ev:
+                ev["selector"] = fix_encoding(ev["selector"])
+            if "text" in ev:
+                ev["text"] = fix_encoding(ev["text"])
+            if "value" in ev:
+                ev["value"] = fix_encoding(ev["value"])
+            if "parent" in ev and ev["parent"]:
+                if "selector" in ev["parent"]:
+                    ev["parent"]["selector"] = fix_encoding(ev["parent"]["selector"])
+                if "has_text" in ev["parent"] and ev["parent"]["has_text"]:
+                    ev["parent"]["has_text"] = fix_encoding(ev["parent"]["has_text"])
+
         # Normalização de datas no formato YYYY-MM-DD para DD/MM/YYYY
         # para garantir resiliência e retrocompatibilidade com gravações antigas
-        fields = dict_data.get("fields", {})
         for field_name, field_info in fields.items():
             if field_info.get("type") == "date" or field_info.get("is_date"):
                 val = field_info.get("observed_value")
@@ -84,6 +131,23 @@ class SanitizerService:
 
         initial_url = raw_data.get("initial_url", "")
         events = raw_data.get("events", [])
+
+        # Inversão de eventos de autocomplete gravados incorretamente (Padrão P)
+        idx_ev = 0
+        while idx_ev < len(events) - 1:
+            ev_curr = events[idx_ev]
+            ev_next = events[idx_ev+1]
+            if (ev_curr.get("type") == "click" and 
+                ev_next.get("type") == "fill" and 
+                ("autocomplete" in ev_curr.get("selector", "").lower() or 
+                 "option" in ev_curr.get("selector", "").lower() or 
+                 "option" in ev_curr.get("tag", "").lower() or 
+                 "mat-option" in ev_curr.get("selector", "").lower())):
+                # Inverte a ordem física dos passos para o compilador gerar corretamente
+                events[idx_ev], events[idx_ev+1] = events[idx_ev+1], events[idx_ev]
+                idx_ev += 2
+            else:
+                idx_ev += 1
         
         # Saneamento de eventos duplicados e ruídos de gravação
         cleaned_events = []
@@ -325,6 +389,14 @@ class SanitizerService:
                                     s_tag = sev.get("tag", "").lower()
                                     if sev.get("is_date"): s_tag = "input (data)"
                                     s_sel = sev.get("selector", "")
+                                    # Parent context (chained locator)
+                                    s_parent = sev.get("parent")
+                                    if s_parent:
+                                        sp_sel = s_parent.get("selector", "")
+                                        sp_text = s_parent.get("has_text")
+                                        s_parent_prefix = f"⬆ `{sp_sel}[{sp_text}]` ➜ " if sp_text else f"⬆ `{sp_sel}` ➜ "
+                                    else:
+                                        s_parent_prefix = ""
                                     s_val = ""
                                     if sev_type == "CLICK":
                                         sx = sev.get("x_percent")
@@ -334,7 +406,9 @@ class SanitizerService:
                                     elif sev_type == "FILL":
                                         s_val = f"Preencheu com: '{sev.get('value', '')}'"
                                         
-                                    if " >> " in s_sel:
+                                    if s_parent_prefix:
+                                        s_sel = f"{s_parent_prefix}`{s_sel}`"
+                                    elif " >> " in s_sel:
                                         s_sel = f"🧬 **Shadow DOM:** `{s_sel}`"
                                     else:
                                         s_sel = f"`{s_sel}`"
@@ -349,6 +423,14 @@ class SanitizerService:
                     if ev.get("is_date"):
                         tag = "input (data)"
                     selector = ev.get("selector", "")
+                    # Parent context (chained locator)
+                    p_ev = ev.get("parent")
+                    if p_ev:
+                        p_sel = p_ev.get("selector", "")
+                        p_text = p_ev.get("has_text")
+                        parent_prefix = f"⬆ `{p_sel}[{p_text}]` ➜ " if p_text else f"⬆ `{p_sel}` ➜ "
+                    else:
+                        parent_prefix = ""
                     val_text = ""
                     
                     if ev_type == "CLICK":
@@ -364,7 +446,9 @@ class SanitizerService:
                     elif ev_type == "FILECHOOSER":
                         val_text = "Abriu o diálogo de seleção de arquivo"
 
-                    if " >> " in selector:
+                    if parent_prefix:
+                        selector = f"{parent_prefix}`{selector}`"
+                    elif " >> " in selector:
                         selector = f"🧬 **Shadow DOM:** `{selector}`"
                     else:
                         selector = f"`{selector}`"

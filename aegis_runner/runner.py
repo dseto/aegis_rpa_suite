@@ -104,6 +104,27 @@ class TransactionRunner:
             print(f"[AEGIS_STEP] {status} | {action} | {selector} | {target_description} | {error_msg} | {screenshot_filename} | {row_id}")
             sys.stdout.flush()
 
+        # Escreve histórico em tempo real para polling (evita mostrar dados velhos durante execução)
+        self._write_steps_realtime()
+
+    def _write_steps_realtime(self):
+        """Escreve steps_history atual para arquivo imediatamente (para polling live)."""
+        try:
+            # Escreve em reports/ (pasta de execução corrente)
+            steps_json_path = os.path.join(self.output_dir, "reports", "historico_passos.json")
+            with open(steps_json_path, "w", encoding="utf-8") as sf:
+                json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
+
+            # Escreve também na raiz do projeto para fallback de polling (compatibilidade)
+            try:
+                root_steps_path = os.path.join(self.project_dir, "historico_passos.json")
+                with open(root_steps_path, "w", encoding="utf-8") as sf:
+                    json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
+            except:
+                pass
+        except Exception:
+            pass  # Falha silenciosa - não interrompe execução
+
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None) -> bool:
         """
         Executa um clique resiliente e inteligente.
@@ -258,6 +279,59 @@ class TransactionRunner:
         except Exception:
             pass
 
+        # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
+        # Portais com Angular Material onde o CDK overlay é posicionado fora
+        # do viewport (sem scroll). Reposiciona o overlay para dentro do viewport
+        # e depois clica na opção via dispatchEvent com coordenadas do bounding box.
+        try:
+            print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
+            clicked = page.evaluate(r"""(sel) => {
+                // 1. Reposiciona o overlay para dentro do viewport
+                const pane = document.querySelector('.cdk-overlay-pane');
+                if (pane) {
+                    pane.style.position = 'fixed';
+                    pane.style.top = '80px';
+                    pane.style.left = '50px';
+                    pane.style.maxHeight = '80vh';
+                    pane.style.overflow = 'auto';
+                }
+                // 2. Encontra a opção pelo seletor ou texto
+                let el = null;
+                try {
+                    el = document.querySelector(sel);
+                } catch(e) {}
+                if (!el) {
+                    const opts = document.querySelectorAll('.mat-option, [role="option"]');
+                    for (const opt of opts) {
+                        if (opt.textContent.trim().includes(sel.replace(/^.*:has-text\([^)]+\)\s*/, ''))) {
+                            el = opt;
+                            break;
+                        }
+                    }
+                }
+                if (!el) return false;
+                // 3. Dispara clique com coordenadas reais
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    el.dispatchEvent(new MouseEvent('click', {
+                        clientX: rect.left + rect.width / 2,
+                        clientY: rect.top + rect.height / 2,
+                        bubbles: true, cancelable: true, button: 0, view: window
+                    }));
+                    return true;
+                }
+                // 4. Fallback: el.click() se bounding box for zero
+                el.click();
+                return true;
+            }""", selector)
+            if clicked:
+                time.sleep(0.3)
+                self._log_step(page, "SUCCESS", "click", selector, target_description)
+                print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
+                return True
+        except Exception:
+            pass
+
         # Nível 3: Self-Healing Cognitivo por IA
         healed_by_ia = False
         cognitive_attempt_failed = False
@@ -366,15 +440,9 @@ class TransactionRunner:
 
         print(f"[AEGIS RUNNER] Tentando selecionar a opção '{option_text}'...")
         for sel in option_selectors:
-            try:
-                loc = page.locator(sel).first
-                if loc.is_visible(timeout=500):
-                    loc.click(timeout=1000, force=True)
-                    option_clicked = True
-                    print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada usando seletor: '{sel}'")
-                    break
-            except Exception:
-                continue
+            option_clicked = self._click_option_with_fallback(page, sel, option_text)
+            if option_clicked:
+                break
 
         # Fallback de coordenadas para a opção
         if not option_clicked and original_coords_option and len(original_coords_option) == 2:
@@ -416,6 +484,78 @@ class TransactionRunner:
             self._log_step(page, "FAILED", "select_option", f"[role='option']:has-text('{option_text}')", f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", msg)
             raise RuntimeError(msg)
 
+    def _click_option_with_fallback(self, page, selector, option_text) -> bool:
+        """
+        Tenta clicar em uma opção de dropdown usando estratégias progressivas:
+        1. Playwright click (force=True) — se visível no viewport
+        2. Scroll overlay no viewport + retry
+        3. JS evaluate (ignora viewport)
+        4. Zoom 70% + retry (portais com CDK overlay mal posicionado)
+        Retorna True se conseguiu, False se todas falharam.
+        """
+        loc = page.locator(selector).first
+
+        # ─── Estratégia 1: Playwright click padrão ──────────────────────────
+        try:
+            if loc.is_visible(timeout=1000):
+                loc.click(timeout=1500, force=True)
+                print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada via Playwright click")
+                return True
+        except Exception:
+            pass
+
+        # ─── Estratégia 2: Scroll overlay no viewport + retry ───────────────
+        try:
+            print(f"[AEGIS RUNNER] Opção '{option_text}' não visível. Aplicando scroll no CDK overlay...")
+            page.evaluate("""() => {
+                const panes = document.querySelectorAll('.cdk-overlay-pane');
+                if (panes.length > 0) {
+                    panes[panes.length - 1].scrollIntoView({block: 'center', behavior: 'instant'});
+                }
+            }""")
+            time.sleep(0.3)
+            if loc.is_visible(timeout=1000):
+                loc.click(timeout=1500, force=True)
+                print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada após scroll do overlay")
+                return True
+        except Exception:
+            pass
+
+        # ─── Estratégia 3: JS evaluate (ignora viewport completamente) ────
+        try:
+            print(f"[AEGIS RUNNER] Opção '{option_text}' ainda oculta. Tentando injeção JS evaluate...")
+            loc.evaluate("el => el.click()")
+            time.sleep(0.3)
+            print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada via JS evaluate")
+            return True
+        except Exception:
+            pass
+
+        # ─── Estratégia 4: Zoom 70% + retry ─────────────────────────────
+        # Portais com CDK overlay mal posicionado: zoom reduz escala e traz
+        # opções para dentro do viewport. Restaura zoom após clique.
+        try:
+            print(f"[AEGIS RUNNER] Opção '{option_text}' inacessível. Aplicando zoom 70%...")
+            page.evaluate("() => { document.body.style.zoom = '0.7'; }")
+            time.sleep(0.5)  # Aguarda reflow do CSS
+            if loc.is_visible(timeout=1500):
+                loc.click(timeout=1500, force=True)
+                print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada após zoom 70%")
+                # Restaura zoom gradualmente
+                page.evaluate("() => { document.body.style.zoom = ''; }")
+                return True
+            else:
+                # Tenta JS evaluate com zoom ativo
+                loc.evaluate("el => el.click()")
+                time.sleep(0.3)
+                page.evaluate("() => { document.body.style.zoom = ''; }")
+                print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada via zoom+JS evaluate")
+                return True
+        except Exception:
+            page.evaluate("() => { document.body.style.zoom = ''; }")  # Garante restore
+
+        print(f"[AEGIS RUNNER] Todas as estratégias falharam para opção '{option_text}' no seletor '{selector}'")
+        return False
 
     def wait_for_selector(self, page, selector, state="visible", timeout=10000, target_description=None) -> bool:
         """Aguarda um seletor ficar visível ou oculto com suporte a logs resilientes."""
@@ -426,6 +566,168 @@ class TransactionRunner:
             return True
         except Exception as e:
             print(f"[AEGIS WARNING] Timeout ao aguardar seletor '{selector}': {e}")
+            raise e
+
+    def _get_relative_child_selector(self, parent_selector: str, child_selector: str) -> str:
+        """Relativiza o seletor do filho removendo prefixos que repetem o pai ou ancestrais."""
+        parent_clean = parent_selector.strip()
+        child_clean = child_selector.strip()
+
+        # 0. Remove prefixo de #cdk-overlay-container do filho quando ele for um ancestral
+        # externo ao pai — o Playwright já vai buscar dentro do pai, não é necessário
+        CDK_PREFIX = "#cdk-overlay-container"
+        if child_clean.startswith(CDK_PREFIX) and CDK_PREFIX not in parent_clean:
+            child_clean = child_clean[len(CDK_PREFIX):].strip()
+
+        # 1. Se o seletor do filho contém o seletor do pai exato (igualdade de string)
+        if parent_clean in child_clean:
+            parts = child_clean.split(parent_clean, 1)
+            rel = parts[1].strip()
+            if rel.startswith(">>"):
+                rel = rel[2:].strip()
+            if rel:
+                return rel
+
+        # 2. Se o pai começa com # e o filho contém exatamente o mesmo id
+        # (comparação só por token completo, evitando casamento parcial como mat-select-panel vs mat-select-panel-combustivel)
+        if parent_clean.startswith("#"):
+            parent_id = parent_clean[1:]  # sem o '#'
+            pattern = r'(?:^|[\s>])#' + re.escape(parent_id) + r'(?=[\s\[\.:\>]|$)'
+            m = re.search(pattern, child_clean)
+            if m:
+                after = child_clean[m.end():].strip()
+                if after:
+                    return after
+
+        # 3. Caso o filho contenha o seletor do pai como prefixo por classe CSS (. seguido de nome exato)
+        if parent_clean.startswith("."):
+            pattern = r'(?:^|[\s>])' + re.escape(parent_clean) + r'(?=[\s\[\.:\>]|$)'
+            m = re.search(pattern, child_clean)
+            if m:
+                after = child_clean[m.end():].strip()
+                if after:
+                    return after
+
+        # 4. Caso seja composto por >>, pega a última parte como fallback
+        c_parts = [p.strip() for p in child_clean.split(">>") if p.strip()]
+        if len(c_parts) > 1:
+            return c_parts[-1]
+
+        return child_clean
+
+    def click_chained(self, page, parent: dict, child: dict, target_description: str,
+                      timeout: int = 5000, original_coords: tuple = None) -> bool:
+        """
+        Clique resiliente com escopo hierárquico (chained locator).
+        Resolve o elemento pai via Playwright .filter(has_text=...) e encadeia o filho.
+
+        parent: {"selector": "tr", "has_text": "4.000,00"}
+        child:  {"selector": ".mat-select-grid-trigger"}
+        """
+        parent_repr = f"{parent.get('selector')}[{parent.get('has_text','')}]"
+        child_sel_clean = self._get_relative_child_selector(parent.get('selector',''), child.get('selector',''))
+        selector_full = f"{parent_repr} >> {child_sel_clean}"
+
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | click_chained | {selector_full} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
+            sys.stdout.flush()
+
+        for attempt in range(1, 3):
+            try:
+                if attempt == 2:
+                    print(f"[AEGIS RUNNER] [RETRY 2] Limpando possíveis overlays via Escape...")
+                    page.keyboard.press("Escape")
+                    time.sleep(0.3)
+
+                # 1. Resolve o pai com filtro nativo
+                parent_locator = page.locator(parent["selector"])
+                if "has_text" in parent and parent.get("has_text"):
+                    parent_locator = parent_locator.filter(has_text=parent["has_text"])
+
+                # 2. Verifica unicidade do pai
+                count = parent_locator.count()
+                if count == 0:
+                    raise RuntimeError(f"Parent '{parent_repr}' não encontrado no DOM")
+
+                # 3. Encadeia o filho e clica com fallback de scroll
+                target = parent_locator.first.locator(child_sel_clean).first
+                target.scroll_into_view_if_needed(timeout=1000)
+                target.click(timeout=timeout, force=True)
+
+                self._log_step(page, "SUCCESS", "click_chained", selector_full, target_description)
+                return True
+
+            except Exception as e:
+                print(f"[AEGIS RUNNER] Tentativa {attempt} falhou para click_chained: {e}")
+                if attempt == 2:
+                    return self._handle_click_failure(
+                        page,
+                        f"{parent.get('selector','')} >> {child.get('selector','')}",
+                        target_description, timeout, e, original_coords
+                    )
+
+        return False
+
+    def fill_chained(self, page, parent: dict, child: dict, text_val: str,
+                     target_description: str, strategy: str = "DIRECT",
+                     delay_ms: int = 60, timeout: int = 5000) -> bool:
+        """
+        Preenche campo com escopo hierárquico (chained locator).
+        strategy="HUMAN_LIKE": digitação cadenciada com limpeza Control+A + Backspace.
+        strategy="DIRECT": .fill() padrão no elemento encadeado.
+        """
+        parent_repr = f"{parent.get('selector')}[{parent.get('has_text','')}]"
+        child_sel_clean = self._get_relative_child_selector(parent.get('selector',''), child.get('selector',''))
+        selector_full = f"{parent_repr} >> {child_sel_clean}"
+
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | fill_chained | {selector_full} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
+            sys.stdout.flush()
+
+        parent_locator = page.locator(parent["selector"])
+        if "has_text" in parent and parent.get("has_text"):
+            parent_locator = parent_locator.filter(has_text=parent["has_text"])
+
+        try:
+            if strategy == "HUMAN_LIKE":
+                target = parent_locator.first.locator(child_sel_clean).first
+                target.click(timeout=timeout)
+                # Seleciona tudo e apaga antes de digitar (evita concatenação)
+                target.press("Control+A")
+                target.press("Backspace")
+                time.sleep(0.1)
+                import time as _time
+                for char in text_val:
+                    page.keyboard.type(char)
+                    _time.sleep(delay_ms / 1000.0)
+                page.evaluate("""() => {
+                    const el = document.activeElement;
+                    if (el) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""")
+                self._log_step(page, "SUCCESS", "fill_chained", selector_full, target_description)
+                return True
+
+            # DIRECT
+            target = parent_locator.first.locator(child_sel_clean).first
+            target.fill(text_val, timeout=timeout)
+            self._log_step(page, "SUCCESS", "fill_chained", selector_full, target_description)
+            return True
+
+        except Exception as e:
+            print(f"[AEGIS RUNNER] Falha no fill_chained: {e}")
+            if self.cognitive.is_active():
+                print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para fill_chained...")
+                clicked = self.cognitive.self_healing_click(page, child.get("selector", ""), target_description)
+                if clicked:
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    page.keyboard.type(text_val)
+                    self._log_step(page, "HEALED", "fill_chained", f"{parent_repr} >> {child_sel_clean}", target_description)
+                    return True
+            self._log_step(page, "FAILED", "fill_chained", f"{parent_repr} >> {child_sel_clean}", target_description, str(e))
             raise e
 
     def fill_resilient(self, page, selector, text_val, target_description,
@@ -743,6 +1045,7 @@ class TransactionRunner:
                 row_id = row.get("id", str(idx + 1))
                 self.current_row_id = row_id
                 self.step_counter = 0
+                self.steps_history = []  # Reset por transação para não acumular passos de transações anteriores
                 scenario = row.get("aegis_scenario", "default")
                 expected = row.get("expected_result", "SUCCESS").upper()
                 expected_token = row.get("expected_error_token", "")

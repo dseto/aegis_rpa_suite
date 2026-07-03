@@ -341,6 +341,150 @@ JS_MINIMAL_LISTENERS = """
     }
     window.getSemanticFieldName = getSemanticFieldName;
 
+    // ── AEGIS PARENT DATA EXTRACTOR ──────────────────────────────────────────
+    // Detecta se o seletor base é ambíguo e sobe a árvore DOM para encontrar
+    // um ancestral estável que sirva como escopo hierárquico (chained locator).
+    // Retorna null se o seletor já for único — sem necessidade de parent.
+    function getAegisParentData(element) {
+        if (!element || element === document.body || element === document.documentElement) return null;
+
+        // Aplica as mesmas normalizações do getAegisSelector
+        if (element.tagName && element.tagName.toLowerCase() === 'path') {
+            element = element.closest('svg') || element;
+        }
+
+        let interactive = element.closest('button, a, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="listbox"], [role="treeitem"], [role="gridcell"], [role="link"], mat-option, .mat-option, .mat-menu-item');
+        if (interactive) {
+            element = interactive;
+        } else {
+            let testIdAncestor = element.closest("[data-testid], [data-test-id], [data-test], [data-qa]");
+            if (testIdAncestor) {
+                element = testIdAncestor;
+            }
+        }
+
+        // Gera o seletor base (sem pais) para testar unicidade
+        let baseSelector = "";
+        const testIdAttrs = ['data-testid', 'data-test-id', 'data-test', 'data-qa'];
+        let hasTestId = false;
+        for (let attr of testIdAttrs) {
+            let val = element.getAttribute(attr);
+            if (val) {
+                baseSelector = `[${attr}='${val}']`;
+                hasTestId = true;
+                break;
+            }
+        }
+
+        if (!hasTestId) {
+            if (element.id && !/\\d{8,}/.test(element.id) && !element.id.startsWith('mat-input-') && !element.id.startsWith('mat-select-')) {
+                baseSelector = `#${element.id}`;
+            } else {
+                baseSelector = element.tagName.toLowerCase();
+                let elementRole = element.getAttribute('role') || '';
+                let isInteractiveRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(elementRole);
+                let isMenuClass = element.classList.contains('mat-option') || element.classList.contains('mat-menu-item');
+
+                if ((element.tagName === 'BUTTON' || element.tagName === 'A' || isMenuClass || isInteractiveRole) &&
+                    element.innerText && element.innerText.trim().length > 0 && element.innerText.trim().length < 45) {
+                    let cleanText = element.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                    let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : element.tagName.toLowerCase();
+                    baseSelector = `${tagPrefix}:has-text('${cleanText}')`;
+                } else if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT') {
+                    if (element.getAttribute('placeholder')) {
+                        baseSelector = `${element.tagName.toLowerCase()}[placeholder='${element.getAttribute('placeholder')}']`;
+                    } else if (element.getAttribute('name')) {
+                        baseSelector = `${element.tagName.toLowerCase()}[name='${element.getAttribute('name')}']`;
+                    } else if (element.id) {
+                        baseSelector = `#${element.id}`;
+                    }
+                }
+            }
+        }
+
+        let root = element.getRootNode();
+
+        // Testa unicidade do seletor base
+        let isUnique = false;
+        try {
+            isUnique = queryLength(baseSelector, root) === 1;
+        } catch (e) {
+            isUnique = false;
+        }
+
+        // Se já é único, não precisa de parent
+        if (isUnique) return null;
+
+        // Seletor ambíguo — sobe a árvore DOM procurando ancestral estável
+        let parent = element.parentElement;
+        let depth = 0;
+        const semanticTags = ['article', 'section', 'nav', 'aside', 'header', 'footer', 'form', 'table', 'tr', 'fieldset', 'details', 'summary'];
+        const semanticClasses = ['card', 'item', 'row', 'container', 'grid', 'panel', 'block', 'wrapper', 'post', 'thumbnail', 'menu'];
+
+        while (parent && depth < 5) {
+            let parentTag = parent.tagName.toLowerCase();
+
+            // Verifica data-testid no ancestral
+            for (let attr of testIdAttrs) {
+                let val = parent.getAttribute(attr);
+                if (val) {
+                    return { selector: `[${attr}='${val}']`, has_text: null };
+                }
+            }
+
+            // Verifica ID estável
+            if (parent.id && !/\\d{8,}/.test(parent.id) && !parent.id.startsWith('mat-input-') && !parent.id.startsWith('mat-select-')) {
+                return { selector: `#${parent.id}`, has_text: null };
+            }
+
+            // Verifica tag semântica
+            let isSemanticTag = semanticTags.includes(parentTag);
+
+            // Verifica classes semânticas
+            let classList = Array.from(parent.classList);
+            let semanticClass = classList.find(cls => semanticClasses.some(sc => cls.toLowerCase().includes(sc)));
+
+            if (isSemanticTag || semanticClass) {
+                // Extrai texto curto do ancestral (prefere headings, limita a ~40 chars)
+                let parentText = null;
+
+                // Tenta encontrar heading filho primeiro
+                let heading = parent.querySelector('h1, h2, h3, h4, h5, h6, strong');
+                if (heading) {
+                    let txt = (heading.innerText || heading.textContent || "").replace(/\\s+/g, ' ').trim();
+                    if (txt.length > 0 && txt.length <= 40) {
+                        parentText = txt;
+                    } else if (txt.length > 40) {
+                        parentText = txt.substring(0, 40);
+                    }
+                }
+
+                // Fallback: primeiro text node ou textContent limitado
+                if (!parentText) {
+                    let txt = (parent.innerText || parent.textContent || "").replace(/\\s+/g, ' ').trim();
+                    if (txt.length > 0 && txt.length <= 40) {
+                        parentText = txt;
+                    } else if (txt.length > 40) {
+                        parentText = txt.substring(0, 40);
+                    }
+                }
+
+                let parentSelector = semanticClass ? `.${semanticClass}` : parentTag;
+                return {
+                    selector: parentSelector,
+                    has_text: parentText
+                };
+            }
+
+            parent = parent.parentElement;
+            depth++;
+        }
+
+        // Nenhum ancestral estável encontrado — mantém fallback de coordenadas
+        return null;
+    }
+    window.getAegisParentData = getAegisParentData;
+
     // Injeção do Indicador Micro-LED via Shadow DOM Fechado
     function injectIndicator() {
         if (document.getElementById('aegis-indicator-host')) return;
@@ -448,8 +592,9 @@ JS_MINIMAL_LISTENERS = """
         }
         window.__aegis_last_recorded_values__[selector] = val;
         
+        let parentData = getAegisParentData(target);
         let name = getSemanticFieldName(target);
-        window.pythonRecordAction(JSON.stringify({
+        let fillEvent = {
             type: 'fill',
             tag: target.tagName,
             selector: selector,
@@ -457,7 +602,11 @@ JS_MINIMAL_LISTENERS = """
             name: name,
             placeholder: target.getAttribute('placeholder') || "",
             id: target.id || ""
-        }));
+        };
+        if (parentData !== null) {
+            fillEvent.parent = parentData;
+        }
+        window.pythonRecordAction(JSON.stringify(fillEvent));
     }
 
     function flushAllInputs() {
@@ -499,17 +648,25 @@ JS_MINIMAL_LISTENERS = """
         // Garante a gravação de todos os inputs pendentes antes do clique
         flushAllInputs();
         
+        let parentData = getAegisParentData(e.target);
+
         let x_percent = e.clientX / window.innerWidth;
         let y_percent = e.clientY / window.innerHeight;
- 
-        window.pythonRecordAction(JSON.stringify({
+
+        let clickEvent = {
             type: 'click',
             tag: e.target.tagName,
             selector: selector,
             text: e.target.innerText ? e.target.innerText.trim().substring(0, 50) : "",
             x_percent: x_percent,
             y_percent: y_percent
-        }));
+        };
+
+        if (parentData !== null) {
+            clickEvent.parent = parentData;
+        }
+
+        window.pythonRecordAction(JSON.stringify(clickEvent));
     }, true);
 
     document.addEventListener('change', function(e) {

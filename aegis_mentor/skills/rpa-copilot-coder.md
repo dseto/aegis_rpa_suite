@@ -50,14 +50,14 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
 
 ### 👁️ Padrão D: Clique Forçado via Viewport Evaluation
 * **Problema:** Menus de CDK Overlay posicionados absolutamente que estouram os limites físicos visíveis da tela (viewport bounds), gerando exceções de scroll no Playwright.
-* **Solução:** Tente o clique nativo. Em caso de timeout ou falha de colisão, utilize injeção de JS (`evaluate`) direta na árvore do DOM para acionar a ação de clique do elemento.
-* **Exemplo:**
+* **Solução:** O `TransactionRunner` já implementa uma cascata automática de 4 estratégias no método `select_option_resilient`:
+  1. **Playwright click** (`force=True`) — se o elemento estiver no viewport
+  2. **Scroll overlay no viewport** (`scrollIntoView`) + retry
+  3. **JS evaluate** (`el.click()`) — ignora viewport completamente
+  4. **Zoom 70%** (`document.body.style.zoom`) + retry — para portais com CDK overlay mal posicionado
+* **Exemplo de código gerado (nenhuma ação necessária — o runner já trata automaticamente):**
   ```python
-  opt = page.locator(".mat-option:has-text('Opção')")
-  try:
-      opt.click(force=True, timeout=1500)
-  except Exception:
-      opt.evaluate("el => el.click()")
+  runner.select_option_resilient(page, dropdown_label="...", option_text=row.get("...", ""), ...)
   ```
 
 ### ⏱️ Padrão E: Sincronização Assíncrona de Loaders Globais
@@ -238,6 +238,54 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
   time.sleep(0.5) # Aguarda renderização
   # Segundo: Clica na opção correspondente que apareceu
   runner.click_resilient(page, selector="#mat-autocomplete-panel-marca div:has-text('Hyundai')", target_description="Opção 'Hyundai'", original_coords=(0.0984, 0.7614))
+  ```
+
+### 🧬 Padrão Q: Locator Encadeado por Hierarquia (Chained Scope)
+* **Problema:** Seletores genéricos (`.mat-select-grid-trigger`, `button:has-text('Comprar')`) que casam com múltiplos elementos em estruturas repetitivas como tabelas, grids e cards, gerando erros de strict mode violation ou cliques no elemento errado.
+* **Detecção automática:** O Recorder Aegis detecta ambiguidade no seletor base e armazena o ancestral estável como um objeto `parent` estruturado no evento do `gravacao.json`. No `relatorio.md`, a presença do parent é indicada pelo prefixo **`⬆`** na coluna "Seletor Resiliente Sugerido". Exemplo:
+  ```
+  | Passo | Tipo | Elemento | Seletor Resiliente Sugerido | Valor / Ação |
+  | 5 | `CLICK` | `div` | ⬆ `.mat-row[RCV - Danos Corporais 150.000,00]` ➜ `div` | Clique em: '150.000,00' |
+  ```
+* **Regra OBRIGATÓRIA de geração de código:**
+  > ⚠️ Ao ler o `relatorio.md` para gerar o script do robô, você DEVE verificar se a coluna "Seletor Resiliente Sugerido" de cada passo contém o prefixo `⬆`. Se sim, use EXCLUSIVAMENTE `runner.click_chained()` ou `runner.fill_chained()`. Se não, use os métodos planos (`click_resilient`/`fill_resilient`). Esta regra é binária — zero ambiguidade. Para construir os dicionários `parent` e `child`, extraia o seletor do pai (entre `⬆` e `➜`) e o seletor do filho (após `➜`).
+* **Solução:** Use `runner.click_chained()` com os dicionários `parent` e `child`. O runner resolve o pai com Playwright `.filter(has_text=...)` nativo e encadeia o filho.
+* **Exemplo de código gerado corretamente:**
+  ```python
+  # [PASSO X] Selecionar opção na linha da tabela
+  runner.click_chained(
+      page=page,
+      parent={"selector": "tr", "has_text": "4.000,00"},
+      child={"selector": ".mat-select-grid-trigger"},
+      target_description="Dropdown de valor na linha R$ 4.000,00",
+      original_coords=(0.45, 0.62)
+  )
+  ```
+* **Exemplo a partir do relatório (⬆):**
+  ```python
+  # Ao ver: | ⬆ `.mat-row[RCV - Danos Morais 10.000,00]` ➜ `table tr button:has-text('Cláusulas')` |
+  # Extrair parent.selector = "tr"
+  # Extrair parent.has_text = "4.000,00" (primeiro texto curto da linha)
+  # Extrair child.selector = "table tr button:has-text('Cláusulas')"
+  runner.click_chained(
+      page=page,
+      parent={"selector": "tr", "has_text": "4.000,00"},
+      child={"selector": "table tr button:has-text('Cláusulas')"},
+      target_description="Botão Cláusulas na linha de Danos Morais",
+      original_coords=(0.53, 0.71)
+  )
+  ```
+* **Exemplo de fill encadeado:**
+  ```python
+  # [PASSO X] Preencher campo de valor na linha do produto
+  runner.fill_chained(
+      page=page,
+      parent={"selector": "div.card", "has_text": "Seguro Auto Premium"},
+      child={"selector": "input[name='valor']"},
+      text_val=row.get("valor_premio", ""),
+      target_description="Campo valor na linha Seguro Auto Premium",
+      strategy="DIRECT"
+  )
   ```
 
 ---
