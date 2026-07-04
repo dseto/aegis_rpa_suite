@@ -593,6 +593,46 @@ class SanitizerService:
                 except Exception as e:
                     print(f"[WARNING] Falha ao atualizar {csv_name}: {e}")
 
+    def _lookup_dropdown_label_by_value(self, option_text: str, fallback_description: str, opener_parent_has_text: str = None) -> str:
+        """
+        `select_option_resilient` (runner.py:401) monta seus seletores de
+        trigger a partir de `dropdown_label` via `label:has-text('{label}')` —
+        precisa do texto REAL do <label>, não de uma frase de negócio. Quando o
+        selector do abridor não tem has-text (comum em dropdowns dentro de
+        grids/tabelas de cobertura, onde o recorder só capturou um "div"
+        genérico), busca no dicionario.json um campo cujo `observed_value`
+        bata exatamente com o valor final selecionado (`option_text`) — esse
+        campo, se existir, tem o texto real do label embutido no seu próprio
+        `selector` (has-text). Único e confiável o bastante porque cada campo
+        do formulário tem um valor observado distinto na mesma gravação.
+
+        Se não houver match único no dicionário, `opener_parent_has_text` (o
+        `parent.has_text` do próprio abridor, quando existir) é a próxima
+        melhor opção: é o texto REAL exibido no trigger no momento do clique
+        de gravação (o valor atualmente selecionado), bem mais confiável que
+        a `description` (frase de negócio verbosa que nunca bate com texto
+        real da página e força o runner a cair sempre no fallback de
+        coordenadas — causa raiz confirmada da falha do st_049/vidros no
+        cenário 001).
+        """
+        try:
+            with open(self.dict_file, "r", encoding="utf-8") as f:
+                dict_data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            dict_data = None
+        if dict_data:
+            matches = []
+            for field_info in dict_data.get("fields", {}).values():
+                if field_info.get("observed_value") == option_text:
+                    m = re.search(r"has-text\((['\"])(.*?)\1\)", field_info.get("selector", ""))
+                    if m:
+                        matches.append(m.group(2))
+            if len(matches) == 1:
+                return matches[0]
+        if opener_parent_has_text:
+            return opener_parent_has_text
+        return fallback_description
+
     def _reorder_dropdown_pairs(self, steps: list) -> list:
         """
         Corrige um padrão de gravação que quebra em produção: abrir um dropdown
@@ -600,16 +640,23 @@ class SanitizerService:
         selecionar a opção do dropdown. No browser real (sem as pausas humanas
         da gravação original), clicar em outro campo fecha o overlay antes da
         opção ser selecionada, quebrando o passo com "elemento não visível".
-        Detecta pares abertura->opção com passos intercalados e move o(s)
-        passo(s) intercalado(s) para depois da seleção da opção.
+
+        Detecta pares abertura->opção e os COLAPSA num único step do tipo
+        "select" (abridor + opção viram 1 step_id só, não 2) — isso é necessário
+        porque `select_option_resilient` no runner só aceita 1 step_id, e se o
+        par continuasse como 2 steps distintos o validador de contagem
+        (validate_bot_against_plan) entraria em conflito com o validador de
+        padrão de resiliência. Passos intercalados entre abridor e opção são
+        preservados e movidos para depois do step colapsado.
         """
         option_idx = [i for i, s in enumerate(steps) if s["type"] == "click" and "[role='option']" in s["selector"]]
         if not option_idx:
             return steps
 
         result = list(steps)
-        for opt_i in option_idx:
-            # Acha o "abridor": clique mais próximo antes da opção que não seja outra opção
+        # Processa do fim pro começo: colapsar um par em índice alto não afeta
+        # os índices (ainda não processados) de pares em posições mais baixas.
+        for opt_i in sorted(option_idx, reverse=True):
             opener_i = None
             for j in range(opt_i - 1, -1, -1):
                 if result[j]["type"] == "click" and "[role='option']" not in result[j]["selector"]:
@@ -617,14 +664,180 @@ class SanitizerService:
                     break
                 if "[role='option']" in result[j]["selector"]:
                     break
-            if opener_i is None or opt_i - opener_i <= 1:
+            if opener_i is None:
                 continue
 
-            # Passos intercalados entre abridor e opção: movem para depois da opção
-            between = result[opener_i + 1:opt_i]
-            option_step = result[opt_i]
-            result = result[:opener_i + 1] + [option_step] + between + result[opt_i + 1:]
+            opener = result[opener_i]
+            option = result[opt_i]
+            # dropdown_label/option_text viram argumentos literais de
+            # select_option_resilient (runner.py:401), que monta seletores tipo
+            # f"label:has-text('{dropdown_label}') ~ div" e
+            # f"[role='option']:has-text('{option_text}')". A `description` do
+            # step é uma frase de negócio verbosa (ex.: "Selecionar a opção
+            # 'Isenção de ICMS'.") e NUNCA bate com o texto real do elemento —
+            # isso força o runner a cair no fallback de coordenadas sempre,
+            # podendo clicar na opção/campo errado silenciosamente. O texto real
+            # já está gravado dentro do próprio selector (has-text('...')),
+            # então extrai de lá; description só como último recurso.
+            match_opener = re.search(r"has-text\((['\"])(.*?)\1\)", opener["selector"])
+            match_option = re.search(r"has-text\((['\"])(.*?)\1\)", option["selector"])
+            option_text = match_option.group(2) if match_option else option["description"]
+            # Quando o abridor não tem has-text (ex.: selector genérico "div",
+            # comum em dropdowns dentro de grids/tabelas de cobertura), a
+            # `description` é uma frase de negócio que NUNCA bate com um
+            # `<label>` real — tenta antes achar o campo real no
+            # dicionario.json pelo valor final selecionado (observed_value),
+            # que é único o bastante pra identificar o campo certo, e reusa o
+            # texto do label real gravado ali (selector com has-text).
+            dropdown_label = match_opener.group(2) if match_opener else self._lookup_dropdown_label_by_value(
+                option_text, opener["description"], (opener.get("parent") or {}).get("has_text")
+            )
+            merged = {
+                "type": "select",
+                "dropdown_label": dropdown_label,
+                "option_text": option_text,
+                "trigger_selector": opener["selector"],
+                "option_selector": option["selector"],
+                "description": f"Selecionar '{option['description']}' em '{opener['description']}'",
+            }
+            if "parent" in opener:
+                merged["parent"] = opener["parent"]
+            if "coords" in opener:
+                merged["coords_trigger"] = opener["coords"]
+            if "coords" in option:
+                merged["coords_option"] = option["coords"]
 
+            between = result[opener_i + 1:opt_i]
+            result = result[:opener_i] + [merged] + between + result[opt_i + 1:]
+
+        return result
+
+    def _drop_redundant_select_corrections(self, steps: list) -> list:
+        """
+        `_reorder_dropdown_pairs` colapsa cada par abridor+opção num step
+        "select", mas quando o usuário errou a opção durante a gravação e
+        reabriu o MESMO dropdown pra corrigir, sobram 2 steps "select"
+        consecutivos pro MESMO widget (ex.: Combustível -> Álcool,
+        Combustível -> Diesel). Replayar os dois em sequência contra a app
+        viva confunde o widget Material (observado: campo fica vazio e
+        trava o botão Avançar, cascata que acionava self-healing).
+
+        Não dá pra usar `dropdown_label` puro pra identificar "mesmo
+        widget": em selects de grid/tabela (cobertura), o fallback de
+        label é uma frase genérica ("Clicar na opção '150.000,00'.") que
+        se repete em VÁRIAS linhas/campos diferentes da mesma tabela, então
+        comparar só o texto colapsaria campos distintos por engano. Sinal
+        confiável e verificado nos dados reais: o `parent.has_text` de um
+        select captura o estado ATUAL do widget no momento do clique — se o
+        segundo select tem, no seu `parent.has_text`, o `option_text` que o
+        PRIMEIRO acabou de escolher, é prova de que o clique seguinte caiu
+        em cima do mesmo widget já alterado (não só um texto parecido).
+        """
+        result = []
+        for s in steps:
+            if result and s["type"] == "select" and result[-1]["type"] == "select":
+                prev = result[-1]
+                prev_parent = prev.get("parent") or {}
+                cur_parent = s.get("parent") or {}
+                prev_text = prev_parent.get("has_text")
+                cur_text = cur_parent.get("has_text")
+                prev_option = prev.get("option_text")
+                if prev_text and cur_text and prev_option and prev_option in cur_text:
+                    result[-1] = s
+                    continue
+            result.append(s)
+        return result
+
+    def _drop_redundant_pretrigger_clicks(self, steps: list) -> list:
+        """
+        Mesmo após `_dedup_consecutive_clicks`, sobra um padrão de clique
+        fantasma: o recorder às vezes gera 2 eventos de clique DIFERENTES
+        (selector e parent distintos, geralmente porque o overlay ainda não
+        tinha estabilizado no 1º clique) para o MESMO ponto físico da tela —
+        um deles vira o `coords_trigger` embutido no step "select" colapsado
+        por `_reorder_dropdown_pairs`, o outro sobra como um step "click"
+        solto logo antes do "select". Diferente de um clique legítimo que
+        precede um dropdown (ex.: marcar um checkbox que revela o campo), que
+        aponta pra coordenadas bem distantes do trigger do dropdown, esse
+        clique fantasma cai a poucos % de distância do `coords_trigger` do
+        próprio select — sinal confiável de que é o mesmo clique físico
+        contado 2x. Descarta o step "click" nesse caso.
+        """
+        THRESHOLD = 0.05
+        result = []
+        for i, s in enumerate(steps):
+            if (s["type"] == "select" and result and result[-1]["type"] == "click"):
+                prev_coords = result[-1].get("coords")
+                trigger_coords = s.get("coords_trigger")
+                if prev_coords and trigger_coords:
+                    dist = ((prev_coords[0] - trigger_coords[0]) ** 2 + (prev_coords[1] - trigger_coords[1]) ** 2) ** 0.5
+                    if dist < THRESHOLD:
+                        result.pop()
+            result.append(s)
+        return result
+
+    def _dedup_consecutive_clicks(self, steps: list) -> list:
+        """
+        O recorder às vezes captura o mesmo elemento clicado 2x seguidas (ex.:
+        overlay do CDK ainda fechado no primeiro clique, ou o usuário clicou de
+        novo durante a gravação por lentidão da UI). Replay rápido em produção
+        quebra: o clique duplicado extra pode deixar o overlay num estado
+        inconsistente antes do clique seguinte (ex.: trigger de dropdown que
+        já foi processado no passo anterior). Também ocorre quando label/span/
+        input do mesmo widget (ex.: checkbox) disparam cliques separados —
+        nesse caso o selector muda a cada clique, mas o `parent` gravado é
+        idêntico. Mantém apenas o último clique (mais próximo do elemento
+        real) de cada sequência consecutiva que aponta pro mesmo widget.
+        """
+        def same_widget(a: dict, b: dict) -> bool:
+            if a["selector"] == b["selector"]:
+                return True
+            pa, pb = a.get("parent"), b.get("parent")
+            if (pa and pb and pa.get("selector")
+                    and pa.get("selector") == pb.get("selector") and pa.get("has_text") == pb.get("has_text")):
+                return True
+            # Um clique já achatado (selector = id do widget, sem parent —
+            # ex.: idioma <label><input>) é o mesmo widget de um clique
+            # ainda encadeado cujo parent aponta pro mesmo id.
+            if pa and pa.get("selector") == b["selector"]:
+                return True
+            if pb and pb.get("selector") == a["selector"]:
+                return True
+            # Último recurso: eventos de bubbling do mesmo clique físico
+            # acertam elementos totalmente diferentes na hierarquia (ex.:
+            # div container genérico -> span do checkbox -> input real),
+            # sem selector/parent em comum algum. Coordenadas praticamente
+            # idênticas (< 2% do viewport) confirmam que é o mesmo ponto
+            # de clique gravado 2x+, não 2 cliques distintos — validado
+            # contra o menor gap real entre 2 widgets diferentes no plano
+            # (~4.6%), então 2% não corre risco de fundir coisas distintas.
+            ca, cb = a.get("coords"), b.get("coords")
+            if ca and cb:
+                dist = ((ca[0] - cb[0]) ** 2 + (ca[1] - cb[1]) ** 2) ** 0.5
+                if dist < 0.02:
+                    return True
+            return False
+
+        # Selectors puramente genéricos (tag sem id/classe) tendem a mirar o
+        # <input> nativo por trás de um mat-checkbox/mat-radio, que a Material
+        # esconde via CSS (opacity/visibility) — igual ao caso do PCD, isso
+        # trava o scroll_into_view_if_needed do Playwright. Entre 2 cliques do
+        # mesmo widget, prefere o selector mais específico (ex.: o span visual
+        # clicável) em vez de sempre ficar com o último da gravação.
+        GENERIC_TAG_SELECTORS = {"input", "span", "div"}
+
+        def choose(kept: dict, candidate: dict) -> dict:
+            if candidate["selector"] in GENERIC_TAG_SELECTORS and kept["selector"] not in GENERIC_TAG_SELECTORS:
+                return kept
+            return candidate
+
+        result = []
+        for s in steps:
+            if (result and s["type"] == "click" and result[-1]["type"] == "click"
+                    and same_widget(s, result[-1])):
+                result[-1] = choose(result[-1], s)
+                continue
+            result.append(s)
         return result
 
     def _write_execution_plan(self, events: list):
@@ -647,13 +860,44 @@ class SanitizerService:
                     desc = ev.get("value", "")
             if not desc:
                 desc = f"Executar ação {ev_type}"
-            steps.append({
+            step = {
                 "type": ev_type,
                 "selector": selector,
                 "description": desc
-            })
+            }
+            parent = ev.get("parent")
+            # Idioma nativo <label>...<input>...</label>: clicar em QUALQUER
+            # ponto do label já ativa o input descendente (HTML label
+            # activation behavior), sem precisar de `for`/`id`. Widgets
+            # mat-checkbox/mat-radio escondem o input real via CSS
+            # (opacity/visibility), então encadear o clique até ele
+            # (click_chained parent=label, child=input) trava no
+            # scroll_into_view_if_needed do Playwright ("element is not
+            # visible") e escala pra self-healing à toa. Clica no label
+            # (`parent`, sempre visível) direto — sem encadear.
+            # Clica no próprio <label> (sem encadear no input filho) em vez de
+            # confiar no `parent` gravado, que nem sempre é o wrapper
+            # específico do widget — dentro de modais/overlays (ex.: dialog de
+            # Cláusulas) o recorder às vezes aponta pro container estrutural
+            # grande (`.mat-dialog-container`), que não teria efeito nenhum se
+            # usado como alvo de clique.
+            label_input_match = re.fullmatch(r"(label:has-text\((['\"]).*?\2\))\s+input", selector)
+            if ev_type == "click" and label_input_match:
+                step["selector"] = label_input_match.group(1)
+                parent = None
+            elif parent:
+                step["parent"] = {"selector": parent.get("selector", ""), "has_text": parent.get("has_text")}
+            if ev_type == "click":
+                x = ev.get("x_percent")
+                y = ev.get("y_percent")
+                if x is not None and y is not None:
+                    step["coords"] = [x, y]
+            steps.append(step)
 
+        steps = self._dedup_consecutive_clicks(steps)
         steps = self._reorder_dropdown_pairs(steps)
+        steps = self._drop_redundant_select_corrections(steps)
+        steps = self._drop_redundant_pretrigger_clicks(steps)
 
         total = len(steps)
         plan = {
@@ -665,8 +909,16 @@ class SanitizerService:
                 {
                     "step_id": f"st_{i+1:03d}",
                     "type": s["type"],
-                    "selector": s["selector"],
-                    "description": s["description"]
+                    "selector": s.get("selector", ""),
+                    "description": s["description"],
+                    **({"parent": s["parent"]} if "parent" in s else {}),
+                    **({"coords": s["coords"]} if "coords" in s else {}),
+                    **({"dropdown_label": s["dropdown_label"]} if "dropdown_label" in s else {}),
+                    **({"option_text": s["option_text"]} if "option_text" in s else {}),
+                    **({"trigger_selector": s["trigger_selector"]} if "trigger_selector" in s else {}),
+                    **({"option_selector": s["option_selector"]} if "option_selector" in s else {}),
+                    **({"coords_trigger": s["coords_trigger"]} if "coords_trigger" in s else {}),
+                    **({"coords_option": s["coords_option"]} if "coords_option" in s else {}),
                 }
                 for i, s in enumerate(steps)
             ]

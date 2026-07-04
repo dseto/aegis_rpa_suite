@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import ast
 import argparse
 from datetime import datetime
 
@@ -16,7 +17,8 @@ if PROJECT_ROOT not in sys.path:
 from aegis_runner.cognitive_fallback import CognitiveGateway
 from aegis_sanitizer.step_validator import (
     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
-    validate_dataset_field_names
+    validate_dataset_field_names, validate_resilience_patterns, validate_required_wait_patterns,
+    validate_required_reopen_patterns, validate_required_method_patterns
 )
 
 
@@ -25,6 +27,87 @@ class CodeGeneratorService:
         self.project_dir = os.path.abspath(project_dir)
         self.plan_path = os.path.join(self.project_dir, "plano_execucao.json")
         self.bot_path = os.path.join(self.project_dir, "code", "bot_producao.py")
+
+    def _normalize_boilerplate(self, bot_code: str) -> str:
+        """
+        Substitui deterministicamente o cabeçalho (imports + bootstrap de
+        sys.path) e o bloco 'if __name__ == "__main__":' por versões fixas e
+        canônicas, em vez de confiar na LLM para reproduzir esse boilerplate —
+        que é puramente mecânico e não deveria variar entre gerações. Na
+        prática a LLM erra de duas formas distintas: (a) no fluxo de geração
+        nova, o __main__ sai incompleto (error_message_selector ausente,
+        headless=False vs runner.run()); (b) no fluxo de correção cirúrgica, a
+        LLM às vezes reescreve o arquivo inteiro e derruba o bootstrap de
+        sys.path que resolve 'from aegis_runner.runner import TransactionRunner'
+        quando o bot roda como script standalone (fora do cwd do framework) —
+        causa ModuleNotFoundError silencioso só detectável em execução real.
+        Por isso só os FunctionDef/ClassDef do corpo do bot (a lógica de
+        automação em si) são preservados; imports e qualquer código solto em
+        nível de módulo são descartados e reconstruídos aqui.
+        """
+        canonical_header = [
+            'import os',
+            'import sys',
+            'import time',
+            'from playwright.sync_api import Page',
+            '',
+            'current_dir = os.path.dirname(os.path.abspath(__file__))',
+            'AEGIS_SUITE_ROOT = current_dir',
+            'while AEGIS_SUITE_ROOT and not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):',
+            '    parent = os.path.dirname(AEGIS_SUITE_ROOT)',
+            '    if parent == AEGIS_SUITE_ROOT:',
+            '        break',
+            '    AEGIS_SUITE_ROOT = parent',
+            '',
+            'if not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):',
+            '    global_path = r"C:\\Projetos\\aegis_rpa_suite"',
+            '    if os.path.exists(global_path):',
+            '        AEGIS_SUITE_ROOT = global_path',
+            '',
+            'if AEGIS_SUITE_ROOT not in sys.path:',
+            '    sys.path.insert(0, AEGIS_SUITE_ROOT)',
+            '',
+            'from aegis_runner.runner import TransactionRunner',
+        ]
+
+        canonical_main = [
+            'if __name__ == "__main__":',
+            '    current_dir = os.path.dirname(os.path.abspath(__file__))',
+            '    project_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "code" else current_dir',
+            '',
+            '    runner = TransactionRunner(project_dir=project_dir, error_message_selector=".toast-error, .alert-danger")',
+            '    runner.register_scenario(scenario_name="default", callback=execute_scenario_default)',
+            '    runner.run()',
+        ]
+
+        try:
+            tree = ast.parse(bot_code)
+        except SyntaxError:
+            return bot_code
+
+        lines = bot_code.split("\n")
+        body_chunks = []
+        for node in tree.body:
+            is_main_block = (
+                isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__"
+            )
+            if is_main_block:
+                continue
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                start_idx = node.lineno - 1
+                end_idx = node.end_lineno
+                body_chunks.append("\n".join(lines[start_idx:end_idx]))
+            # Imports e qualquer outro statement solto em nível de módulo
+            # (ex.: bootstrap de sys.path reescrito pela LLM) são descartados —
+            # já cobertos pelo canonical_header acima.
+
+        normalized = (
+            "\n".join(canonical_header) + "\n\n"
+            + "\n\n".join(body_chunks) + "\n\n"
+            + "\n".join(canonical_main) + "\n"
+        )
+        return normalized
 
     def generate(self) -> bool:
         print("\n" + "=" * 60)
@@ -236,7 +319,19 @@ Exemplo de chamada de Skill:
             try:
                 with open(correcoes_acumuladas_path, "r", encoding="utf-8") as cf:
                     all_corrs = json.load(cf)
-                pending_corrections = [c for c in all_corrs if c.get("status") == "pending"]
+                # Correções com `required_wait` codificam um invariante
+                # permanente de runtime atrelado a um step_id (ex.: campo que
+                # fica bloqueado por N segundos após outro ser preenchido) —
+                # precisam ser reforçadas em TODA regeneração futura, não só
+                # na primeira vez. Diferente de uma correção pontual comum
+                # (que uma vez "applied" não deve mais poluir o prompt), essas
+                # nunca "saem de moda": sem isso, uma regeneração do zero
+                # perde silenciosamente o wait já validado antes.
+                pending_corrections = [
+                    c for c in all_corrs
+                    if c.get("status") == "pending" or c.get("required_wait") or c.get("required_reopen")
+                    or c.get("required_method")
+                ]
             except Exception as e:
                 print(f"[WARNING] Failed to read correcoes_acumuladas.json: {e}")
 
@@ -293,6 +388,10 @@ Exemplo de chamada de Skill:
             if not self._validate_syntax(bot_code):
                 return False
 
+            # Normaliza deterministicamente o bloco __main__/imports (a LLM erra
+            # esse boilerplate mesmo quando o prompt diz que já está pronto)
+            bot_code = self._normalize_boilerplate(bot_code)
+
             # Validate bot structure (proíbe classes customizadas, asyncio.run, etc.)
             try:
                 struct_result = validate_bot_structure(bot_code)
@@ -318,7 +417,7 @@ Exemplo de chamada de Skill:
             plan_result = {"status": "PASS", "total_errors": 0, "errors": []}
             if os.path.exists(self.plan_path):
                 try:
-                    plan_result = validate_bot_against_plan(bot_code, self.plan_path)
+                    plan_result = validate_bot_against_plan(bot_code, self.plan_path, pending_corrections)
                 except Exception as validator_err:
                     raise RuntimeError(
                         f"Bug interno no validador (validate_bot_against_plan): {validator_err}. "
@@ -335,7 +434,7 @@ Exemplo de chamada de Skill:
                         planned_ids = [s["step_id"] for s in json.load(f)["steps"]]
                     reordered_code = reorder_steps_to_match_plan(bot_code, planned_ids)
                     if reordered_code != bot_code:
-                        retry_result = validate_bot_against_plan(reordered_code, self.plan_path)
+                        retry_result = validate_bot_against_plan(reordered_code, self.plan_path, pending_corrections)
                         if retry_result["status"] == "PASS":
                             print(f"[AEGIS CODEGEN] 🔧 Ordem dos passos corrigida automaticamente (sem gastar tentativa de LLM).")
                             bot_code = reordered_code
@@ -352,8 +451,54 @@ Exemplo de chamada de Skill:
                         f"Corrija o step_validator.py antes de tentar gerar código novamente."
                     ) from validator_err
 
+            # Padrões de resiliência obrigatórios (click_chained, select_option_resilient, original_coords, HUMAN_LIKE)
+            pattern_result = {"status": "PASS", "total_errors": 0, "errors": []}
+            if os.path.exists(self.plan_path):
+                try:
+                    pattern_result = validate_resilience_patterns(bot_code, self.plan_path, dict_path)
+                except Exception as validator_err:
+                    raise RuntimeError(
+                        f"Bug interno no validador (validate_resilience_patterns): {validator_err}. "
+                        f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                    ) from validator_err
+
+            # Sincronizações assíncronas exigidas explicitamente via correcoes_acumuladas.json
+            # (campo 'required_wait') — checagem mecânica porque a LLM ignora esse pedido em prosa
+            try:
+                wait_result = validate_required_wait_patterns(bot_code, pending_corrections)
+            except Exception as validator_err:
+                raise RuntimeError(
+                    f"Bug interno no validador (validate_required_wait_patterns): {validator_err}. "
+                    f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                ) from validator_err
+
+            # Re-disparos de campo exigidos explicitamente via correcoes_acumuladas.json
+            # (campo 'required_reopen') — mesma lógica do required_wait acima
+            try:
+                reopen_result = validate_required_reopen_patterns(bot_code, pending_corrections)
+            except Exception as validator_err:
+                raise RuntimeError(
+                    f"Bug interno no validador (validate_required_reopen_patterns): {validator_err}. "
+                    f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                ) from validator_err
+
+            # Troca de método exigida explicitamente via correcoes_acumuladas.json
+            # (campo 'required_method') — mesma lógica do required_wait/required_reopen acima
+            try:
+                method_result = validate_required_method_patterns(bot_code, pending_corrections)
+            except Exception as validator_err:
+                raise RuntimeError(
+                    f"Bug interno no validador (validate_required_method_patterns): {validator_err}. "
+                    f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                ) from validator_err
+
             # Merge structural and plan results
-            all_errors = struct_result.get("errors", []) + plan_result.get("errors", []) + field_result.get("errors", [])
+            all_errors = (
+                struct_result.get("errors", []) + plan_result.get("errors", [])
+                + field_result.get("errors", []) + pattern_result.get("errors", [])
+                + wait_result.get("errors", []) + reopen_result.get("errors", [])
+                + method_result.get("errors", [])
+            )
             total_errors = len(all_errors)
 
             if total_errors == 0:
@@ -398,13 +543,16 @@ Exemplo de chamada de Skill:
                 "structural_errors": struct_result.get("total_errors", 0),
                 "plan_errors": plan_result.get("total_errors", 0),
                 "field_errors": field_result.get("total_errors", 0),
+                "pattern_errors": pattern_result.get("total_errors", 0),
+                "wait_errors": wait_result.get("total_errors", 0),
+                "reopen_errors": reopen_result.get("total_errors", 0),
             }
             diff = merged
             if os.getenv("AEGIS_DEBUG_DUMP_BOT"):
                 with open(os.getenv("AEGIS_DEBUG_DUMP_BOT"), "w", encoding="utf-8") as _dbgf:
                     _dbgf.write(bot_code)
             print(f"[AEGIS CODEGEN] ❌ Validação falhou: {total_errors} erro(s) "
-                  f"(estrutural={merged['structural_errors']}, plano={merged['plan_errors']}, campos={merged['field_errors']})")
+                  f"(estrutural={merged['structural_errors']}, plano={merged['plan_errors']}, campos={merged['field_errors']}, padroes={merged['pattern_errors']}, espera_assincrona={merged['wait_errors']}, reabertura={merged['reopen_errors']})")
             for err in all_errors:
                 print(f"  - {err.get('type')}: {err.get('detail', '')}")
 

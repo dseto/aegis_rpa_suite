@@ -21,6 +21,7 @@ RUNNER_METHODS = {
     "select_option_resilient",
     "click_chained",
     "fill_chained",
+    "click_by_coordinates",
 }
 
 
@@ -340,12 +341,23 @@ def _validate_runner_call_contract(bot_code: str) -> List[Dict[str, Any]]:
     return errors
 
 
-def validate_bot_against_plan(bot_code: str, plan_path: str) -> Dict[str, Any]:
+def validate_bot_against_plan(
+    bot_code: str, plan_path: str, pending_corrections: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Compara step_ids do código gerado com plano_execucao.json.
 
     Valida: step_ids presentes, ordem correta, contagem.
     NÃO valida: tipo de método, seletores, comentários.
+
+    Corações com campo 'required_reopen' pedem uma chamada de sincronização
+    extra entre after_step_id e step_id (ex.: page.fill de re-disparo). A LLM
+    ignora repetidamente a instrução de não rotular essa chamada com step_id
+    (inventa nomes como 'st_023_reopen', 'st_023_re_trigger' mesmo quando
+    proibido explicitamente) — em vez de brigar com esse comportamento a cada
+    retry, toleramos aqui UM step_id extra nessa posição exata e delegamos a
+    checagem de conteúdo real (chamada certa, seletor certo, posição certa)
+    para validate_required_reopen_patterns, que não depende de step_id nenhum.
     """
     if not os.path.exists(plan_path):
         return {
@@ -362,6 +374,22 @@ def validate_bot_against_plan(bot_code: str, plan_path: str) -> Dict[str, Any]:
 
     planned_ids = [s["step_id"] for s in plan.get("steps", [])]
     code_ids = extract_step_ids_from_code(bot_code)
+
+    if pending_corrections:
+        planned_set_for_reopen = set(planned_ids)
+        reopen_reqs = [
+            (c["required_reopen"]["after_step_id"], c["step_id"])
+            for c in pending_corrections
+            if c.get("required_reopen") and c.get("step_id")
+        ]
+        for after_id, target_id in reopen_reqs:
+            if after_id in code_ids and target_id in code_ids:
+                after_pos = code_ids.index(after_id)
+                target_pos = code_ids.index(target_id)
+                if target_pos == after_pos + 2:
+                    extra_id = code_ids[after_pos + 1]
+                    if extra_id not in planned_set_for_reopen:
+                        code_ids = code_ids[:after_pos + 1] + code_ids[after_pos + 2:]
 
     if not code_ids:
         return {
@@ -667,6 +695,563 @@ def validate_dataset_field_names(bot_code: str, dicionario_path: str) -> Dict[st
     }
 
 
+def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path: str) -> Dict[str, Any]:
+    """
+    Valida que o código usa os padrões de resiliência exigidos por cada passo
+    do plano: click_chained/fill_chained quando há 'parent', select_option_resilient
+    quando o passo é do tipo 'select', original_coords* quando há coords
+    gravadas, e strategy="HUMAN_LIKE" (ou fill_human_like) quando o dicionário
+    marca o campo como HUMAN_LIKE.
+
+    Motivo: essas regras já existem no prompt/playbook, mas o LLM as ignora sem
+    nenhuma validação mecânica pegando isso.
+    """
+    if not os.path.exists(plan_path):
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    with open(plan_path, "r", encoding="utf-8") as f:
+        plan = json.load(f)
+
+    dicionario = {}
+    if os.path.exists(dicionario_path):
+        try:
+            with open(dicionario_path, "r", encoding="utf-8") as f:
+                dicionario = json.load(f)
+        except json.JSONDecodeError:
+            dicionario = {}
+
+    human_like_selectors = {
+        field.get("selector")
+        for field in dicionario.get("fields", {}).values()
+        if field.get("fill_strategy") == "HUMAN_LIKE"
+    }
+
+    try:
+        tree = ast.parse(bot_code)
+    except SyntaxError:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    calls_by_step: Dict[str, List[Dict[str, Any]]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        method_name = node.func.attr
+        if method_name not in RUNNER_METHODS:
+            continue
+        step_id = None
+        kwargs: Dict[str, Any] = {}
+        dict_kwargs = set()
+        dict_contents: Dict[str, Dict[str, Any]] = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue
+            if kw.arg == "step_id" and isinstance(kw.value, ast.Constant):
+                step_id = kw.value.value
+            if isinstance(kw.value, ast.Constant):
+                kwargs[kw.arg] = kw.value.value
+            else:
+                kwargs[kw.arg] = True
+                if isinstance(kw.value, ast.Dict):
+                    dict_kwargs.add(kw.arg)
+                    literal_dict = {}
+                    for dk, dv in zip(kw.value.keys, kw.value.values):
+                        if isinstance(dk, ast.Constant) and isinstance(dv, ast.Constant):
+                            literal_dict[dk.value] = dv.value
+                    dict_contents[kw.arg] = literal_dict
+        if step_id is None:
+            continue
+        calls_by_step.setdefault(step_id, []).append({
+            "method": method_name, "kwargs": kwargs, "dict_kwargs": dict_kwargs, "dict_contents": dict_contents
+        })
+
+    def kwarg_present(step_id, method, kwarg_name):
+        for call in calls_by_step.get(step_id, []):
+            if call["method"] == method and kwarg_name in call["kwargs"]:
+                return True
+        return False
+
+    def kwarg_is_dict_literal(step_id, method, kwarg_name):
+        for call in calls_by_step.get(step_id, []):
+            if call["method"] == method and kwarg_name in call["dict_kwargs"]:
+                return True
+        return False
+
+    def kwarg_equals(step_id, methods, kwarg_name, value):
+        for call in calls_by_step.get(step_id, []):
+            if call["method"] in methods and call["kwargs"].get(kwarg_name) == value:
+                return True
+        return False
+
+    def any_call(step_id, methods):
+        return any(call["method"] in methods for call in calls_by_step.get(step_id, []))
+
+    errors = []
+    for step in plan.get("steps", []):
+        step_id = step["step_id"]
+        step_type = step.get("type")
+
+        if step_type == "select":
+            if not any_call(step_id, ("select_option_resilient",)):
+                errors.append({
+                    "type": "MISSING_SELECT_OPTION_RESILIENT",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' (dropdown '{step.get('dropdown_label', '')}' -> "
+                              f"'{step.get('option_text', '')}') deve usar runner.select_option_resilient(...), "
+                              f"não click_resilient separado para abridor e opção."
+                })
+                continue
+
+            coords_trigger = step.get("coords_trigger")
+            if coords_trigger and not kwarg_present(step_id, "select_option_resilient", "original_coords_trigger"):
+                errors.append({
+                    "type": "MISSING_ORIGINAL_COORDS",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' tem coordenadas gravadas do abridor do dropdown "
+                              f"({coords_trigger}) e deve passar "
+                              f"original_coords_trigger=({coords_trigger[0]}, {coords_trigger[1]}) "
+                              f"em select_option_resilient(...) como fallback de self-healing."
+                })
+
+            coords_option = step.get("coords_option")
+            if coords_option and not kwarg_present(step_id, "select_option_resilient", "original_coords_option"):
+                errors.append({
+                    "type": "MISSING_ORIGINAL_COORDS",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' tem coordenadas gravadas da opção do dropdown "
+                              f"({coords_option}) e deve passar "
+                              f"original_coords_option=({coords_option[0]}, {coords_option[1]}) "
+                              f"em select_option_resilient(...) como fallback de self-healing."
+                })
+            continue
+
+        parent = step.get("parent")
+        if parent:
+            chained_method = "click_chained" if step_type == "click" else "fill_chained"
+            has_kwargs = kwarg_present(step_id, chained_method, "parent") and kwarg_present(step_id, chained_method, "child")
+            if not has_kwargs:
+                errors.append({
+                    "type": "MISSING_CHAINED_LOCATOR",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' tem elemento pai identificado na gravação "
+                              f"(parent='{parent.get('selector', '')}') e deve usar "
+                              f"runner.{chained_method}(parent=..., child=..., ...) em vez de "
+                              f"seletor absoluto direto."
+                })
+            elif not (kwarg_is_dict_literal(step_id, chained_method, "parent") and kwarg_is_dict_literal(step_id, chained_method, "child")):
+                # click_chained/fill_chained chamam parent.get('selector')/child.get('selector')
+                # internamente (runner.py:647-659) — se vier string em vez de dict, quebra em
+                # runtime com AttributeError, e isso não é pego nem por AST superficial nem
+                # pelo dry run (que usa runner fake sem essa lógica interna).
+                errors.append({
+                    "type": "INVALID_CHAINED_LOCATOR_SHAPE",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' chama runner.{chained_method}(...) mas parent=/child= "
+                              f"devem ser dicts, ex.: parent={{'selector': '{parent.get('selector', '')}'}}, "
+                              f"child={{'selector': '...'}} — não strings simples. "
+                              f"({chained_method} chama parent.get('selector') internamente e quebra com string.)"
+                })
+            else:
+                plan_has_text = parent.get("has_text")
+                if plan_has_text:
+                    code_parent_dict = {}
+                    for call in calls_by_step.get(step_id, []):
+                        if call["method"] == chained_method:
+                            code_parent_dict = call.get("dict_contents", {}).get("parent", {})
+                            break
+                    code_has_text = code_parent_dict.get("has_text")
+                    code_selector = code_parent_dict.get("selector") or ""
+                    has_text_ok = (code_has_text == plan_has_text) or (plan_has_text in code_selector)
+                    if not has_text_ok:
+                        errors.append({
+                            "type": "MISSING_PARENT_HAS_TEXT",
+                            "step_id": step_id,
+                            "detail": f"Passo '{step_id}' tem parent.has_text='{plan_has_text}' gravado no "
+                                      f"plano (usado para distinguir entre múltiplos elementos que casam com "
+                                      f"o seletor genérico do pai '{parent.get('selector', '')}'), mas a "
+                                      f"chamada runner.{chained_method}(...) não aplica esse filtro — nem via "
+                                      f"parent={{'selector': '{parent.get('selector', '')}', 'has_text': "
+                                      f"'{plan_has_text}'}} nem embutindo o texto diretamente no seletor "
+                                      f"(ex.: parent={{'selector': \"{parent.get('selector', '')}:has-text('{plan_has_text}')\"}}). "
+                                      f"Sem esse filtro o robô pode interagir com o elemento errado quando "
+                                      f"mais de um elemento casa com o seletor do pai."
+                        })
+
+        coords = step.get("coords")
+        if coords:
+            # original_coords só existe em click_resilient/click_chained/click_by_coordinates
+            # — fill_resilient e fill_chained não têm esse parâmetro (runner.py:766,702),
+            # e coords só é gravado para eventos "click" (sanitizer.py), então essa
+            # checagem nunca precisa cobrir os métodos de fill.
+            coord_ok = any(
+                kwarg_present(step_id, m, "original_coords")
+                for m in ("click_resilient", "click_chained", "click_by_coordinates")
+            )
+            if not coord_ok:
+                errors.append({
+                    "type": "MISSING_ORIGINAL_COORDS",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' tem coordenadas gravadas ({coords}) e deve passar "
+                              f"original_coords=({coords[0]}, {coords[1]}) como fallback de self-healing."
+                })
+
+        if step_type == "fill" and step.get("selector") in human_like_selectors:
+            human_like_ok = (
+                kwarg_equals(step_id, ("fill_resilient", "fill_chained"), "strategy", "HUMAN_LIKE") or
+                any_call(step_id, ("fill_human_like",))
+            )
+            if not human_like_ok:
+                errors.append({
+                    "type": "MISSING_HUMAN_LIKE_STRATEGY",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' preenche campo com detecção anti-bot "
+                              f"(keydown/keyup) segundo dicionario.json — deve usar "
+                              f"strategy=\"HUMAN_LIKE\" ou runner.fill_human_like(...)."
+                })
+
+    return {
+        "status": "FAIL" if errors else "PASS",
+        "total_errors": len(errors),
+        "errors": errors
+    }
+
+
+def validate_required_wait_patterns(bot_code: str, pending_corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Valida sincronizacoes assincronas pedidas explicitamente via
+    correcoes_acumuladas.json (campo 'required_wait' em uma correcao pendente):
+    exige um loop (for/while) ANTES da chamada do step_id alvo, referenciando
+    o valor literal de bloqueio informado.
+
+    Motivo: correcoes em prosa pedindo esse tipo de espera se mostraram
+    reproduzivelmente ignoradas pela LLM (mesmo com temperature baixa e
+    reformulacoes diferentes) — sem uma checagem mecanica, o Ralph Loop nao
+    tem como saber que a correcao nao foi aplicada.
+
+    Campo opcional 'must_reference' em required_wait: string literal adicional
+    que tambem precisa aparecer dentro do MESMO loop. Motivo (achado
+    reproduzido em producao): a checagem de 'blocking_value' sozinha pode ser
+    satisfeita por um loop tecnicamente presente mas semanticamente inutil —
+    ex.: 'while page.locator(<seletor do alvo final>).text_content() ==
+    \"Avancar\":' nunca e verdadeiro (o alvo final nunca tem esse texto), entao
+    o loop nunca executa, mas passa na checagem por conter o literal certo.
+    'must_reference' forca o loop a tambem mencionar algo inequivoco do
+    elemento correto (ex.: o seletor do botao que realmente carrega o valor de
+    bloqueio), tornando muito mais dificil "enganar" o validador sem resolver
+    o problema de fato.
+
+    Campo opcional 'must_call' em required_wait: nome de metodo (ex.: "click")
+    que precisa aparecer como chamada (obj.click(...)) DENTRO do mesmo loop.
+    Motivo (2o achado reproduzido em producao, mesmo alvo do must_reference):
+    mesmo referenciando o seletor certo, a LLM escreveu
+    'while page.locator("#btn-next-step").text_content() == "Avancar":
+    time.sleep(0.5)' — sem nenhum re-clique. Isso e uma espera passiva pura;
+    quando o botao trava mostrando 'Avancar' de verdade (erro transitorio da
+    API), esse loop nunca sai (loop infinito) porque nada torna a clicar nele.
+    'must_call' fecha essa lacuna exigindo que o loop realmente EXECUTE uma
+    acao de recuperacao (ex.: next_btn.click()), nao so observe passivamente.
+    """
+    requirements = [
+        (c.get("step_id"), c["required_wait"])
+        for c in pending_corrections
+        if c.get("required_wait") and c.get("step_id")
+    ]
+    if not requirements:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    try:
+        tree = ast.parse(bot_code)
+    except SyntaxError:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    errors = []
+    for step_id, wait_spec in requirements:
+        blocking_value = wait_spec.get("blocking_value")
+        must_reference = wait_spec.get("must_reference")
+        must_references = [must_reference] if isinstance(must_reference, str) else (must_reference or [])
+        must_call = wait_spec.get("must_call")
+
+        target_lineno = None
+        containing_func = None
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in RUNNER_METHODS:
+                    continue
+                has_step_id = any(
+                    kw.arg == "step_id" and isinstance(kw.value, ast.Constant) and kw.value.value == step_id
+                    for kw in node.keywords
+                )
+                if has_step_id:
+                    target_lineno = node.lineno
+                    containing_func = func
+                    break
+            if target_lineno is not None:
+                break
+
+        if target_lineno is None:
+            continue  # step ausente já é coberto por outro validador (plano)
+
+        # Resolve variaveis simples atribuidas a partir de locators (ex.:
+        # `next_btn = page.locator("#btn-next-step")`) para os literais que
+        # carregam. Sem isso, hoisting de locator (pratica de codigo boa e
+        # comum) faz o literal ficar ANTES do loop, fora do subtree do AST do
+        # loop, e o validador reporta falso-negativo mesmo com codigo correto.
+        var_literals: Dict[str, List[str]] = {}
+        for stmt in ast.walk(containing_func):
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                lits = [n.value for n in ast.walk(stmt.value) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+                if lits:
+                    var_literals.setdefault(stmt.targets[0].id, []).extend(lits)
+
+        found_wait = False
+        found_reference = not must_references
+        found_call = not must_call
+        best_refs_found = set()
+        for node in ast.walk(containing_func):
+            if not isinstance(node, (ast.For, ast.While)):
+                continue
+            if node.lineno >= target_lineno:
+                continue
+            has_blocking_value = False
+            refs_found = set()
+            has_call = not must_call
+            for sub in ast.walk(node):
+                literal_candidates = []
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    literal_candidates.append(sub.value)
+                elif isinstance(sub, ast.Name) and sub.id in var_literals:
+                    literal_candidates.extend(var_literals[sub.id])
+                if any(val == blocking_value for val in literal_candidates):
+                    has_blocking_value = True
+                for val in literal_candidates:
+                    for ref in must_references:
+                        if ref in val:
+                            refs_found.add(ref)
+                if must_call and isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == must_call:
+                    has_call = True
+            has_reference = len(refs_found) == len(must_references)
+            if has_blocking_value:
+                best_refs_found |= refs_found
+            if has_blocking_value and has_reference and has_call:
+                found_wait = True
+                found_reference = True
+                found_call = True
+                break
+            if has_blocking_value:
+                found_wait = True
+                if has_reference:
+                    found_reference = True
+                if has_call:
+                    found_call = True
+
+        if not found_wait:
+            errors.append({
+                "type": "MISSING_ASYNC_WAIT_PATTERN",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' precisa de um loop (for/while) IMEDIATAMENTE ANTES "
+                          f"da chamada do passo, checando repetidamente (nao usar time.sleep fixo) "
+                          f"ate o valor do campo deixar de ser igual a '{blocking_value}'. "
+                          f"Esta instrucao ja foi fornecida e foi ignorada — adicione o loop de "
+                          f"polling agora."
+            })
+        elif not found_reference:
+            missing_refs = [r for r in must_references if r not in best_refs_found]
+            errors.append({
+                "type": "MISSING_ASYNC_WAIT_PATTERN",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' tem um loop contendo '{blocking_value}', mas esse loop "
+                          f"nao referencia TODOS os literais obrigatorios {must_references} (faltando: "
+                          f"{missing_refs}) — ou seja, o loop provavelmente esta checando so o elemento "
+                          f"ERRADO e/ou nao verifica se o elemento ALVO do proprio passo ja apareceu, "
+                          f"fazendo a condicao de saida nunca corresponder ao estado real (ou sair cedo "
+                          f"demais, antes do erro transitorio ter chance de ocorrer, ou nunca sair). "
+                          f"Reescreva o loop para referenciar CADA UM destes literais dentro do mesmo "
+                          f"loop: {must_references}."
+            })
+        elif not found_call:
+            errors.append({
+                "type": "MISSING_ASYNC_WAIT_PATTERN",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' tem um loop referenciando {must_references} e "
+                          f"'{blocking_value}', mas o loop nao chama '.{must_call}(...)' — ou seja, "
+                          f"o loop so espera passivamente e nunca tenta se recuperar do estado de "
+                          f"erro/travado (se o valor '{blocking_value}' voltar a aparecer por um erro "
+                          f"transitorio, o loop nunca sai, pois nada re-executa a acao). Adicione uma "
+                          f"chamada '.{must_call}(...)' no elemento de gatilho, DENTRO do loop, "
+                          f"condicionada ao estado atual (ex.: clicar de novo somente se o elemento "
+                          f"estiver habilitado e com o texto de bloqueio)."
+            })
+
+    return {
+        "status": "FAIL" if errors else "PASS",
+        "total_errors": len(errors),
+        "errors": errors
+    }
+
+
+def validate_required_reopen_patterns(bot_code: str, pending_corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Valida re-disparos de campo exigidos explicitamente via correcoes_acumuladas.json
+    (campo 'required_reopen' em uma correcao pendente): exige uma chamada
+    (runner.fill_resilient/fill_chained/fill_human_like ou page.fill) referenciando
+    o selector alvo, posicionada estritamente ENTRE a chamada de after_step_id e a
+    chamada de step_id (o passo que depende do reabertura).
+
+    Motivo: mesma classe de problema do required_wait — uma instrucao em prosa pedindo
+    para "reabrir"/"re-disparar" um campo apos outro ser selecionado se mostrou
+    reproduzivelmente perdida pela LLM em reescritas sucessivas do arquivo inteiro.
+    Sem checagem mecanica, o Ralph Loop marca a correcao como aplicada mesmo quando
+    o codigo gerado nunca reflete a exigencia.
+    """
+    requirements = [
+        (c.get("step_id"), c["required_reopen"])
+        for c in pending_corrections
+        if c.get("required_reopen") and c.get("step_id")
+    ]
+    if not requirements:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    try:
+        tree = ast.parse(bot_code)
+    except SyntaxError:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    errors = []
+    for step_id, reopen_spec in requirements:
+        after_step_id = reopen_spec.get("after_step_id")
+        selector = reopen_spec.get("selector")
+
+        target_lineno = None
+        after_lineno = None
+        containing_func = None
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            local_target = None
+            local_after = None
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in RUNNER_METHODS:
+                    continue
+                call_step_id = next(
+                    (kw.value.value for kw in node.keywords
+                     if kw.arg == "step_id" and isinstance(kw.value, ast.Constant)),
+                    None
+                )
+                if call_step_id == step_id:
+                    local_target = node.lineno
+                elif call_step_id == after_step_id:
+                    local_after = node.lineno
+            if local_target is not None:
+                target_lineno = local_target
+                after_lineno = local_after
+                containing_func = func
+                break
+
+        if target_lineno is None or after_lineno is None:
+            continue  # passo ausente já é coberto por outro validador (plano)
+
+        found_reopen = False
+        for node in ast.walk(containing_func):
+            if not isinstance(node, ast.Call):
+                continue
+            if not (after_lineno < node.lineno < target_lineno):
+                continue
+            for arg_node in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(arg_node, ast.Constant) and isinstance(arg_node.value, str) and selector in arg_node.value:
+                    found_reopen = True
+                    break
+            if found_reopen:
+                break
+
+        if not found_reopen:
+            errors.append({
+                "type": "MISSING_REOPEN_PATTERN",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' precisa de uma chamada (ex.: page.fill(...) ou "
+                          f"runner.fill_resilient(...)) referenciando o seletor '{selector}' "
+                          f"posicionada IMEDIATAMENTE ANTES da chamada do passo '{step_id}' e DEPOIS "
+                          f"da chamada do passo '{after_step_id}', para forcar o campo a re-disparar "
+                          f"seu autocomplete/validacao com o estado ja atualizado. Esta instrucao ja "
+                          f"foi fornecida e foi ignorada — adicione a chamada de re-disparo agora, sem "
+                          f"remover nem reordenar nenhuma chamada existente."
+            })
+
+    return {
+        "status": "FAIL" if errors else "PASS",
+        "total_errors": len(errors),
+        "errors": errors
+    }
+
+
+def validate_required_method_patterns(bot_code: str, pending_corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Valida chamadas de metodo exigidas explicitamente via correcoes_acumuladas.json
+    (campo 'required_method' em uma correcao pendente): exige que a chamada do
+    step_id indicado use exatamente o metodo runner.<required_method>(...).
+
+    Motivo: mesma classe de problema do required_wait/required_reopen — uma
+    correcao em prosa (proposed_fix) pedindo para trocar o metodo/seletor de um
+    passo (ex.: click_resilient num host de Shadow DOM fechado por
+    click_by_coordinates) se mostrou reproduzivelmente perdida pela LLM em
+    reescritas sucessivas do arquivo inteiro durante o Ralph Loop: nenhum
+    validador estrutural pre-existente rejeita o metodo antigo (ele e
+    sintaticamente valido, tem step_id, nao e alucinado), entao o loop converge
+    e marca a correcao como "applied" mesmo quando o codigo gerado nunca
+    reflete a exigencia.
+    """
+    requirements = [
+        (c.get("step_id"), c["required_method"])
+        for c in pending_corrections
+        if c.get("required_method") and c.get("step_id")
+    ]
+    if not requirements:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    try:
+        tree = ast.parse(bot_code)
+    except SyntaxError:
+        return {"status": "PASS", "total_errors": 0, "errors": []}
+
+    calls_by_step_id = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        call_step_id = next(
+            (kw.value.value for kw in node.keywords
+             if kw.arg == "step_id" and isinstance(kw.value, ast.Constant)),
+            None
+        )
+        if call_step_id:
+            calls_by_step_id[call_step_id] = node.func.attr
+
+    errors = []
+    for step_id, required_method in requirements:
+        actual_method = calls_by_step_id.get(step_id)
+        if actual_method is None:
+            continue  # passo ausente já é coberto por outro validador (plano)
+        if actual_method != required_method:
+            errors.append({
+                "type": "MISSING_REQUIRED_METHOD",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' precisa chamar runner.{required_method}(...), mas o "
+                          f"código gerado usa runner.{actual_method}(...) em vez disso. Esta troca de "
+                          f"método já foi solicitada explicitamente numa correção anterior e foi "
+                          f"ignorada — substitua a chamada de '{step_id}' por runner.{required_method}(...) "
+                          f"agora, sem alterar nenhum outro passo."
+            })
+
+    return {
+        "status": "FAIL" if errors else "PASS",
+        "total_errors": len(errors),
+        "errors": errors
+    }
+
+
 def _extract_step_id_from_stmt(stmt: ast.stmt) -> Optional[str]:
     """Retorna o step_id (string) de qualquer chamada runner.<metodo>(..., step_id="stX") dentro do statement."""
     for node in ast.walk(stmt):
@@ -894,20 +1479,37 @@ except Exception as e:
 print("DRYRUN_OK")
 '''
 
+    # Harness vai pra um arquivo temporário em vez de "-c harness": bots grandes
+    # (ex.: 90+ passos) fazem o comando ultrapassar o limite de linha de comando
+    # do CreateProcess no Windows (WinError 206 - nome de arquivo/comando muito
+    # grande), quebrando o dry run de forma totalmente não relacionada ao
+    # conteúdo do bot.
+    import tempfile
+    harness_path = None
     try:
-        result = subprocess.run(
-            [_sys.executable, "-c", harness],
-            capture_output=True, text=True, timeout=timeout, cwd=project_root
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "FAIL",
-            "total_errors": 1,
-            "errors": [{
-                "type": "DRYRUN_TIMEOUT",
-                "detail": f"Dry run excedeu {timeout}s — possível loop infinito ou I/O bloqueante no bot."
-            }]
-        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", encoding="utf-8", delete=False
+        ) as tmp:
+            tmp.write(harness)
+            harness_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                [_sys.executable, harness_path],
+                capture_output=True, text=True, timeout=timeout, cwd=project_root
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "status": "FAIL",
+                "total_errors": 1,
+                "errors": [{
+                    "type": "DRYRUN_TIMEOUT",
+                    "detail": f"Dry run excedeu {timeout}s — possível loop infinito ou I/O bloqueante no bot."
+                }]
+            }
+    finally:
+        if harness_path and os.path.exists(harness_path):
+            os.remove(harness_path)
 
     output = (result.stdout or "").strip()
     stderr = (result.stderr or "").strip()

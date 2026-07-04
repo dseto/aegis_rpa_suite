@@ -294,6 +294,34 @@ class TransactionRunner:
                 if attempt == 2:
                     return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id)
 
+    def click_by_coordinates(self, page, original_coords, target_description, step_id=None) -> bool:
+        """
+        Clique físico direto por coordenadas relativas de gravação, sem
+        nenhuma resolução de seletor CSS. Único caminho determinístico para
+        elementos dentro de um Shadow DOM fechado (`attachShadow({mode:
+        'closed'})`): a árvore de sombra fechada é inacessível a qualquer
+        seletor CSS/JS externo por design da plataforma (não é limitação do
+        Playwright) — clicar no host apenas atinge o elemento contêiner
+        (sucesso falso-positivo, sem efeito real), e não há seletor que
+        alcance o botão real interno. Um clique físico do SO na posição de
+        tela renderizada, no entanto, chega ao elemento correto independente
+        do modo do shadow root, pois opera na camada de composição visual.
+        """
+        if not step_id:
+            raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+        if not original_coords or len(original_coords) != 2:
+            raise ValueError(f"original_coords é obrigatório para click_by_coordinates (step_id={step_id}).")
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | {step_id} | click_by_coordinates | coords | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
+            sys.stdout.flush()
+        viewport = page.viewport_size or {"width": 1280, "height": 720}
+        x = int(viewport["width"] * original_coords[0])
+        y = int(viewport["height"] * original_coords[1])
+        print(f"[AEGIS RUNNER] Clicando por coordenadas diretas (Shadow DOM fechado): ({x}, {y})")
+        page.mouse.click(x, y)
+        self._log_step(step_id=step_id, action="click_by_coordinates", selector="coords", target_description=target_description, status="SUCCESS")
+        return True
+
     def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None) -> bool:
         # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
         if "strict mode violation" in str(e) or "resolved to" in str(e):
@@ -332,10 +360,17 @@ class TransactionRunner:
                 let el = null;
                 try { el = document.querySelector(sel); } catch(e) {}
                 if (!el) {
-                    const opts = document.querySelectorAll('.mat-option, [role="option"]');
-                    for (const opt of opts) {
-                        if (opt.textContent.trim().includes(sel.replace(/^.*:has-text\([^)]+\)\s*/, ''))) {
-                            el = opt; break;
+                    let searchText = null;
+                    const re = /:has-text\(['"]([^'"]*)['"]\)/g;
+                    let m, last;
+                    while ((m = re.exec(sel)) !== null) { last = m; }
+                    if (last) { searchText = last[1]; }
+                    if (searchText) {
+                        const opts = document.querySelectorAll('.mat-option, [role="option"]');
+                        for (const opt of opts) {
+                            if (opt.textContent.trim().includes(searchText)) {
+                                el = opt; break;
+                            }
                         }
                     }
                 }
@@ -398,6 +433,38 @@ class TransactionRunner:
         text = re.sub(r'[^\w\s-]', '', text).strip().lower()
         return re.sub(r'[-\s]+', '-', text)
 
+    def _click_by_live_geometry(self, page, option_text) -> bool:
+        """Localiza um elemento de opção pelo texto e clica no centro do seu
+        bounding rect atual (via JS), em vez de depender de coordenadas
+        percentuais gravadas que ficam obsoletas quando o overlay rola/reflui
+        de forma diferente da gravação original. Determinístico, sem LLM."""
+        try:
+            rect = page.evaluate(
+                """(text) => {
+                    const sel = "[role='option'], .mat-option, li, .select-option";
+                    const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+                    const target = norm(text);
+                    const els = Array.from(document.querySelectorAll(sel));
+                    const el = els.find(e => norm(e.textContent) === target)
+                        || els.find(e => norm(e.textContent).includes(target));
+                    if (!el) return null;
+                    const r = el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) return null;
+                    return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+                }""",
+                option_text,
+            )
+        except Exception:
+            rect = None
+
+        if not rect:
+            return False
+
+        page.mouse.click(rect["x"], rect["y"])
+        time.sleep(0.3)
+        print(f"[AEGIS RUNNER] Opção '{option_text}' selecionada via geometria DOM ao vivo ({rect['x']:.0f}, {rect['y']:.0f})")
+        return True
+
     def select_option_resilient(self, page, dropdown_label, option_text,
                                 original_coords_trigger=None,
                                 original_coords_option=None,
@@ -414,7 +481,7 @@ class TransactionRunner:
             sys.stdout.flush()
 
         slug = self._slugify(dropdown_label)
-        
+
         # 1. Tenta abrir o dropdown (Trigger)
         trigger_clicked = False
         trigger_selectors = [
@@ -428,18 +495,82 @@ class TransactionRunner:
         ]
 
         print(f"[AEGIS RUNNER] Tentando abrir o dropdown para '{dropdown_label}'...")
-        for sel in trigger_selectors:
+
+        # Linhas de grid (ex.: tabela de coberturas) têm 3 triggers
+        # (LMG/Franquia/Desconto) compartilhando o mesmo dropdown_label — o
+        # texto completo da linha (às vezes truncado pelo sanitizer). Nenhum
+        # seletor CSS de texto consegue distinguir qual dos 3 clicar, e o
+        # fallback genérico 'div:has-text(label) >> div' casa com o container
+        # da página inteira (o texto "sobe" por todos os ancestrais),
+        # clicando em elemento errado (ex.: cabeçalho da tabela). Por isso,
+        # antes dos seletores genéricos, tenta localizar a linha (.mat-row)
+        # usando o próprio dropdown_label como substring (filter/has_text já
+        # faz contains, então funciona mesmo truncado) e escolhe o trigger
+        # certo pela coluna, inferida do formato de option_text: percentual
+        # puro (ex. '10%') = desconto, 'Isenta'/'A - 5.288,68' = franquia,
+        # o resto (valores numéricos, "% FIPE", texto livre) = LMG.
+        if dropdown_label.strip():
+            try:
+                row_loc = page.locator(".mat-row").filter(has_text=dropdown_label.strip()).first
+                if row_loc.count() > 0:
+                    triggers = row_loc.locator(".mat-select-grid-trigger")
+                    trigger_count = triggers.count()
+                    if trigger_count > 1:
+                        option_norm = option_text.strip()
+                        if re.fullmatch(r"\d+%", option_norm):
+                            col_idx = 2  # desconto
+                        elif option_norm == "Isenta" or re.match(r"^[A-Za-z]\s*-\s*", option_norm):
+                            col_idx = 1  # franquia
+                        else:
+                            col_idx = 0  # lmg
+                        if col_idx < trigger_count:
+                            row_loc.scroll_into_view_if_needed(timeout=1500)
+                            time.sleep(0.2)
+                            target_trigger = triggers.nth(col_idx)
+                            target_trigger.click(timeout=1000, force=True)
+                            time.sleep(0.2)
+                            if page.locator(".cdk-overlay-pane, .mat-select-panel, [role='listbox']").count() > 0:
+                                trigger_clicked = True
+                                print(f"[AEGIS RUNNER] Dropdown '{dropdown_label}' aberto via linha do grid (coluna {col_idx})")
+            except Exception as e:
+                print(f"[AEGIS RUNNER] Falha ao tentar localizar trigger via linha do grid: {e}")
+
+        for sel in (trigger_selectors if not trigger_clicked else []):
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=500):
-                    loc.click(timeout=1000, force=True)
+                # loc.is_visible() não espera o elemento aparecer — retorna o
+                # estado atual na hora. Campos condicionais (ex.: 'Nível da
+                # Blindagem', que só existe no DOM depois de marcar 'Possui
+                # Blindagem?' em st_033) podem levar alguns ms a mais que isso
+                # pra renderizar; um pre-check is_visible(timeout=500) descarta
+                # o seletor antes mesmo de tentar, mesmo que o elemento fosse
+                # aparecer logo em seguida (causa raiz confirmada da falha
+                # intermitente do st_034). loc.click(timeout=...) já espera
+                # (auto-wait) o elemento ficar anexado ao DOM dentro do
+                # timeout — usar direto, sem o pre-check, corrige a corrida.
+                loc.click(timeout=1500, force=True)
+                time.sleep(0.2)
+                # Seletores genéricos como 'div:has-text(X) >> div' podem
+                # casar com um container amplo e clicar num filho errado
+                # (ex.: cabeçalho da tabela em vez do trigger da linha).
+                # Só aceita como aberto se um painel de opções realmente
+                # surgiu — senão segue tentando os próximos seletores.
+                if page.locator(".cdk-overlay-pane, .mat-select-panel, [role='listbox']").count() > 0:
                     trigger_clicked = True
                     print(f"[AEGIS RUNNER] Dropdown '{dropdown_label}' aberto usando seletor: '{sel}'")
                     break
+                else:
+                    print(f"[AEGIS RUNNER] Seletor '{sel}' clicou mas não abriu painel de opções. Tentando próximo...")
             except Exception:
                 continue
 
         # Fallback de coordenadas para o trigger
+        # Coordenadas gravadas são frações do viewport na gravação original;
+        # scroll/reflow do grid em runtime pode deslocar o alvo real. Por isso
+        # o clique aqui só conta como sucesso se de fato abrir um painel de
+        # opções — sem essa checagem, um clique cego "no vazio" era aceito
+        # como sucesso e o dropdown seguia com o valor antigo (causa raiz de
+        # falhas em cascata como o st_052 do cenário 001).
         if not trigger_clicked and original_coords_trigger and len(original_coords_trigger) == 2:
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
@@ -447,7 +578,10 @@ class TransactionRunner:
                 y = int(viewport["height"] * original_coords_trigger[1])
                 print(f"[AEGIS RUNNER] Abrindo dropdown via coordenadas de fallback: ({x}, {y})")
                 page.mouse.click(x, y)
-                trigger_clicked = True
+                time.sleep(0.3)
+                trigger_clicked = page.locator(".cdk-overlay-pane, .mat-select-panel, [role='listbox']").count() > 0
+                if not trigger_clicked:
+                    print(f"[AEGIS RUNNER] Coordenada de fallback ({x}, {y}) não abriu nenhum painel de opções. Clique descartado.")
             except Exception as e:
                 print(f"[AEGIS RUNNER] Falha ao clicar nas coordenadas do trigger: {e}")
 
@@ -473,15 +607,36 @@ class TransactionRunner:
             if option_clicked:
                 break
 
-        # Fallback de coordenadas para a opção
+        # Fallback por geometria DOM ao vivo: busca o elemento de opção pelo
+        # texto (dado que já temos, vindo do plano) e clica no centro do seu
+        # bounding rect ATUAL, em vez de confiar em coordenadas percentuais
+        # gravadas que ficam obsoletas quando o overlay reflui/rola de forma
+        # diferente da gravação original. Ainda determinístico (sem LLM).
+        if not option_clicked:
+            option_clicked = self._click_by_live_geometry(page, option_text)
+
+        # Fallback de coordenadas gravadas (último recurso) — só é aceito
+        # como sucesso se o elemento realmente sob o cursor no ponto clicado
+        # contiver o texto esperado. Antes, o clique era aceito às cegas: se
+        # a coordenada gravada estivesse obsoleta, o robô "selecionava" o
+        # vazio e seguia reportando SUCCESS com o valor antigo inalterado
+        # (causa raiz confirmada da falha em cascata do st_052/cenário 001).
         if not option_clicked and original_coords_option and len(original_coords_option) == 2:
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords_option[0])
                 y = int(viewport["height"] * original_coords_option[1])
-                print(f"[AEGIS RUNNER] Selecionando opção via coordenadas de fallback: ({x}, {y})")
-                page.mouse.click(x, y)
-                option_clicked = True
+                hit_text = page.evaluate(
+                    "([x, y]) => { const el = document.elementFromPoint(x, y); return el ? el.textContent : null; }",
+                    [x, y],
+                )
+                normalized_hit = (hit_text or "").replace("\xa0", " ")
+                if option_text.strip() and option_text.strip() in normalized_hit:
+                    print(f"[AEGIS RUNNER] Selecionando opção via coordenadas de fallback: ({x}, {y})")
+                    page.mouse.click(x, y)
+                    option_clicked = True
+                else:
+                    print(f"[AEGIS RUNNER] Coordenada de fallback ({x}, {y}) não corresponde a '{option_text}' (encontrado: {normalized_hit!r}). Clique descartado.")
             except Exception as e:
                 print(f"[AEGIS RUNNER] Falha ao clicar nas coordenadas da opção: {e}")
 
@@ -642,6 +797,23 @@ class TransactionRunner:
         if len(c_parts) > 1:
             return c_parts[-1]
 
+        # 5. Selector do filho gravado como caminho absoluto a partir da raiz
+        # da página (ex.: "table #grid-tbody tr button:has-text('Cláusulas')")
+        # em vez de relativo ao pai — comum quando o sanitizer preserva o
+        # `selector` original da gravação e só adiciona `parent` como reforço
+        # de escopo, sem relativizar o próprio `selector`. O pai (.mat-row/tr)
+        # já é a própria linha; buscar esse mesmo ancestral de novo dentro
+        # dela nunca casa (uma <tr> não contém outra <tr>/<table> aninhada),
+        # forçando fallback físico e, na sequência, self-healing cognitivo —
+        # que pode clicar na linha errada (causa raiz confirmada da falha em
+        # cascata do st_051→st_052 no cenário 001). Corta tudo até o último
+        # token "tr" isolado (com ou sem classe) e usa só o restante.
+        tr_match = re.search(r"\btr\b(?:\.[\w-]+)?\s+(.+)$", child_clean)
+        if tr_match:
+            after = tr_match.group(1).strip()
+            if after:
+                return after
+
         return child_clean
 
     def click_chained(self, page, parent: dict, child: dict, target_description: str,
@@ -663,6 +835,12 @@ class TransactionRunner:
             print(f"[AEGIS_STEP] START | {step_id} | click_chained | {selector_full} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
             sys.stdout.flush()
 
+        # Paineis de autocomplete/overlay dependem de fetch assíncrono simulado
+        # (latência observada de até ~4s); usa um piso de espera mais generoso
+        # que o timeout padrão de clique para não derrubar a tentativa antes do
+        # painel terminar de carregar.
+        wait_timeout = max(timeout, 8000)
+
         for attempt in range(1, 3):
             try:
                 if attempt == 2:
@@ -675,14 +853,15 @@ class TransactionRunner:
                 if "has_text" in parent and parent.get("has_text"):
                     parent_locator = parent_locator.filter(has_text=parent["has_text"])
 
-                # 2. Verifica unicidade do pai
-                count = parent_locator.count()
-                if count == 0:
-                    raise RuntimeError(f"Parent '{parent_repr}' não encontrado no DOM")
+                # 2. Aguarda o pai ser anexado ao DOM (paineis async/CDK podem
+                # demorar a renderizar; checagem instantânea derrubava a
+                # tentativa 1 antes do fetch simulado terminar)
+                parent_locator.first.wait_for(state="attached", timeout=wait_timeout)
 
                 # 3. Encadeia o filho e clica com fallback de scroll
                 target = parent_locator.first.locator(child_sel_clean).first
-                target.scroll_into_view_if_needed(timeout=1000)
+                target.wait_for(state="visible", timeout=wait_timeout)
+                target.scroll_into_view_if_needed(timeout=timeout)
                 target.click(timeout=timeout, force=True)
 
                 self._log_step(step_id=step_id, action="click_chained", selector=selector_full, target_description=target_description, status="SUCCESS")
@@ -745,7 +924,27 @@ class TransactionRunner:
 
             # DIRECT
             target = parent_locator.first.locator(child_sel_clean).first
-            target.fill(text_val, timeout=timeout)
+            try:
+                target.fill(text_val, timeout=timeout)
+            except Exception as fill_err:
+                # Campos "readonly" (ex.: código copia-e-cola PIX) resolvem o
+                # locator normalmente mas rejeitam Locator.fill() porque o
+                # Playwright exige a propriedade editável. Preenche via DOM
+                # diretamente no MESMO elemento já escopado pelo chained
+                # locator (determinístico, sem heurística visual) antes de
+                # escalar para self-healing.
+                print(f"[AEGIS RUNNER] fill() padrão falhou (possível campo readonly): {fill_err}")
+                target.evaluate(
+                    """(el, val) => {
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    text_val,
+                )
+                actual = target.input_value(timeout=1000)
+                if actual != text_val:
+                    raise fill_err
             self._log_step(step_id=step_id, action="fill_chained", selector=selector_full, target_description=target_description, status="SUCCESS")
             return True
 
@@ -797,7 +996,7 @@ class TransactionRunner:
             text_val = f"{parts[2]}/{parts[1]}/{parts[0]}"
 
         if strategy == "HUMAN_LIKE":
-            res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout)
+            res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout, step_id=step_id)
             if res:
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="SUCCESS")
             return res
