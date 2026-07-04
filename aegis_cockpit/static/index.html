@@ -2787,6 +2787,7 @@
             }
         }
 
+        let stepsPollCounter = 0;
         function pollLogs() {
             fetch(`/api/logs?offset=${logsOffset}`)
                 .then(r => r.json())
@@ -2794,6 +2795,20 @@
                     appendLogs(data.lines);
                     logsOffset = data.offset;
                     updateStatusBadge(data.status, data.running);
+
+                    // Atualiza painel de passos em tempo real durante a execução (a cada ~1.6s),
+                    // lendo o historico_passos.json fresco em vez de esperar o fim do processo.
+                    if (data.running) {
+                        stepsPollCounter++;
+                        if (stepsPollCounter % 2 === 0 && activeProjectSlug) {
+                            const select = document.getElementById('active-version-select');
+                            const currentSelectedVersion = select ? select.value : '';
+                            loadTelemetryData(activeProjectSlug, true, currentSelectedVersion || null);
+                        }
+                    } else {
+                        stepsPollCounter = 0;
+                    }
+
                     if (!data.running && logsInterval) {
                         clearInterval(logsInterval);
                         logsInterval = null;
@@ -3691,9 +3706,12 @@
                 const usedEventIndices = new Set();
 
                 // Filtra passos pela primeira transação presente para evitar mistura de passos de transações diferentes
-                const activeRowIds = [...new Set(stepsHistory.map(s => s.row_id).filter(r => r !== null && r !== undefined))];
+                // Descarta entradas "auto_*" (diagnóstico de falha sem step_id no plano, não é passo real)
+                const realStepsHistory = stepsHistory.filter(s => !(typeof s.step_id === 'string' && s.step_id.startsWith('auto_')));
+
+                const activeRowIds = [...new Set(realStepsHistory.map(s => s.row_id).filter(r => r !== null && r !== undefined))];
                 const primaryRowId = activeRowIds.length > 0 ? activeRowIds[0] : null;
-                const filteredStepsHistory = primaryRowId ? stepsHistory.filter(s => s.row_id === primaryRowId) : stepsHistory;
+                const filteredStepsHistory = primaryRowId ? realStepsHistory.filter(s => s.row_id === primaryRowId) : realStepsHistory;
 
                 robotSteps = filteredStepsHistory.map((s, idx) => {
                     let evIdx = s.event_index !== undefined ? s.event_index : null;
@@ -3707,9 +3725,10 @@
                             usedEventIndices.add(matchIdx);
                         }
                     }
+                    const stepId = s.step_id !== undefined && s.step_id !== null ? s.step_id : (s.index || idx + 1);
                     return {
-                        index: s.index || idx + 1,
-                        exec_order: s.index || idx + 1,
+                        index: stepId,
+                        exec_order: stepId,
                         type: s.type,
                         selector: s.selector,
                         desc: s.desc,
@@ -3834,22 +3853,29 @@
             html += '<th style="width:10%">Registro</th><th style="width:11%">Tipo</th><th style="width:25%">Seletor Físico</th><th style="width:16%">Ação Esperada</th><th style="width:11%">Status</th><th style="width:6%" title="Excluir passo">Ações</th>';
             html += '</tr>';
             
+            // Heurística: apenas o PRIMEIRO passo pendente logo após o último passo com atividade
+            // (SUCCESS/HEALED/FAILED/RUNNING) é considerado "executando agora" — nunca todos os pendentes.
+            let firstPendingAfterActivity = -1;
+            for (let i = 0; i < sortedSteps.length; i++) {
+                const hasPriorActivity = sortedSteps.slice(0, i).some(s =>
+                    ['SUCCESS', 'HEALED', 'FAILED', 'RUNNING'].includes(s.status)
+                );
+                const isPending = !['SUCCESS', 'HEALED', 'FAILED', 'STOPPED', 'BYPASSED', 'RUNNING'].includes(sortedSteps[i].status);
+                if (hasPriorActivity && isPending) {
+                    firstPendingAfterActivity = i;
+                    break;
+                }
+            }
+
             sortedSteps.forEach((step, idx) => {
                 let statusClass = 'status-step-pending';
                 let statusText = 'Pendente';
 
-                // Heurística: se há passos com status final (SUCCESS/HEALED/FAILED) mas ainda há PENDING depois,
-                // o passo PENDING posterior está sendo executado agora
-                const hasCompletedSteps = sortedSteps.slice(0, idx).some(s =>
-                    ['SUCCESS', 'HEALED', 'FAILED'].includes(s.status)
-                );
-                const isNextPending = !['SUCCESS', 'HEALED', 'FAILED', 'STOPPED', 'BYPASSED'].includes(step.status);
-
                 if (step.status === 'RUNNING') {
                     statusClass = 'status-step-running';
                     statusText = '⏳ Executando';
-                } else if (isNextPending && hasCompletedSteps) {
-                    // Passo pendente após passos completados = está sendo executado agora
+                } else if (idx === firstPendingAfterActivity) {
+                    // Único passo pendente considerado "em execução agora"
                     statusClass = 'status-step-running';
                     statusText = '⏳ Executando';
                 } else if (step.status === 'SUCCESS') {
@@ -4338,7 +4364,7 @@
                 const pointerStyle = step.screenshot ? 'style="cursor:pointer;"' : '';
                 
                 html += `<tr ${clickHandler} ${pointerStyle} class="proj-grid-card-row">
-                    <td><strong>${step.index}</strong></td>
+                    <td><strong>${step.step_id !== undefined && step.step_id !== null ? step.step_id : (step.index !== undefined ? step.index : '-')}</strong></td>
                     <td><span class="type-badge ${typeClass}">${step.type}</span></td>
                     <td style="font-family:monospace;font-size:9px;" title="${step.selector}">${selectorDisplay}</td>
                     <td ${titleAttr} ${styleErr} style="font-size:10px;">${step.desc}${screenshotBtn}</td>
@@ -4759,7 +4785,8 @@
                     // Reseta painel de evidências visuais
                     document.getElementById('history-screenshot-view').innerHTML = '<div class="empty-msg" style="text-align: center;">Clique em um passo com 📸 para ver o screenshot correspondente.</div>';
                     
-                    activeHistorySteps = data.steps_history || [];
+                    // Descarta entradas "auto_*" (diagnóstico de falha sem step_id no plano, não é passo real)
+                    activeHistorySteps = (data.steps_history || []).filter(s => !(typeof s.step_id === 'string' && s.step_id.startsWith('auto_')));
                     activeHistoryReport = data.report || [];
                     activeHistoryExecutionId = executionId;
                     renderHistoryTransactions();

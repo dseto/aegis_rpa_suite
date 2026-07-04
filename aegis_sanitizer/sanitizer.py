@@ -217,6 +217,9 @@ class SanitizerService:
         with open(self.dict_file, "w", encoding="utf-8") as f:
             json.dump(dict_data, f, indent=4, ensure_ascii=False)
 
+        # Gera o plano de execução a partir dos eventos final já limpos e refinados
+        self._write_execution_plan(events)
+
         # Normalização do dataset_inicial.json existente
         dataset_path = os.path.join(self.telemetry_dir, "dataset_inicial.json")
         if os.path.exists(dataset_path):
@@ -589,6 +592,90 @@ class SanitizerService:
                         print(f"[AEGIS SANITIZER] {csv_name} atualizado com as novas colunas semânticas.")
                 except Exception as e:
                     print(f"[WARNING] Falha ao atualizar {csv_name}: {e}")
+
+    def _reorder_dropdown_pairs(self, steps: list) -> list:
+        """
+        Corrige um padrão de gravação que quebra em produção: abrir um dropdown
+        (mat-select/CDK overlay), executar uma ação em outro campo, e só depois
+        selecionar a opção do dropdown. No browser real (sem as pausas humanas
+        da gravação original), clicar em outro campo fecha o overlay antes da
+        opção ser selecionada, quebrando o passo com "elemento não visível".
+        Detecta pares abertura->opção com passos intercalados e move o(s)
+        passo(s) intercalado(s) para depois da seleção da opção.
+        """
+        option_idx = [i for i, s in enumerate(steps) if s["type"] == "click" and "[role='option']" in s["selector"]]
+        if not option_idx:
+            return steps
+
+        result = list(steps)
+        for opt_i in option_idx:
+            # Acha o "abridor": clique mais próximo antes da opção que não seja outra opção
+            opener_i = None
+            for j in range(opt_i - 1, -1, -1):
+                if result[j]["type"] == "click" and "[role='option']" not in result[j]["selector"]:
+                    opener_i = j
+                    break
+                if "[role='option']" in result[j]["selector"]:
+                    break
+            if opener_i is None or opt_i - opener_i <= 1:
+                continue
+
+            # Passos intercalados entre abridor e opção: movem para depois da opção
+            between = result[opener_i + 1:opt_i]
+            option_step = result[opt_i]
+            result = result[:opener_i + 1] + [option_step] + between + result[opt_i + 1:]
+
+        return result
+
+    def _write_execution_plan(self, events: list):
+        """Gera plano_execucao.json com steps filtrados (click, fill, filechooser apenas)."""
+        plan_path = os.path.join(self.telemetry_dir, "plano_execucao.json")
+        steps = []
+        allowed_types = {"click", "fill", "filechooser"}
+
+        for ev in events:
+            ev_type = ev.get("type", "").lower()
+            if ev_type not in allowed_types:
+                continue
+            selector = ev.get("selector", "")
+            # Deriva descrição: business_description > text (clicks) / value (fills) > fallback genérico
+            desc = ev.get("business_description") or ""
+            if not desc:
+                if ev_type == "click":
+                    desc = ev.get("text", "")
+                elif ev_type == "fill":
+                    desc = ev.get("value", "")
+            if not desc:
+                desc = f"Executar ação {ev_type}"
+            steps.append({
+                "type": ev_type,
+                "selector": selector,
+                "description": desc
+            })
+
+        steps = self._reorder_dropdown_pairs(steps)
+
+        total = len(steps)
+        plan = {
+            "version": "1.0",
+            "test_dir": os.path.basename(self.telemetry_dir),
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "total_steps": total,
+            "steps": [
+                {
+                    "step_id": f"st_{i+1:03d}",
+                    "type": s["type"],
+                    "selector": s["selector"],
+                    "description": s["description"]
+                }
+                for i, s in enumerate(steps)
+            ]
+        }
+
+        with open(plan_path, "w", encoding="utf-8") as f:
+            json.dump(plan, f, indent=2, ensure_ascii=False)
+
+        print(f"[AEGIS SANITIZER] Plano de execução gerado: {plan_path} ({total} steps)")
 
     def refine_semantics_with_llm(self, dict_data: dict, raw_data: dict, business_desc: str, expected_outcome: str) -> tuple:
         """

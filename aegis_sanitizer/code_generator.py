@@ -14,11 +14,17 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from aegis_runner.cognitive_fallback import CognitiveGateway
+from aegis_sanitizer.step_validator import (
+    validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
+    validate_dataset_field_names
+)
 
 
 class CodeGeneratorService:
     def __init__(self, project_dir: str):
         self.project_dir = os.path.abspath(project_dir)
+        self.plan_path = os.path.join(self.project_dir, "plano_execucao.json")
+        self.bot_path = os.path.join(self.project_dir, "code", "bot_producao.py")
 
     def generate(self) -> bool:
         print("\n" + "=" * 60)
@@ -32,11 +38,11 @@ class CodeGeneratorService:
             return False
 
         # 1. Carrega o Gateway Cognitivo da pasta do projeto (para herdar .env do projeto)
-        gateway = CognitiveGateway(project_dir=self.project_dir)
-        if getattr(gateway, "coder_model", None):
-            gateway.model = gateway.coder_model
-        print(f"[INFO] Modelo de IA configurado para codificação: {gateway.model}")
-        if not gateway.is_active():
+        self.gateway = CognitiveGateway(project_dir=self.project_dir)
+        if getattr(self.gateway, "coder_model", None):
+            self.gateway.model = self.gateway.coder_model
+        print(f"[INFO] Modelo de IA configurado para codificação: {self.gateway.model}")
+        if not self.gateway.is_active():
             print("[WARNING] O módulo cognitivo de IA não está ativo ou configurado no projeto.")
             print("Para gerar o código automaticamente via IA, configure as variáveis no arquivo .env do seu projeto:")
             print("  AEGIS_COGNITIVE_ENABLED=true")
@@ -131,12 +137,12 @@ class CodeGeneratorService:
                 print(f"[INFO] Compilando Skill '{skill_slug}' via IA...")
                 with open(skill_json_path, "r", encoding="utf-8") as sf:
                     skill_meta = json.load(sf)
-                
+
                 skill_report = ""
                 if os.path.exists(skill_report_path):
                     with open(skill_report_path, "r", encoding="utf-8") as rf:
                         skill_report = rf.read()
-                
+
                 skill_dict = {}
                 if os.path.exists(skill_dict_path):
                     with open(skill_dict_path, "r", encoding="utf-8") as df:
@@ -197,7 +203,7 @@ def run_skill_{skill_slug}(page: Page, {", ".join([p['name'] for p in skill_meta
                             sc_code = code_match.group(1)
                         else:
                             sc_code = response
-                    
+
                     sc_code = sc_code.strip()
                     # Append à biblioteca
                     with open(skills_lib_path, "a", encoding="utf-8") as lf:
@@ -234,31 +240,202 @@ Exemplo de chamada de Skill:
             except Exception as e:
                 print(f"[WARNING] Failed to read correcoes_acumuladas.json: {e}")
 
-        bot_path = os.path.join(self.project_dir, "code", "bot_producao.py")
-        has_existing_bot = os.path.exists(bot_path)
         code_dir = os.path.join(self.project_dir, "code")
+        os.makedirs(code_dir, exist_ok=True)
 
-        if has_existing_bot and pending_corrections:
-            print("[INFO] Iniciando fluxo de CORREÇÃO CIRÚRGICA (Karpathy Style)...")
-            return self._surgical_correct(bot_path, pending_corrections, gateway, project_json_path, code_dir, correcoes_acumuladas_path)
-        else:
-            print("[INFO] Iniciando fluxo de GERAÇÃO DE CÓDIGO NOVO...")
-            return self._generate_new_code(bot_path, dict_data, report_content, skills_info_prompt, pending_corrections, gateway, project_json_path, code_dir, correcoes_acumuladas_path)
+        # ── Ralph Loop: tentativas com validação AST ──
+        MAX_RETRIES = int(os.getenv("AEGIS_CODEGEN_MAX_RETRIES", "5"))
+        attempts_history = []
+        bot_code = None
+        diff = None
 
-    def _generate_new_code(self, bot_path: str, dict_data: dict, report_content: str, skills_info_prompt: str, pending_corrections: list, gateway, project_json_path: str, code_dir: str, correcoes_acumuladas_path: str) -> bool:
+        for attempt in range(1, MAX_RETRIES + 1):
+            print(f"\n[AEGIS CODEGEN] Tentativa {attempt}/{MAX_RETRIES}...")
+
+            if attempt == 1:
+                has_existing_bot = os.path.exists(self.bot_path)
+                has_pending_corrections_local = False
+                if os.path.exists(correcoes_acumuladas_path):
+                    try:
+                        with open(correcoes_acumuladas_path, "r", encoding="utf-8") as f:
+                            corrections = json.load(f)
+                        has_pending_corrections_local = any(
+                            c.get("status") == "pending" for c in corrections
+                        )
+                    except Exception:
+                        pass
+
+                if has_existing_bot and has_pending_corrections_local:
+                    print("[INFO] Iniciando fluxo de CORREÇÃO CIRÚRGICA (Karpathy Style)...")
+                    bot_code = self._surgical_correct(
+                        self.bot_path, pending_corrections, self.gateway,
+                        project_json_path, code_dir, correcoes_acumuladas_path
+                    )
+                else:
+                    print("[INFO] Iniciando fluxo de GERAÇÃO DE CÓDIGO NOVO...")
+                    bot_code = self._generate_new_code(
+                        self.bot_path, dict_data, report_content, skills_info_prompt,
+                        pending_corrections, self.gateway, project_json_path,
+                        code_dir, correcoes_acumuladas_path
+                    )
+            else:
+                # Reflection: surgical correct with diff feedback (Ralph Loop)
+                bot_code = self._surgical_correct_with_reflection(
+                    current_code=bot_code,
+                    current_diff=diff,
+                    history=attempts_history
+                )
+
+            if bot_code is None:
+                return False
+
+            # Validate syntax
+            if not self._validate_syntax(bot_code):
+                return False
+
+            # Validate bot structure (proíbe classes customizadas, asyncio.run, etc.)
+            try:
+                struct_result = validate_bot_structure(bot_code)
+            except Exception as validator_err:
+                raise RuntimeError(
+                    f"Bug interno no validador (validate_bot_structure): {validator_err}. "
+                    f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                ) from validator_err
+
+            if struct_result["status"] == "FAIL":
+                print(f"[AEGIS CODEGEN] ❌ Validação estrutural falhou: {len(struct_result['errors'])} erro(s)")
+                for err in struct_result["errors"]:
+                    print(f"  • {err['detail']}")
+                diff = struct_result
+                attempts_history.append({
+                    "attempt": attempt,
+                    "diff": diff,
+                    "snippets": self._extract_failing_snippets(bot_code, diff)
+                })
+                continue
+
+            # Validate against plan (AST step_id validation)
+            plan_result = {"status": "PASS", "total_errors": 0, "errors": []}
+            if os.path.exists(self.plan_path):
+                try:
+                    plan_result = validate_bot_against_plan(bot_code, self.plan_path)
+                except Exception as validator_err:
+                    raise RuntimeError(
+                        f"Bug interno no validador (validate_bot_against_plan): {validator_err}. "
+                        f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                    ) from validator_err
+
+            # Correção determinística de ordem: se o único problema for STEP_ID_MISMATCH
+            # (mesmos step_ids presentes, ordem errada), reordena via AST em vez de
+            # gastar uma tentativa de LLM — reordenação é tarefa mecânica, não criativa.
+            if plan_result["status"] == "FAIL" and os.path.exists(self.plan_path):
+                error_types = {e["type"] for e in plan_result.get("errors", [])}
+                if error_types and error_types.issubset({"STEP_ID_MISMATCH"}):
+                    with open(self.plan_path, "r", encoding="utf-8") as f:
+                        planned_ids = [s["step_id"] for s in json.load(f)["steps"]]
+                    reordered_code = reorder_steps_to_match_plan(bot_code, planned_ids)
+                    if reordered_code != bot_code:
+                        retry_result = validate_bot_against_plan(reordered_code, self.plan_path)
+                        if retry_result["status"] == "PASS":
+                            print(f"[AEGIS CODEGEN] 🔧 Ordem dos passos corrigida automaticamente (sem gastar tentativa de LLM).")
+                            bot_code = reordered_code
+                            plan_result = retry_result
+
+            # Campos de dataset alucinados (row.get("campo_inventado", ...))
+            field_result = {"status": "PASS", "total_errors": 0, "errors": []}
+            if os.path.exists(dict_path):
+                try:
+                    field_result = validate_dataset_field_names(bot_code, dict_path)
+                except Exception as validator_err:
+                    raise RuntimeError(
+                        f"Bug interno no validador (validate_dataset_field_names): {validator_err}. "
+                        f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                    ) from validator_err
+
+            # Merge structural and plan results
+            all_errors = struct_result.get("errors", []) + plan_result.get("errors", []) + field_result.get("errors", [])
+            total_errors = len(all_errors)
+
+            if total_errors == 0:
+                # Gate final: dry run real em sandbox — pega qualquer alucinação
+                # (import, atributo, nome indefinido) que a análise estática não cobre.
+                framework_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                try:
+                    dryrun_result = dry_run_bot(bot_code, framework_root, dataset_dir=self.project_dir)
+                except Exception as dryrun_err:
+                    raise RuntimeError(
+                        f"Bug interno no dry run (dry_run_bot): {dryrun_err}. "
+                        f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                    ) from dryrun_err
+
+                if dryrun_result["status"] == "FAIL":
+                    print(f"[AEGIS CODEGEN] ❌ Dry run falhou: {dryrun_result['errors'][0]['detail']}")
+                    diff = dryrun_result
+                    attempts_history.append({
+                        "attempt": attempt,
+                        "diff": diff,
+                        "snippets": []
+                    })
+                    continue
+
+                print(f"[AEGIS CODEGEN] ✅ Validação AST + dry run passaram na tentativa {attempt}!")
+                self._write_bot(bot_code)
+                self._mark_corrections_applied(
+                    pending_corrections, correcoes_acumuladas_path
+                )
+                self._write_index_and_metadata(code_dir, project_json_path)
+                print("-" * 60)
+                print("✅ CÓDIGO DA AUTOMAÇÃO RPA GERADO COM SUCESSO!")
+                print(f"O robô resiliente está salvo e pronto para a Fase 5 (Execução).")
+                print("=" * 60 + "\n")
+                return True
+
+            # Merge structural + plan errors for diff tracking
+            merged = {
+                "status": "FAIL",
+                "total_errors": total_errors,
+                "errors": all_errors,
+                "structural_errors": struct_result.get("total_errors", 0),
+                "plan_errors": plan_result.get("total_errors", 0),
+                "field_errors": field_result.get("total_errors", 0),
+            }
+            diff = merged
+            if os.getenv("AEGIS_DEBUG_DUMP_BOT"):
+                with open(os.getenv("AEGIS_DEBUG_DUMP_BOT"), "w", encoding="utf-8") as _dbgf:
+                    _dbgf.write(bot_code)
+            print(f"[AEGIS CODEGEN] ❌ Validação falhou: {total_errors} erro(s) "
+                  f"(estrutural={merged['structural_errors']}, plano={merged['plan_errors']}, campos={merged['field_errors']})")
+            for err in all_errors:
+                print(f"  - {err.get('type')}: {err.get('detail', '')}")
+
+            attempts_history.append({
+                "attempt": attempt,
+                "diff": diff,
+                "snippets": self._extract_failing_snippets(bot_code, diff)
+            })
+
+        raise RuntimeError(
+            f"Falha na validação AST após {MAX_RETRIES} tentativas.\n"
+            f"Erros restantes: {diff['total_errors'] if diff else 'N/A'}"
+        )
+
+    def _generate_new_code(self, bot_path: str, dict_data: dict, report_content: str,
+                           skills_info_prompt: str, pending_corrections: list, gateway,
+                           project_json_path: str, code_dir: str,
+                           correcoes_acumuladas_path: str) -> str | None:
         correcoes_prompt = ""
         if pending_corrections:
             print(f"[INFO] Detectadas {len(pending_corrections)} correções pendentes aprovadas para aplicação.")
-            
+
             # ── Seção de Insight QA com prioridade máxima ──
             qa_insights = list(set(
                 c.get("qa_insight") for c in pending_corrections
                 if c.get("qa_insight")
             ))
-            
+
             if qa_insights:
                 print(f"[INFO] 🧠 Insight(s) do Analista QA detectado(s): {len(qa_insights)} — Prioridade máxima ativada.")
-                correcoes_prompt += "\n---\n\n"
+                correcoes_prompt += "\n---\n"
                 correcoes_prompt += "### ⚠️🧠 5. INSIGHT CRÍTICO DO ANALISTA QA (PRIORIDADE MÁXIMA)\n"
                 correcoes_prompt += "╔══════════════════════════════════════════════════════════════════╗\n"
                 correcoes_prompt += "║  ATENÇÃO: A INFORMAÇÃO ABAIXO FOI FORNECIDA POR UM ANALISTA     ║\n"
@@ -271,7 +448,7 @@ Exemplo de chamada de Skill:
                     correcoes_prompt += f"> {insight}\n\n"
                 correcoes_prompt += "Você DEVE seguir esta orientação como diretriz principal para aplicar as correções abaixo. "
                 correcoes_prompt += "O código gerado deve refletir cirurgicamente o que o analista QA descreveu.\n"
-            
+
             # Coleta de tentativas fracassadas históricas correspondentes a estas correções pendentes
             failed_attempts = []
             if os.path.exists(correcoes_acumuladas_path):
@@ -281,7 +458,7 @@ Exemplo de chamada de Skill:
                     for pc in pending_corrections:
                         p_sel = pc.get("failed_selector")
                         p_act = pc.get("action")
-                        
+
                         # Busca tentativas falhas anteriores
                         for c in all_corrs:
                             if c.get("status") == "failed_attempt" and c.get("failed_selector") == p_sel and c.get("action") == p_act:
@@ -289,9 +466,9 @@ Exemplo de chamada de Skill:
                                     failed_attempts.append(c)
                 except Exception as ex:
                     print(f"[WARNING] Erro ao carregar tentativas anteriores em code_generator: {ex}")
-            
+
             if failed_attempts:
-                correcoes_prompt += "\n---\n\n"
+                correcoes_prompt += "\n---\n"
                 correcoes_prompt += "### ❌ HISTÓRICO DE ABORDAGENS ANTERIORES QUE FALHARAM (PROIBIÇÃO DE REPETIÇÃO)\n"
                 correcoes_prompt += "╔══════════════════════════════════════════════════════════════════╗\n"
                 correcoes_prompt += "║  ATENÇÃO: AS ABORDAGENS E PROPOSTAS TÉCNICAS LISTADAS ABAIXO     ║\n"
@@ -326,6 +503,14 @@ Exemplo de chamada de Skill:
             with open(playbook_path, "r", encoding="utf-8") as f:
                 playbook_content = f.read()
 
+        # Load execution plan for deterministic step binding
+        plan_steps_json = ""
+        if os.path.exists(self.plan_path):
+            with open(self.plan_path, "r", encoding="utf-8") as pf:
+                plan = json.load(pf)
+            plan_steps = plan.get("steps", [])
+            plan_steps_json = json.dumps(plan_steps, indent=2, ensure_ascii=False)
+
         # Constrói o Prompt de Compilação para a LLM
         print("[INFO] Montando prompt estruturado para o motor de IA...")
         prompt = f"""
@@ -356,14 +541,23 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
 ---
 
 #### ⚠️ REGRAS OBRIGATÓRIAS PARA GERAÇÃO DO CÓDIGO:
-1. **Estrutura SDK Aegis (`TransactionRunner`):**
-   O robô deve ser gerado utilizando o SDK do Aegis. O arquivo gerado deve seguir a seguinte estrutura exata:
+
+0. **PROIBIÇÃO ABSOLUTA DE CLASSES CUSTOMIZADAS (REGRA ZERO):**
+   Você é **TERMINANTEMENTE PROIBIDO** de criar classes próprias de runner (como `class ResilientRunner`, `class BotRunner`, etc).
+   Você é **TERMINANTEMENTE PROIBIDO** de usar `async def executar_automacao()` ou funções standalone com `asyncio.run()`.
+   Você é **TERMINANTEMENTE PROIBIDO** de abrir arquivos CSV manualmente com `csv.DictReader` ou `open()`.
+   Você é **TERMINANTEMENTE PROIBIDO** de gerenciar browser/playwright manualmente (`async_playwright()`, `browser.launch()`, `browser.new_context()`).
+   Todo o ciclo de vida (browser, dataset, execução, logging) é gerenciado EXCLUSIVAMENTE pelo `TransactionRunner` do SDK Aegis.
+   Se você gerar uma classe customizada, o robô NÃO FUNCIONARÁ e você terá que refazer tudo.
+
+1. **Estrutura SDK Aegis (`TransactionRunner` — USO OBRIGATÓRIO):**
+   O robô DEVE ser gerado utilizando o SDK do Aegis. O arquivo gerado DEVE seguir a seguinte estrutura exata, SEM MODIFICAÇÕES estruturais:
    ```python
    import os
    import sys
    import time
    from playwright.sync_api import Page
-   
+
    # Resolve o caminho do framework Aegis RPA Suite dinamicamente subindo os diretórios
    current_dir = os.path.dirname(os.path.abspath(__file__))
    AEGIS_SUITE_ROOT = current_dir
@@ -372,22 +566,22 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        if parent == AEGIS_SUITE_ROOT:
            break
        AEGIS_SUITE_ROOT = parent
-   
+
    # Se não encontrar localmente, adiciona a pasta global padrão da suíte Aegis
    if not os.path.exists(os.path.join(AEGIS_SUITE_ROOT, "aegis_runner")):
        global_path = r"C:\\\\Projetos\\\\aegis_rpa_suite"
        if os.path.exists(global_path):
            AEGIS_SUITE_ROOT = global_path
-           
+
    if AEGIS_SUITE_ROOT not in sys.path:
        sys.path.insert(0, AEGIS_SUITE_ROOT)
-       
+
    from aegis_runner.runner import TransactionRunner
-   
+
    def execute_scenario_default(page: Page, row, runner):
        print("\\\\n[BOT] Iniciando automação do fluxo...")
        # [Implemente aqui o preenchimento passo a passo do cenário 'default']
-       
+
     if __name__ == "__main__":
         current_dir = os.path.dirname(os.path.abspath(__file__))
         # Se estiver na pasta 'code', o diretório do projeto é a pasta pai
@@ -399,6 +593,33 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
        runner.register_scenario("default", execute_scenario_default)
        runner.run(headless=False)
    ```
+
+   **IMPORTANTE — Dataset e Caminhos:**
+   O `TransactionRunner` carrega automaticamente o arquivo `dataset_inicial.json` do `project_dir`.
+   Você NÃO precisa (e NÃO DEVE) abrir arquivos CSV, chamar `asyncio.run()`, ou passar nomes de arquivo manualmente.
+
+   **PROIBIÇÃO ABSOLUTA — Imports do Framework:**
+   - O ÚNICO import permitido do namespace `aegis_runner` é: `from aegis_runner.runner import TransactionRunner`.
+   - NUNCA importe `aegis_runner.utilities`, `aegis_runner.helpers`, `aegis_runner.config`, `get_config`,
+     ou QUALQUER outro submódulo/símbolo de `aegis_runner`. Esses módulos NÃO EXISTEM. Se você "lembrar"
+     de algo assim, é alucinação — NÃO EXISTE no framework real.
+   - Toda configuração (URL, credenciais) vem exclusivamente de `os.getenv(...)` ou do `row` do dataset.
+
+   **PROIBIÇÃO ABSOLUTA — Ordem dos Parâmetros de `execute_scenario_default`:**
+   - A assinatura DEVE ser EXATAMENTE `def execute_scenario_default(page, row, runner):` — nessa ordem.
+   - O runner chama essa função POSICIONALMENTE como `callback(page, row, self)`. Se você inverter a ordem
+     (ex: `def execute_scenario_default(runner, page, row):`), os objetos ficam TROCADOS dentro da função:
+     `runner` vira o objeto Page e `page` vira o dict row — causando erros confusos como
+     `'Page' object has no attribute 'fill_resilient'`.
+   - NUNCA mude a ordem `page, row, runner`.
+
+   **PROIBIÇÃO ABSOLUTA — Instanciação do TransactionRunner:**
+   - `TransactionRunner(...)` DEVE receber `project_dir=` como keyword argument. NUNCA instancie `TransactionRunner()` sem argumentos.
+   - `TransactionRunner(...)` DEVE ser instanciado DENTRO do bloco `if __name__ == "__main__":`, nunca no escopo global do módulo (nunca na primeira linha do arquivo).
+   - Exemplo ERRADO (NUNCA FAÇA): `runner = TransactionRunner()` fora de qualquer bloco.
+   - Exemplo CORRETO: instanciar dentro de `if __name__ == "__main__":` com `project_dir=project_dir` resolvido via `__file__`.
+   O `__main__` acima JÁ está completo e funcional — apenas implemente `execute_scenario_default`.
+
 2. **Uso Obrigatório de `runner.click_resilient` e `runner.click_chained`:`
    Você é **PROIBIDO** de usar `.click()` diretamente do objeto `page` ou `locator`. Todos os cliques devem ser executados através do runner:
    - Se o passo no relatório tiver **prefixo `⬆`** (parent context), use `runner.click_chained(page, parent=..., child=..., target_description=..., original_coords=...)`
@@ -409,7 +630,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    Você é **PROIBIDO** de usar `.fill()` diretamente do objeto `page` ou `locator`. Todos os preenchimentos comuns devem ser executados através do runner:
    - Se o passo no relatório tiver **prefixo `⬆`** (parent context), use `runner.fill_chained(page, parent=..., child=..., text_val=row["<chave>"], target_description=..., strategy="DIRECT")`
    - Caso contrário, use `runner.fill_resilient(page, selector="<seletor>", text_val=row["<chave_semantica>"], target_description="<descrição>", strategy="DIRECT")`
-   - **Proibição Absoluta de Valores Fixos**: Você é **PROIBIDO** de passar strings fixas/literais de teste (ex: `text_val="valor_gravado"`) no parâmetro `text_val`. Use obrigatoriamente referências ao registro do dataset `row`, ex: `text_val=row.get("chave", "")`.
+   - **Proibição Absoluta de Valores Fixos**: Você é **PROIBIDO** de passar strings fixas/literais de teste (ex: `text_val="valor_gravado"`) no parâmetro `text_val`. Use obrigatoriamente referências ao registro do dataset `row`, ex: `row.get("chave", "")`.
 4. **Padrão M (Detecção Anti-Bot Comportamental / HUMAN_LIKE):**
    Verifique o campo `fill_strategy` no `dicionario.json`. Se o campo tiver `"fill_strategy": "HUMAN_LIKE"`, ou se o campo for um input de texto que precede um autocomplete ou dropdown dinâmico (onde o usuário digita e depois clica em uma opção da lista correspondente), você é **PROIBIDO** de usar preenchimento direto. Você deve usar **obrigatoriamente** `strategy="HUMAN_LIKE"` para simular a digitação cadenciada humana e disparar os eventos de busca corretos no portal. Você é **PROIBIDO** de usar strings fixas/literais aqui; use sempre a referência à variável `row`, ex:
    `runner.fill_resilient(page, selector="<seletor>", text_val=row.get("<chave_semantica>", ""), target_description="<descrição>", strategy="HUMAN_LIKE")`
@@ -419,6 +640,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    Também é **ESTRITAMENTE PROIBIDO** utilizar valores de dados do negócio observados como o valor padrão/fallback em chamadas `.get()` (ex: usar `row.get("sexo_cliente", "Masculino")` ou `row.get("estado_civil_cliente", "Solteiro(a)")` é uma quebra dessa regra pois contém a string hardcoded `'Masculino'` ou `'Solteiro(a)'`). Se for utilizar `.get()`, utilize string vazia como fallback (ex: `row.get("sexo_cliente", "")`) ou use acesso direto por chave (ex: `row["sexo_cliente"]`).
 6. **Padrão K (Campos de Data):**
    Para preenchimento de datas, utilize seleção completa com `Control+A` e digitação, ou injeção DOM de propriedades removendo a flag `readonly` e despachando os eventos `input` e `change` se necessário.
+   **PROIBIÇÃO ABSOLUTA DE CONVERSÃO DE FORMATO DE DATA INVENTADA:** você é **PROIBIDO** de usar `datetime.strptime(...)`/`datetime.strftime(...)` para reformatar valores de data de `row` a menos que exista evidência explícita e verificável de que o formato do dataset difere do formato exigido pelo campo. O campo `observed_value` de cada entrada em `dicionario.json` mostra o formato que **funcionou de verdade** durante a gravação — se o valor do dataset já está nesse mesmo padrão (ex: ambos `dd/mm/aaaa`), passe o valor de `row` **diretamente**, sem nenhuma conversão. Inventar uma conversão para um formato ISO (`%Y-%m-%d`) ou qualquer outro que não seja o `observed_value` documentado é uma alucinação e quebra o robô em runtime (`ValueError: time data ... does not match format`) — isso já causou falha real em produção.
 7. **Padrão L (Diálogo de Arquivos / Upload):**
    Para upload de arquivos, use `with page.expect_file_chooser()` ou `page.set_input_files()`.
 8. **Espera de transições e Proibição de Seletores Inventados (Crítico):**
@@ -434,12 +656,29 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
     # código aqui
     ```
     Não dê explicações ou introduções. Apenas o código.
-12. **Comentários de Identificação de Passos (Obrigatório):**
-    Cada passo de automação implementado no código DEVE ser obrigatoriamente precedido por um comentário de linha iniciando exatamente no formato `# [PASSO X] Descrição do Passo`, onde `X` é o número (index) do respectivo passo conforme descrito no relatório de telemetria/passos. Isso é essencial para manter a rastreabilidade e permitir que correções cirúrgicas futuras saibam exatamente onde aplicar modificações sem danificar partes funcionais do robô. Exemplo:
-    ```python
-    # [PASSO 1] E-mail de Login
-    runner.fill_resilient(page, selector="#username", text_val=row.get("email_login", ""), target_description="E-mail de Login")
-    ```
+12. **Vinculação Determinística de Passos (OBRIGATÓRIO):**
+    Cada ação de automação DEVE passar o step_id exato do plano como argumento nomeado.
+    O plano de execução determinístico é:
+
+    """ + plan_steps_json + """
+
+    Formato exigido em cada chamada (page é SEMPRE o primeiro argumento posicional):
+      runner.{metodo}(page, selector="...", target_description="...", step_id="{step_id}")
+
+    Exemplo CORRETO (fill_resilient usa text_val, NUNCA value):
+      runner.fill_resilient(page, selector="#email", text_val=row.get("email", ""),
+                            target_description="Preencher email", step_id="st_001")
+
+    Exemplo CORRETO (click_resilient):
+      runner.click_resilient(page, selector="#btn-login", target_description="Clicar login", step_id="st_002")
+
+    Exemplo ERRADO (NUNCA FAÇA — falta 'page' e usa 'value' em vez de 'text_val'):
+      runner.fill_resilient(selector="#email", target_description="Preencher email",
+                            step_id="st_001", value=row.get("email", ""))
+
+    ATENÇÃO: 'page' é OBRIGATÓRIO como primeiro argumento posicional em TODA chamada ao runner.
+    ATENÇÃO: O parâmetro correto é 'text_val', NUNCA 'value'.
+    ATENÇÃO: O step_id DEVE ser passado como keyword argument.
 """
         print(f"[INFO] Conectando ao Gateway de IA ({gateway.provider} / {gateway.model})...")
         print("[INFO] Solicitando geração de código baseada em resiliência técnica...")
@@ -449,35 +688,24 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             response_text = gateway._call_llm_api(prompt, force_json=False)
         except Exception as e:
             print(f"[ERRO] Falha ao invocar a API de LLM: {e}")
-            return False
+            return None
 
         print("[INFO] Código gerado com sucesso pela IA. Limpando payload...")
 
         generated_code = self._extract_python_code(response_text)
+        return generated_code
 
-        # Validação Sintática
-        if not self._validate_syntax(generated_code):
-            return False
-
-        # Salva o arquivo bot_producao.py
-        self._save_bot_file(bot_path, generated_code)
-
-        # Atualiza o status das correções no JSON histórico
-        self._mark_corrections_applied(pending_corrections, correcoes_acumuladas_path)
-
-        # Atualiza os arquivos de índice e project.json
-        self._write_index_and_metadata(code_dir, project_json_path)
-
-        print("-" * 60)
-        print("✅ CÓDIGO DA AUTOMAÇÃO RPA GERADO COM SUCESSO!")
-        print(f"O robô resiliente está salvo e pronto para a Fase 5 (Execução).")
-        print("=" * 60 + "\n")
-        return True
-
-    def _surgical_correct(self, bot_path: str, pending_corrections: list, gateway, project_json_path: str, code_dir: str, correcoes_acumuladas_path: str) -> bool:
-        print("[INFO] Lendo código-fonte existente...")
-        with open(bot_path, "r", encoding="utf-8") as f:
-            existing_code = f.read()
+    def _surgical_correct(self, bot_path: str, pending_corrections: list, gateway,
+                          project_json_path: str, code_dir: str,
+                          correcoes_acumuladas_path: str,
+                          reflection_section=None, current_code=None) -> str | None:
+        if current_code is not None:
+            existing_code = current_code
+            print("[INFO] Usando código fornecido (reflection loop)...")
+        else:
+            print("[INFO] Lendo código-fonte existente...")
+            with open(bot_path, "r", encoding="utf-8") as f:
+                existing_code = f.read()
 
         # Monta os insights/correções
         correcoes_desc = ""
@@ -540,7 +768,20 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             correcoes_desc += f"   - Causa Raiz: {corr.get('root_cause')}\n"
             correcoes_desc += f"   - Correção Requisitada: {corr.get('proposed_fix')}\n\n"
 
+        # Load execution plan for deterministic step binding
+        plan_steps_json = ""
+        if os.path.exists(self.plan_path):
+            with open(self.plan_path, "r", encoding="utf-8") as pf:
+                plan = json.load(pf)
+            plan_steps = plan.get("steps", [])
+            plan_steps_json = json.dumps(plan_steps, indent=2, ensure_ascii=False)
+
+        reflection_block = ""
+        if reflection_section:
+            reflection_block = reflection_section
+
         prompt = f"""
+{reflection_block}
 Você é um Engenheiro de IA especialista em Automação de Processos Robóticos (RPA) de alta resiliência usando Playwright e Python.
 Sua tarefa é aplicar correções e melhorias de forma estritamente CIRÚRGICA no código-fonte Python existente do robô RPA.
 
@@ -553,12 +794,40 @@ Você DEVE seguir rigorosamente os princípios de simplicidade e alteração cir
    - Mantenha exatamente o mesmo estilo do código existente.
 3. **Limpeza de Órfãos (Orphan Cleanup)**:
    - Remova apenas imports, variáveis ou funções que suas próprias alterações tornaram obsoletos. Não remova códigos mortos preexistentes se não tiverem relação com os erros indicados.
+   - **PROIBIÇÃO ABSOLUTA**: Você NUNCA pode remover `from aegis_runner.runner import TransactionRunner`, a definição de `execute_scenario_default`, `runner.register_scenario(...)` ou `runner.run(...)`. Esses elementos são a espinha dorsal do robô e DEVEM permanecer intactos em toda e qualquer correção.
 4. **Proibição Absoluta de Hardcodes**:
    - NUNCA insira valores fixos/hardcoded como CPFs, nomes, datas ou opções nas chamadas de interação (ex: use `row.get("cpf_cliente", "")` ou `row["campo"]`, nunca strings de teste).
    - É terminantemente proibido utilizar valores de dados do negócio observados como fallback de `.get()` (ex: usar `row.get("sexo_cliente", "Masculino")` é proibido; use `row.get("sexo_cliente", "")`).
 5. **Comentários de Rastreabilidade e Isolamento de Passos**:
    - Você DEVE manter e adicionar comentários do formato `# [PASSO X] Descrição do Passo` precedendo cada ação alterada ou inserida.
    - Use os comentários de passo pré-existentes no código fonte para se guiar de forma cirúrgica, alterando unicamente o bloco de comandos associado ao passo problemático e preservando intactos todos os demais passos funcionais.
+6. **Vinculação Determinística de Passos (OBRIGATÓRIO):**
+   Cada ação de automação DEVE passar o step_id exato do plano como argumento nomeado.
+   O plano de execução determinístico é:
+
+    """ + plan_steps_json + """
+
+   Formato exigido em cada chamada (page é SEMPRE o primeiro argumento posicional):
+     runner.{metodo}(page, selector="...", target_description="...", step_id="{step_id}")
+
+   Exemplo CORRETO (fill_resilient usa text_val, NUNCA value):
+     runner.fill_resilient(page, selector="#email", text_val=row.get("email", ""),
+                           target_description="Preencher email", step_id="st_001")
+
+   Exemplo ERRADO (NUNCA FAÇA — falta 'page' e usa 'value' em vez de 'text_val'):
+     runner.fill_resilient(selector="#email", target_description="Preencher email",
+                           step_id="st_001", value=row.get("email", ""))
+
+   ATENÇÃO: 'page' é OBRIGATÓRIO como primeiro argumento posicional em TODA chamada ao runner.
+   ATENÇÃO: O parâmetro correto é 'text_val', NUNCA 'value'.
+   ATENÇÃO: O step_id DEVE ser passado como keyword argument.
+
+   **PROIBIÇÃO ABSOLUTA — ORDEM DOS PASSOS (causa raiz de falhas recorrentes de STEP_ID_MISMATCH):**
+   Os blocos de passo no código gerado DEVEM aparecer na MESMA ORDEM SEQUENCIAL do plano acima
+   (st_001, st_002, st_003, ... em ordem crescente, sem pular nem reordenar).
+   NUNCA reordene, mova ou intercale blocos de passos existentes ao corrigir um erro pontual —
+   isso quebra outros passos que já estavam corretos. Se um step_id está errado em uma posição,
+   corrija APENAS o valor do step_id naquele bloco específico, sem mover o bloco de lugar.
 
 
 ---
@@ -590,29 +859,80 @@ Não dê explicações ou introduções. Apenas o código.
             response_text = gateway._call_llm_api(prompt, force_json=False)
         except Exception as e:
             print(f"[ERRO] Falha ao invocar a API de LLM: {e}")
-            return False
+            return None
 
         print("[INFO] Código corrigido com sucesso pela IA. Limpando payload...")
 
         generated_code = self._extract_python_code(response_text)
+        return generated_code
 
-        # Validação Sintática
-        if not self._validate_syntax(generated_code):
-            return False
+    def _surgical_correct_with_reflection(self, current_code, current_diff, history):
+        """
+        Surgical correction with reflection (Ralph Loop).
+        Includes history of failed attempts to prevent LLM repeating mistakes.
+        """
+        # Build history summary
+        history_summary = ""
+        for h in history:
+            history_summary += f"\n### Tentativa {h['attempt']}:\n"
+            for err in h['diff'].get('errors', []):
+                history_summary += f"- {err.get('type')}: {err.get('detail', '')}\n"
+            if h.get('snippets'):
+                history_summary += f"\nTrecho do código que falhou:\n```python\n{h['snippets'][0]}\n```\n"
 
-        # Salva o arquivo bot_producao.py
-        self._save_bot_file(bot_path, generated_code)
+        reflection_section = f"""
+## 🔧 CORREÇÃO CIRÚRGICA COM AUTO-REFLEXÃO (Ralph Loop)
 
-        # Atualiza o status das correções no JSON histórico
-        self._mark_corrections_applied(pending_corrections, correcoes_acumuladas_path)
+Você está na tentativa {len(history) + 1} de {os.getenv("AEGIS_CODEGEN_MAX_RETRIES", "5")}. Seu código anterior falhou na validação AST.
 
-        # Atualiza os arquivos de índice e project.json
-        self._write_index_and_metadata(code_dir, project_json_path)
+### 🧠 ANÁLISE DA TENTATIVA ANTERIOR
+{history_summary}
 
-        print("-" * 60)
-        print("✅ CÓDIGO DO ROBÔ CORRIGIDO CIRURGICAMENTE COM SUCESSO!")
-        print("=" * 60 + "\n")
-        return True
+Por que o erro aconteceu? (Pense passo a passo):
+1. O validador pediu o step_id correto, mas você gerou outro?
+2. Você alterou alguma linha que não deveria ter mexido?
+
+### 🎯 DIVERGÊNCIAS ATUAIS
+```json
+{json.dumps(current_diff.get('errors', []), indent=2, ensure_ascii=False)}
+```
+
+### 🛑 REGRAS DE CONTROLE DE DANOS (Anti-Oscilação):
+1. NÃO toque em funções ou passos que passaram no validador.
+2. Se tentou corrigir um step_id e falhou, mude a abordagem.
+3. Corrija APENAS os erros listados. Não refatore nada.
+4. Output APENAS o código Python corrigido completo, sem explicações textuais.
+"""
+
+        # Use the reflection-enhanced surgical correct
+        return self._surgical_correct(
+            self.bot_path, [], self.gateway,
+            "", "", correcoes_acumuladas_path="",
+            current_code=current_code,
+            reflection_section=reflection_section
+        )
+
+    def _extract_failing_snippets(self, bot_code, diff):
+        """Extract code snippets around failing step_ids for context."""
+        lines = bot_code.split("\n")
+        snippets = []
+
+        for error in diff.get("errors", []):
+            expected_id = error.get("expected_id")
+            if expected_id:
+                for i, line in enumerate(lines):
+                    if expected_id in line:
+                        start = max(0, i - 2)
+                        end = min(len(lines), i + 3)
+                        snippets.append("\n".join(lines[start:end]))
+                        break
+
+        return snippets
+
+    def _write_bot(self, bot_code):
+        with open(self.bot_path, "w", encoding="utf-8") as f:
+            f.write(bot_code)
+        print(f"[AEGIS CODEGEN] Bot escrito em: {self.bot_path}")
 
     def _extract_python_code(self, response_text: str) -> str:
         generated_code = ""
@@ -642,13 +962,13 @@ Não dê explicações ou introduções. Apenas o código.
         try:
             # Valida compilação básica
             compile(code, "<string>", "exec")
-            
+
             # Valida estrutura via AST (Garante que não é apenas um JSON ou dicionário literal)
             import ast
             tree = ast.parse(code)
             if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, (ast.Dict, ast.Constant, ast.List)):
                 raise SyntaxError("O código gerado é apenas uma estrutura de dados (JSON/Dicionário/Literal) e não um script Python executável.")
-            
+
             print("[INFO] Validação sintática concluída com sucesso! (Código Python válido)")
             return True
         except (SyntaxError, ValueError) as syntax_err:
@@ -700,7 +1020,7 @@ Não dê explicações ou introduções. Apenas o código.
                 "type": "source_code",
                 "description": "Biblioteca de Skills reutilizáveis (funções modulares) do projeto que foram compiladas via IA."
             })
-        
+
         index_path = os.path.join(code_dir, "index_arquivos.json")
         with open(index_path, "w", encoding="utf-8") as f:
             json.dump(index_data, f, indent=4, ensure_ascii=False)
@@ -718,7 +1038,6 @@ Não dê explicações ou introduções. Apenas o código.
                 print("[INFO] Status do projeto atualizado para 'Gerado' (generated) com sucesso.")
             except Exception as e:
                 print(f"[WARNING] Falha ao atualizar project.json: {e}")
-
 
 
 

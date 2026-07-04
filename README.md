@@ -140,7 +140,10 @@ python aegis_cockpit/cockpit.py
 ### 🤖 Acompanhamento e Auditoria de Passos (Tempo Real)
 
 * **Mapeamento Prévio e Expansão de Skills Inline:** O painel carrega a lista de eventos de `gravacao.json` e renderiza Skills inline com prefixo `[Skill: nome_da_skill]`.
-* **Algoritmo de Pareamento FIFO:** Correlaciona logs com passos mesmo quando seletores são otimizados ou alterados pelo self-healing.
+* **Correlação por `step_id`:** Cada entrada do `historico_passos.json` carrega o `step_id` real do plano (`plano_execucao.json`/`# [PASSO X]`). O Cockpit usa esse campo — não mais posição no array nem heurística de matching por seletor — para numerar e ordenar os passos tanto no painel de execução quanto na aba Histórico.
+* **Polling em Tempo Real Durante a Execução:** Enquanto o processo está rodando, o Cockpit relê o `historico_passos.json` a cada ~1.6s e re-renderiza o painel, refletindo status novos (`SUCCESS`, `HEALED`, `FAILED`) sem esperar o fim do lote.
+* **Um Único Passo "Executando" por Vez:** A heurística de destaque identifica exatamente o próximo passo pendente após o último com atividade registrada — nunca marca múltiplos passos pendentes como executando simultaneamente.
+* **Filtragem de Entradas de Diagnóstico (`auto_*`):** Passos com `step_id` gerado automaticamente (prefixo `auto_`) — registrados pelo Runner quando uma falha é diagnosticada sem estar associada a um passo do plano — são ocultados do painel e da aba Histórico, pois não representam um passo real do fluxo.
 * **Vínculo de Registro do Dataset por Passo:** Cada passo exibido mostra qual linha (`Registro #N`) do dataset foi utilizada, garantindo rastreabilidade completa.
 * **Status em Runtime:** `⏳ Executando`, `✓ Sucesso`, `✨ Healed` (self-healing IA), `❌ Falhou`, `⏹ Parado`, `⏭ Ignorado` (passos pulados/bypassados).
 * **Ordenação por Ordem de Execução:** Permite alternar a ordenação do grid de passos clicando nos cabeçalhos `# ⇅` (ID original) ou `Ordem ⇅` (ordem de execução em tempo real).
@@ -254,6 +257,21 @@ python aegis_sanitizer/code_generator.py --project-dir projects/seu_projeto
   * **Fluxo 1 — Geração Nova (`_generate_new_code`):** Invocado quando não há nenhum `bot_producao.py` existente. Gera o código completo do zero a partir do relatório de telemetria sanitizado, garantindo ausência total de hardcodes (fallbacks de `.get()` sempre com string vazia `""`).
   * **Fluxo 2 — Correção Cirúrgica (`_surgical_correct`):** Invocado quando já existe código e há correções pendentes aprovadas. A IA usa os comentários `# [PASSO X]` pré-existentes como âncoras para localizar e alterar **exclusivamente o bloco do passo problemático**, sem tocar em nenhuma linha funcionando.
 * **Comentários de Rastreabilidade `# [PASSO X]` (Obrigatório):** Todo passo de automação gerado ou corrigido é obrigatoriamente precedido por um comentário no formato `# [PASSO X] Descrição do Passo`, onde `X` é o índice do passo na telemetria. Essa diretriz é imposta via prompt tanto na geração nova (regra 12) quanto na correção cirúrgica (regra 5), garantindo que código funcional nunca seja modificado acidentalmente em futuras rodadas de correção.
+
+### 4.1 Pipeline Determinístico de Passos (`plano_execucao.json`)
+
+Fonte de verdade única que atravessa Sanitizer → Code Generator → Runner, garantindo rastreabilidade 1:1 entre o que foi planejado e o que o robô executa:
+
+* **Geração pelo Sanitizer:** Ao final de `sanitize()`, gera `<test_dir>/plano_execucao.json` com a lista final de passos (`click`/`fill`/`filechooser`), cada um com `step_id` sequencial (`st_001`, `st_002`, ...).
+* **Correção de Pares Dropdown Abertura/Seleção:** `_reorder_dropdown_pairs()` detecta quando um passo que abre um dropdown/mat-select é seguido por um passo não relacionado antes da seleção da opção, e reordena para manter abertura e seleção adjacentes — evita que o overlay do Angular Material feche antes da opção ser clicada em produção.
+* **`step_id` Obrigatório no Runner:** Toda chamada de ação (`click_resilient`, `fill_resilient`, etc.) exige o parâmetro nomeado `step_id`, usado para correlacionar log de execução (`[AEGIS_STEP]`) ao plano.
+* **Validação AST Pós-Geração (`step_validator.py`):**
+  * `validate_bot_structure()` — sintaxe, whitelist de imports/métodos do runner, ordem de parâmetros de `execute_scenario_default(page, row, runner)`, resolução correta de `project_dir` (deve subir da pasta `code/`).
+  * `validate_bot_against_plan()` — compara `step_id`s do código com o plano (contagem, ordem, presença). Extração via AST ordenada explicitamente por posição no código-fonte (não por `ast.walk()`, que é BFS e pode devolver ordem errada em ramos `if/elif/else`).
+  * `reorder_steps_to_match_plan()` — corrige automaticamente divergências puras de ordem via manipulação de AST/fonte, sem gastar tentativa do Ralph Loop (reordenação é tarefa mecânica).
+  * `validate_dataset_field_names()` — detecta `row.get("campo_alucinado")` que não existe em `dicionario.json`.
+  * `dry_run_bot()` — executa o bot em sandbox real (incluindo o bloco `if __name__ == "__main__":`) contra um `_FakeRunner` com as assinaturas reais de todos os métodos do `TransactionRunner`, usando a **primeira linha real do dataset** (não um dict vazio) para exercitar conversões de formato (datas, regex) que só falham com dado real.
+* **Ralph Loop com Reflexão:** `AEGIS_CODEGEN_MAX_RETRIES` tentativas de correção cirúrgica, cada uma alimentada com os erros exatos da tentativa anterior, até passar em todos os gates.
 
 ### 5. Fase 5: Execução de Produção (Aegis Runner)
 ```powershell
