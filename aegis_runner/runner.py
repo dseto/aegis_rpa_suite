@@ -680,6 +680,62 @@ class TransactionRunner:
             self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="FAILED", error_msg=msg)
             raise RuntimeError(msg)
 
+    def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None) -> bool:
+        """
+        Seleciona uma opção de um <select> HTML nativo via page.select_option().
+        Diferente de select_option_resilient (dropdown customizado/overlay JS),
+        aqui o elemento já é o próprio <select> — sem abrir/clicar em painel
+        de opções, sem overlay pra detectar. Usa o seletor gravado diretamente
+        (igual click_resilient/fill_resilient), não um label/texto adivinhado.
+        """
+        if not step_id:
+            raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+        row_id = getattr(self, "current_row_id", "1")
+        if getattr(self, "realtime_logs", True):
+            print(f"[AEGIS_STEP] START | {step_id} | select_native | {selector} | {option_text} | {target_description} | | {row_id}")
+            sys.stdout.flush()
+
+        try:
+            page.locator(selector).first.select_option(label=option_text, timeout=timeout)
+            self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="SUCCESS")
+            return True
+        except Exception as e:
+            # Tenta por value= (option_text pode ser o label visível mas o
+            # <option> só ter esse texto como value, ou vice-versa)
+            try:
+                page.locator(selector).first.select_option(value=option_text, timeout=timeout)
+                self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="SUCCESS")
+                return True
+            except Exception:
+                pass
+
+            print(f"[AEGIS RUNNER] Falha ao selecionar '{option_text}' em '{selector}'. Tentando limpar overlays via Escape...")
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.locator(selector).first.select_option(label=option_text, timeout=3000)
+                self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="SUCCESS")
+                return True
+            except Exception:
+                pass
+
+            if self.cognitive.is_active():
+                print(f"[AEGIS RUNNER] Falha padrão ao selecionar '{option_text}' em '{selector}'. Acionando localização visual por screenshot...")
+                clicked = self.cognitive.self_healing_click(page, selector, target_description)
+                if clicked:
+                    try:
+                        page.locator(selector).first.select_option(label=option_text, timeout=timeout)
+                        self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="HEALED")
+                        return True
+                    except Exception:
+                        pass
+                self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise e
+            else:
+                print(f"[AEGIS RUNNER] Falha ao selecionar em '{selector}' e módulo cognitivo inativo.")
+                self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise e
+
     def _click_option_with_fallback(self, page, selector, option_text) -> bool:
         """
         Tenta clicar em uma opção de dropdown usando estratégias progressivas:

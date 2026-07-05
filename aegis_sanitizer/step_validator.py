@@ -19,6 +19,7 @@ RUNNER_METHODS = {
     "fill_resilient",
     "fill_human_like",
     "select_option_resilient",
+    "select_option_native_resilient",
     "click_chained",
     "fill_chained",
     "click_by_coordinates",
@@ -800,6 +801,18 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
     for step in plan.get("steps", []):
         step_id = step["step_id"]
         step_type = step.get("type")
+
+        if step_type == "select_native":
+            if not any_call(step_id, ("select_option_native_resilient",)):
+                errors.append({
+                    "type": "MISSING_SELECT_OPTION_NATIVE_RESILIENT",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' (select nativo '{step.get('selector', '')}' -> "
+                              f"'{step.get('option_text', '')}') deve usar runner.select_option_native_resilient(...), "
+                              f"não fill_resilient — elemento <select> não aceita .fill() do Playwright "
+                              f"(só <input>/<textarea>/[contenteditable])."
+                })
+            continue
 
         if step_type == "select":
             if not any_call(step_id, ("select_option_resilient",)):

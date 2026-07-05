@@ -610,7 +610,16 @@ JS_MINIMAL_LISTENERS = """
     }
 
     function flushAllInputs() {
-        const inputs = document.querySelectorAll('input, textarea, select');
+        // 'select' excluído aqui de propósito: um <select> nativo SEMPRE tem
+        // .value não-vazio (a 1a <option> fica selecionada por padrão antes
+        // de qualquer interação real do usuário) — usar esse flush
+        // genérico pegaria esse valor-padrão como se fosse uma ação real na
+        // primeira vez que QUALQUER clique acontecesse na página, gravando
+        // um passo fantasma. input/textarea começam vazios por padrão, então
+        // não sofrem desse falso-positivo. O <select> já é coberto de forma
+        // confiável pelo listener nativo 'change' (dispara sempre que o
+        // usuário de fato escolhe uma opção).
+        const inputs = document.querySelectorAll('input, textarea');
         for (let input of inputs) {
             if (input.closest('#aegis-indicator-host')) continue;
             if (input.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(input.type)) continue;
@@ -1232,7 +1241,7 @@ class AegisRecorder:
                 self.schema_inputs[(self.active_scenario, selector)] = {
                     "semantic_key": clean_sem_key,
                     "observed_value": val,
-                    "type": "date" if is_date else "string"
+                    "type": "date" if is_date else ("select" if ev.get("tag", "").lower() == "select" else "string")
                 }
 
             elif ev_type == "scan_field":
@@ -1258,10 +1267,11 @@ class AegisRecorder:
 
                     clean_sem_key = semantic_key.replace("-", "_").lower()
                     
+                    is_select = ev.get("fieldType") == "select" or ev.get("tag", "").lower() == "select"
                     self.schema_inputs[(self.active_scenario, selector)] = {
                         "semantic_key": clean_sem_key,
                         "observed_value": val,
-                        "type": "date" if is_date else "string"
+                        "type": "date" if is_date else ("select" if is_select else "string")
                     }
                 return
 

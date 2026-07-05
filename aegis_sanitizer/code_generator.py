@@ -828,6 +828,15 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
     ATENÇÃO: 'page' é OBRIGATÓRIO como primeiro argumento posicional em TODA chamada ao runner.
     ATENÇÃO: O parâmetro correto é 'text_val', NUNCA 'value'.
     ATENÇÃO: O step_id DEVE ser passado como keyword argument.
+13. **Padrão Select Nativo (`<select>` HTML puro, NÃO customizado):**
+    Se um passo do plano de execução tiver `"type": "select_native"`, o elemento é um `<select>` HTML nativo
+    (confirmado pela telemetria) — `.fill()` do Playwright **NÃO FUNCIONA** nele (só aceita `<input>`,
+    `<textarea>`, `[contenteditable]`) e trava em runtime com `Locator.fill: Error: Element is not an <input>...`.
+    Você é **PROIBIDO** de usar `fill_resilient`/`fill_chained` nesses passos. Use exclusivamente:
+      `runner.select_option_native_resilient(page, selector="<seletor do plano>", option_text=row.get("<chave_semantica>", ""), target_description="<descrição>", step_id="<step_id>")`
+    Diferente de `select_option_resilient` (dropdown customizado/overlay JS tipo Angular Material, que abre um
+    painel `[role='option']` via clique), `select_option_native_resilient` usa o `page.select_option()` nativo
+    do Playwright direto no `<select>` — nunca use `select_option_resilient` para um passo `select_native`.
 """
         print(f"[INFO] Conectando ao Gateway de IA ({gateway.provider} / {gateway.model})...")
         print("[INFO] Solicitando geração de código baseada em resiliência técnica...")

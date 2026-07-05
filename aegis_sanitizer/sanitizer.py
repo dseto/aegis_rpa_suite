@@ -790,18 +790,31 @@ class SanitizerService:
         real) de cada sequência consecutiva que aponta pro mesmo widget.
         """
         def same_widget(a: dict, b: dict) -> bool:
-            if a["selector"] == b["selector"]:
+            # Selector genérico (ex.: "label" nu, sem id/data-testid) casa
+            # com QUALQUER elemento da mesma tag — 2 checkboxes/labels
+            # distintos na mesma tela colapsariam num só mesmo sendo
+            # elementos físicos diferentes. Quando ambos os eventos têm
+            # `text` capturado e ele difere, isso prova que são 2 widgets
+            # diferentes, mesmo com selector/parent idênticos — barra os
+            # 4 critérios abaixo nesse caso. Eventos sem texto (ex.: clique
+            # no <input> real por trás de um <label>, que não carrega texto
+            # próprio) continuam sem essa restrição extra.
+            text_a, text_b = a.get("text"), b.get("text")
+            texts_differ = bool(text_a) and bool(text_b) and text_a != text_b
+
+            if a["selector"] == b["selector"] and not texts_differ:
                 return True
             pa, pb = a.get("parent"), b.get("parent")
             if (pa and pb and pa.get("selector")
-                    and pa.get("selector") == pb.get("selector") and pa.get("has_text") == pb.get("has_text")):
+                    and pa.get("selector") == pb.get("selector") and pa.get("has_text") == pb.get("has_text")
+                    and not texts_differ):
                 return True
             # Um clique já achatado (selector = id do widget, sem parent —
             # ex.: idioma <label><input>) é o mesmo widget de um clique
             # ainda encadeado cujo parent aponta pro mesmo id.
-            if pa and pa.get("selector") == b["selector"]:
+            if pa and pa.get("selector") == b["selector"] and not texts_differ:
                 return True
-            if pb and pb.get("selector") == a["selector"]:
+            if pb and pb.get("selector") == a["selector"] and not texts_differ:
                 return True
             # Último recurso: eventos de bubbling do mesmo clique físico
             # acertam elementos totalmente diferentes na hierarquia (ex.:
@@ -814,7 +827,7 @@ class SanitizerService:
             ca, cb = a.get("coords"), b.get("coords")
             if ca and cb:
                 dist = ((ca[0] - cb[0]) ** 2 + (ca[1] - cb[1]) ** 2) ** 0.5
-                if dist < 0.02:
+                if dist < 0.02 and not texts_differ:
                     return True
             return False
 
@@ -865,6 +878,19 @@ class SanitizerService:
                 "selector": selector,
                 "description": desc
             }
+            if ev_type == "click":
+                # Só usado internamente por _dedup_consecutive_clicks (same_widget)
+                # pra distinguir 2 widgets físicos diferentes que colapsam no
+                # mesmo selector genérico (ex.: "label" nu); não é serializado
+                # no plano final (schema de step de click não tem esse campo).
+                step["text"] = ev.get("text", "")
+            # <select> nativo dispara 'change' (recorder grava como evento
+            # 'fill' igual um <input>), mas .fill() do Playwright não aceita
+            # <select> — precisa de select_option_native_resilient, um step
+            # type próprio pra o validador exigir o método certo.
+            if ev_type == "fill" and ev.get("tag", "").lower() == "select":
+                step["type"] = "select_native"
+                step["option_text"] = ev.get("value", "")
             parent = ev.get("parent")
             # Idioma nativo <label>...<input>...</label>: clicar em QUALQUER
             # ponto do label já ativa o input descendente (HTML label
