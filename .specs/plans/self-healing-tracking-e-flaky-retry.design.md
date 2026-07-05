@@ -1,8 +1,8 @@
 # Self-Healing como Bug Rastreável + Retry-Antes-de-Healing para Passos Flaky — Design Document
 
-**Status:** Backlog — não implementado, só desenhado
+**Status:** Backlog — pontos em aberto da Feature 2 discutidos e decididos em 2026-07-05 (ver seção "Decisões"); ainda não implementado
 **Data:** 2026-07-05
-**Risco:** Médio — toca `runner.py` (execução), `code_generator.py` (geração), schema de `plano_execucao.json` e `correcoes_acumuladas.json`
+**Risco:** Médio — toca `runner.py` (execução), schema de `plano_execucao.json` e `correcoes_acumuladas.json`. `code_generator.py` **não precisa mudar** (decisão abaixo).
 **Origem:** Pedido explícito do usuário após uma sessão de debugging onde self-healing por coordenada mascarou pelo menos 2 falhas reais (ver `.specs/handoff-autocomplete-select-nao-verificavel.md`) e flakiness documentada no playbook (`Padrão J — regra estendida`) continuou aparecendo de forma imprevisível.
 
 ---
@@ -78,50 +78,52 @@ Hoje, todo passo tem a MESMA política de resiliência: tentativas normais → s
    ```
    Quem marca: humano/QA via Cockpit (checkbox na tela de Passos, análogo ao fluxo de correções), OU automaticamente pelo próprio sistema quando a Feature 1 acumula `occurrences >= N` pra um mesmo passo (sinal de que healing constante = flakiness, não bug pontual).
 
-2. **Runner respeita a marcação, com política invertida**: para um passo com `flaky=true`, o bot compilado passa `strict=True` (já existe esse parâmetro em `click_resilient`/`fill_resilient`/`click_chained`/`fill_chained` — hoje serve pra pular self-healing e falhar rápido) **nas primeiras 3 tentativas globais**, deixando a exceção propagar. Isso é capturado num nível ACIMA do passo individual — no laço de execução da transação (`TransactionRunner.run()`), não dentro do passo.
+2. **Runner respeita a marcação, com política invertida**: para um passo com `flaky=true`, o bot compilado passa `strict=True` (já existe esse parâmetro em `click_resilient`/`fill_resilient`/`click_chained`/`fill_chained` — hoje serve pra pular self-healing e falhar rápido) **nas primeiras 3 tentativas daquela linha do dataset**, deixando a exceção propagar. Isso é capturado num nível ACIMA do passo individual — no laço de execução da transação (`TransactionRunner.run()`), não dentro do passo. Outras linhas do dataset seguem seu fluxo normal, sem qualquer relação com as tentativas desta linha.
 
 3. **Restart completo, não retry pontual**: como o app-alvo mantém estado cumulativo (wizard multi-tela — não dá pra "voltar" só um passo sem redigitar tudo de novo, confirmado nesta sessão), o restart precisa ser da **transação inteira daquela linha do dataset**: fecha a página/context atual, abre uma nova (mesmo padrão de isolamento que já existe — 1 página por linha), roda o `execute_scenario_default(page, row, runner)` completo de novo desde o passo 1.
 
 4. **4ª tentativa libera self-healing**: se as 3 tentativas completas (com `strict=True` nos passos flaky) falharem TODAS no mesmo passo flaky, a 4ª tentativa roda com `strict=False` pra esse(s) passo(s) especificamente — aí sim self-healing entra como último recurso, do jeito que já funciona hoje.
 
-### Arquitetura necessária
+### Decisões (discutidas com o usuário em 2026-07-05)
+
+1. **Sinalização flaky vs. falha normal — decidido**: `TransactionRunner` passa a carregar `plano_execucao.json` na inicialização e monta um mapa `step_id → flaky`. O bot compilado **não muda em nada** — continua passando `strict=True` do jeito estático que já existe hoje para qualquer step. Toda a decisão dinâmica ("essa falha dispara restart ou é definitiva?") fica centralizada dentro do runner, que interpreta o `strict=True` recebido de forma diferente dependendo de (a) o `step_id` estar marcado `flaky` no plano e (b) qual é a tentativa atual daquela linha do dataset. Código gerado pela LLM nunca precisa saber de "tentativa atual" — evita adicionar mais uma lógica condicional à superfície que a IA tem que acertar (lição desta sessão: cada padrão novo no código gerado é mais uma chance de regressão).
+2. **`code_generator.py` não muda — decidido, consequência do item 1**: como o bot gerado é idêntico seja o passo flaky ou não, não há necessidade de nenhuma alteração no gerador de código nem no prompt de geração além da já existente entrada `flaky` no plano (que o gerador nem precisa ler).
+3. **Escopo do restart — decidido, corrigindo suposição inicial deste design**: o restart é da **transação de UMA ÚNICA linha do dataset** (a que sofreu a falha flaky), nunca do lote inteiro. Isso já era a intenção original do design (seção "Restart completo, não retry pontual" abaixo), mas ficou como preocupação em aberto por engano — não é. Como o blast radius é sempre 1 linha, o custo extra (até 4 tentativas daquela linha) é desprezível frente ao tempo total do lote, mesmo em datasets grandes — as outras linhas seguem seu fluxo normal, sem qualquer bloqueio ou espera. **Não é necessário nenhum teto de tempo total** — 3 tentativas + fallback de healing já limita o pior caso por linha.
+4. **Idempotência no app-alvo — decidido, fora de escopo**: não é uma preocupação a ser tratada pelo framework. Assumido que reiniciar uma transação do zero é seguro para os apps-alvo em questão (sem necessidade de aviso, confirmação ou trava adicional no Cockpit para marcar `flaky=true`).
+
+### Arquitetura necessária (atualizada com as decisões acima)
 
 ```
 TransactionRunner.run()
-  para cada row do dataset:
+  para cada row do dataset (linhas continuam independentes entre si):
     flaky_attempt = 1
     while flaky_attempt <= 4:
-        page = novo contexto isolado (fecha o anterior se existir)
+        page = novo contexto isolado (fecha o anterior se existir) — SÓ desta linha
         strict_para_flaky = (flaky_attempt <= 3)
         try:
             execute_scenario_default(page, row, runner, strict_flaky=strict_para_flaky)
-            break  # sucesso, sai do while
+            break  # sucesso, sai do while — segue pra próxima linha do dataset normalmente
         except FlakyStepFailure as e:
             if flaky_attempt == 4:
-                registra falha definitiva (como hoje)
+                registra falha definitiva desta linha (como hoje)
                 break
             flaky_attempt += 1
-            continue  # restart completo
+            continue  # restart completo, só desta linha
         except Exception:
             # falha NÃO relacionada a passo flaky — comportamento atual, sem restart
-            registra falha definitiva
+            registra falha definitiva desta linha
             break
 ```
 
-Pontos em aberto que essa arquitetura levanta (não resolvidos neste design, precisam de decisão antes de implementar):
-
-- **Como o step individual sinaliza "essa falha é de um passo flaky, dispare restart" vs "essa falha é normal, só falhe"?** Proposta: nova exceção `FlakyStepFailure(Exception)`, levantada por `click_resilient`/etc. quando `strict=True` E o `step_id` da chamada está marcado `flaky=true` no plano (o runner precisaria ter acesso ao plano carregado em memória pra checar isso — hoje ele não lê `plano_execucao.json` diretamente, só recebe `step_id` como string solta vinda do bot compilado). Isso implica o `TransactionRunner` passar a carregar `plano_execucao.json` na inicialização (não parece ser feito hoje — checar antes de implementar).
-- **`code_generator.py` precisa saber, ao gerar o código, quais steps são `flaky` pra decider se emite `strict=True` condicionalmente por tentativa** — isso é NOVO: hoje `strict` é fixo no código gerado (`True` ou `False`, não muda em runtime). Precisa virar algo como `strict=(runner.flaky_attempt <= 3 if step_is_flaky else False)`, ou o runner decide internamente sem o bot precisar saber (mais limpo: o runner já sabe quais step_ids são flaky, lendo do plano, e aplica a política sozinho, sem o bot gerado precisar de lógica condicional nova).
-- **Custo de restart completo**: um teste de 60+ passos reiniciando do zero até 3x por causa de 1 passo flaky no meio é caro (tempo de execução × 3-4). Para datasets grandes (múltiplas linhas), isso pode multiplicar bastante o tempo total de uma Fase 5. Vale considerar um teto de tempo total, não só de tentativas.
-- **Restart e efeitos colaterais no app-alvo**: reiniciar do zero pode não ser idempotente se o passo anterior já causou efeito no backend real (ex.: já criou uma proposta parcial). Precisa avaliar app a app — não é um problema do framework resolver sozinho, mas o design deveria alertar quem for configurar `flaky=true` sobre esse risco.
+`FlakyStepFailure(Exception)` — nova exceção levantada por `click_resilient`/`fill_resilient`/`click_chained`/`fill_chained` quando `strict=True` E o `step_id` da chamada está marcado `flaky=true` no plano carregado em memória pelo runner. Se o `step_id` não é flaky, `strict=True` continua se comportando exatamente como hoje (relança a exceção original, sem passar por este mecanismo).
 
 ### Onde implementar (arquivos afetados)
 
 - `aegis_sanitizer/sanitizer.py` — schema de `plano_execucao.json` ganha campo opcional `flaky`.
-- `aegis_cockpit/` — UI pra marcar/desmarcar `flaky` por passo (tela de Passos).
-- `aegis_runner/runner.py` — `TransactionRunner.run()` ganha o laço de restart; nova exceção `FlakyStepFailure`; runner passa a carregar `plano_execucao.json` (se ainda não carrega) pra saber quais `step_id` são flaky.
-- `aegis_sanitizer/code_generator.py` — não precisa gerar lógica condicional se o runner decidir sozinho (opção mais limpa da lista de pontos em aberto acima); só precisa continuar passando `step_id` normalmente (já faz isso).
-- `aegis_mentor/skills/rpa-copilot-coder.md` — documentar o novo comportamento como um padrão de resiliência (ex.: "Padrão R: Passos Flaky com Restart Automático"), pra manter o playbook como fonte única da lógica de resiliência do projeto.
+- `aegis_cockpit/` — UI pra marcar/desmarcar `flaky` por passo (tela de Passos), sem aviso/trava adicional (decisão 4).
+- `aegis_runner/runner.py` — `TransactionRunner` passa a carregar `plano_execucao.json` na inicialização (não faz isso hoje — checar/confirmar durante a implementação); `run()` ganha o laço de restart por linha; nova exceção `FlakyStepFailure`.
+- `aegis_sanitizer/code_generator.py` — **sem alterações** (decisão 2).
+- `aegis_mentor/skills/rpa-copilot-coder.md` — documentar o novo comportamento como um padrão de resiliência (ex.: "Padrão R: Passos Flaky com Restart Automático por Linha"), pra manter o playbook como fonte única da lógica de resiliência do projeto.
 
 ---
 
