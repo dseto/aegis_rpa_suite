@@ -1455,6 +1455,21 @@ if fn is None:
     sys.exit(1)
 
 fake_page = MagicMock()
+# Locator real do Playwright tem retornos tipados (count()->int, is_enabled()->bool,
+# text_content()->str) que o MagicMock generico nao replica (retorna outro MagicMock),
+# quebrando qualquer comparacao (ex.: 'locator(...).count() > 0') com TypeError que
+# nao existe no bot real — falso positivo do dry run, nao bug do codigo gerado.
+fake_locator = MagicMock()
+fake_locator.count.return_value = 0
+fake_locator.is_enabled.return_value = True
+fake_locator.is_visible.return_value = True
+fake_locator.is_checked.return_value = False
+fake_locator.is_disabled.return_value = False
+fake_locator.text_content.return_value = ""
+fake_locator.inner_text.return_value = ""
+fake_locator.get_attribute.return_value = ""
+fake_locator.locator.return_value = fake_locator
+fake_page.locator.return_value = fake_locator
 fake_row = {real_row!r}
 fake_runner = _FakeRunner()
 

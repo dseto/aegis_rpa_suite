@@ -378,7 +378,8 @@ Exemplo de chamada de Skill:
                 bot_code = self._surgical_correct_with_reflection(
                     current_code=bot_code,
                     current_diff=diff,
-                    history=attempts_history
+                    history=attempts_history,
+                    pending_corrections=pending_corrections
                 )
 
             if bot_code is None:
@@ -843,6 +844,198 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         generated_code = self._extract_python_code(response_text)
         return generated_code
 
+    _STEP_ANCHOR_RE = re.compile(r'^\s*#\s*\[PASSO\s+([^\]]+)\]')
+    _STEP_ID_IN_BLOCK_RE = re.compile(r'step_id\s*=\s*"([^"]+)"')
+
+    def _parse_step_blocks(self, code: str):
+        """
+        Divide o código em blocos delimitados pelos comentários '# [PASSO X]'
+        já exigidos pelo playbook. O step_id de cada bloco é resolvido
+        buscando 'step_id="st_XXX"' DENTRO do texto do bloco (a chamada real
+        do runner), não o número do comentário — não depende do número do
+        PASSO já estar alinhado ao step_id (pode ter sofrido deriva em
+        tentativa anterior).
+        Retorna None se não houver nenhum anchor no código (sinal para o
+        caller usar o fluxo de arquivo inteiro).
+        """
+        lines = code.split("\n")
+        anchors = []
+        for i, line in enumerate(lines):
+            m = self._STEP_ANCHOR_RE.match(line)
+            if m:
+                anchors.append((i, m.group(1).strip()))
+        if not anchors:
+            return None
+
+        blocks = []
+        for idx, (start, label) in enumerate(anchors):
+            end = anchors[idx + 1][0] if idx + 1 < len(anchors) else len(lines)
+            block_text = "\n".join(lines[start:end])
+            sid_match = self._STEP_ID_IN_BLOCK_RE.search(block_text)
+            blocks.append({
+                "label": label,
+                "step_id": sid_match.group(1) if sid_match else None,
+                "start": start,
+                "end": end,
+                "text": block_text,
+            })
+        return blocks
+
+    def _build_scoped_edit_plan(self, existing_code: str, target_step_ids: list):
+        """
+        Localiza o(s) bloco(s) de `target_step_ids` em `existing_code` via
+        `_parse_step_blocks`. Retorna None (sinal de fallback pro arquivo
+        inteiro) se: não há anchors; algum target_step_id não é encontrado em
+        nenhum bloco; ou algum step_id aparece duplicado em mais de um bloco
+        (ambiguidade — sinal de deriva anterior, mais seguro reescrever tudo
+        do que arriscar um splice na posição errada).
+        """
+        blocks = self._parse_step_blocks(existing_code)
+        if blocks is None:
+            return None
+
+        seen_ids = {}
+        for b in blocks:
+            sid = b["step_id"]
+            if sid is None:
+                continue
+            if sid in seen_ids:
+                return None
+            seen_ids[sid] = b
+
+        target_blocks = []
+        for sid in target_step_ids:
+            b = seen_ids.get(sid)
+            if b is None:
+                return None
+            target_blocks.append(b)
+
+        target_blocks.sort(key=lambda b: b["start"])
+        ordered_all = sorted(blocks, key=lambda b: b["start"])
+        first_idx = ordered_all.index(target_blocks[0])
+        last_idx = ordered_all.index(target_blocks[-1])
+
+        context_before = ordered_all[first_idx - 1] if first_idx > 0 else None
+        context_after = ordered_all[last_idx + 1] if last_idx + 1 < len(ordered_all) else None
+
+        return {
+            "lines": existing_code.split("\n"),
+            "target_blocks": target_blocks,
+            "context_before": context_before,
+            "context_after": context_after,
+        }
+
+    def _surgical_correct_scoped(self, scoped_plan: dict, target_step_ids: list,
+                                  correcoes_desc: str, plan_steps: list,
+                                  gateway, reflection_block: str):
+        """
+        Monta um prompt reduzido contendo só o(s) bloco(s) do(s) step_id(s)
+        sob correção (+ 1 bloco de contexto antes/depois, somente leitura),
+        pede de volta só esse(s) bloco(s) corrigido(s) e splica a resposta no
+        arquivo original por substituição de linhas — o resto do arquivo fica
+        byte-idêntico por construção.
+        Levanta exceção se a chamada à API de LLM falhar (mesma semântica de
+        falha do fluxo de arquivo inteiro). Retorna None (não exceção) se a
+        resposta não contiver as seções BEGIN_STEP/END_STEP esperadas — o
+        caller trata isso como sinal para tentar o fluxo de arquivo inteiro
+        nesta mesma tentativa, sem abortar o Ralph Loop.
+        """
+        lines = scoped_plan["lines"]
+        target_blocks = scoped_plan["target_blocks"]
+        context_before = scoped_plan["context_before"]
+        context_after = scoped_plan["context_after"]
+
+        relevant_ids = set(target_step_ids)
+        if context_before and context_before["step_id"]:
+            relevant_ids.add(context_before["step_id"])
+        if context_after and context_after["step_id"]:
+            relevant_ids.add(context_after["step_id"])
+        plan_slice = [s for s in plan_steps if s.get("step_id") in relevant_ids]
+        plan_slice_json = json.dumps(plan_slice, indent=2, ensure_ascii=False)
+
+        context_section = ""
+        if context_before:
+            context_section += (
+                f"\n#### Bloco IMEDIATAMENTE ANTERIOR (step_id={context_before['step_id']}) "
+                f"— SOMENTE LEITURA, NÃO retorne nem altere este bloco:\n```python\n{context_before['text']}\n```\n"
+            )
+
+        targets_section = ""
+        for b in target_blocks:
+            targets_section += (
+                f"\n#### Bloco a corrigir (step_id={b['step_id']}):\n```python\n{b['text']}\n```\n"
+            )
+
+        if context_after:
+            context_section += (
+                f"\n#### Bloco IMEDIATAMENTE POSTERIOR (step_id={context_after['step_id']}) "
+                f"— SOMENTE LEITURA, NÃO retorne nem altere este bloco:\n```python\n{context_after['text']}\n```\n"
+            )
+
+        return_format = "\n".join(
+            f"# BEGIN_STEP {b['step_id']}\n<bloco corrigido completo de {b['step_id']}, incluindo o comentário '# [PASSO ...]'>\n# END_STEP {b['step_id']}"
+            for b in target_blocks
+        )
+
+        reflection_part = f"\n{reflection_block}\n" if reflection_block else ""
+
+        prompt = f"""
+{reflection_part}
+Você é um Engenheiro de IA especialista em Automação de Processos Robóticos (RPA) de alta resiliência usando Playwright e Python.
+Sua tarefa é aplicar uma correção CIRÚRGICA em UM OU MAIS BLOCOS ISOLADOS de um robô RPA maior. Você está vendo
+APENAS um recorte do arquivo — o(s) bloco(s) de contexto (se houver) são fornecidos só pra você entender a
+sequência, NUNCA os reproduza na resposta.
+
+Princípios obrigatórios (Karpathy style):
+1. Altere APENAS o(s) bloco(s) marcado(s) como "a corrigir" abaixo. Não toque nos blocos de contexto.
+2. Mantenha o comentário '# [PASSO X] Descrição' e o step_id exato de cada bloco.
+3. Proibição absoluta de hardcode: use row.get("campo", "") para dados de negócio, nunca valores literais de teste.
+4. Cada chamada ao runner mantém 'page' como primeiro argumento posicional e step_id como keyword argument.
+
+Fatia do plano de execução relevante a estes blocos:
+```json
+{plan_slice_json}
+```
+---
+### CONTEXTO E BLOCO(S) A CORRIGIR
+{context_section}
+{targets_section}
+---
+### CORREÇÕES E INSIGHTS A APLICAR
+{correcoes_desc}
+---
+### REGRAS DE SAÍDA (OBRIGATÓRIO)
+Retorne EXCLUSIVAMENTE o(s) bloco(s) corrigido(s), delimitados EXATAMENTE assim (sem markdown fences, sem texto
+antes/depois, um par BEGIN_STEP/END_STEP por step_id alvo):
+{return_format}
+
+Não inclua os blocos de contexto na resposta. Não dê explicações.
+"""
+        print(f"[INFO] Conectando ao Gateway de IA ({gateway.provider} / {gateway.model}) — modo escopado...")
+        print(f"[INFO] Solicitando correção cirúrgica ESCOPADA (blocos: {', '.join(target_step_ids)})...")
+        sys.stdout.flush()
+
+        response_text = gateway._call_llm_api(prompt, force_json=False)
+
+        section_re = re.compile(
+            r'#\s*BEGIN_STEP\s+(\S+)\s*\n(.*?)\n#\s*END_STEP\s+\1',
+            re.DOTALL,
+        )
+        found = {m.group(1): m.group(2) for m in section_re.finditer(response_text)}
+
+        target_ids = [b["step_id"] for b in target_blocks]
+        missing = [sid for sid in target_ids if sid not in found]
+        if missing:
+            print(f"[WARNING] Resposta escopada não contém bloco(s) esperado(s): {missing}")
+            return None
+
+        new_lines = list(lines)
+        for b in sorted(target_blocks, key=lambda b: b["start"], reverse=True):
+            new_block_lines = found[b["step_id"]].strip("\n").split("\n")
+            new_lines[b["start"]:b["end"]] = new_block_lines
+
+        return "\n".join(new_lines)
+
     def _surgical_correct(self, bot_path: str, pending_corrections: list, gateway,
                           project_json_path: str, code_dir: str,
                           correcoes_acumuladas_path: str,
@@ -917,6 +1110,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             correcoes_desc += f"   - Correção Requisitada: {corr.get('proposed_fix')}\n\n"
 
         # Load execution plan for deterministic step binding
+        plan_steps = []
         plan_steps_json = ""
         if os.path.exists(self.plan_path):
             with open(self.plan_path, "r", encoding="utf-8") as pf:
@@ -927,6 +1121,33 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         reflection_block = ""
         if reflection_section:
             reflection_block = reflection_section
+
+        # ── Correção ESCOPADA por bloco (# [PASSO X]) ──
+        # Quando as correções pendentes referenciam step_id(s) já presentes no
+        # código atual, restringe a superfície de edição por construção: manda
+        # só o(s) bloco(s) desses step_ids pra LLM, splica a resposta de volta
+        # por substituição de linhas. O resto do arquivo fica byte-idêntico —
+        # elimina por construção (não por instrução em prosa) a classe de erro
+        # "drift em step_id não relacionado à correção pedida" catalogada em
+        # múltiplas tentativas de correção de st_055 (ver PROBLEMA_ST055.md).
+        target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")})
+        if target_step_ids:
+            scoped_plan = self._build_scoped_edit_plan(existing_code, target_step_ids)
+            if scoped_plan is not None:
+                print(f"[INFO] Modo cirúrgico ESCOPADO ativo — editando apenas bloco(s): {', '.join(target_step_ids)}")
+                try:
+                    scoped_code = self._surgical_correct_scoped(
+                        scoped_plan, target_step_ids, correcoes_desc, plan_steps,
+                        gateway, reflection_block
+                    )
+                except Exception as e:
+                    print(f"[ERRO] Falha ao invocar a API de LLM (modo escopado): {e}")
+                    return None
+                if scoped_code is not None:
+                    return scoped_code
+                print("[WARNING] Resposta escopada incompleta/malformada — usando fallback de arquivo inteiro nesta tentativa.")
+            else:
+                print("[INFO] Modo escopado indisponível (anchors ausentes/ambíguos) — usando fluxo de arquivo inteiro.")
 
         prompt = f"""
 {reflection_block}
@@ -1014,11 +1235,12 @@ Não dê explicações ou introduções. Apenas o código.
         generated_code = self._extract_python_code(response_text)
         return generated_code
 
-    def _surgical_correct_with_reflection(self, current_code, current_diff, history):
+    def _surgical_correct_with_reflection(self, current_code, current_diff, history, pending_corrections=None):
         """
         Surgical correction with reflection (Ralph Loop).
         Includes history of failed attempts to prevent LLM repeating mistakes.
         """
+        pending_corrections = pending_corrections or []
         # Build history summary
         history_summary = ""
         for h in history:
@@ -1054,7 +1276,7 @@ Por que o erro aconteceu? (Pense passo a passo):
 
         # Use the reflection-enhanced surgical correct
         return self._surgical_correct(
-            self.bot_path, [], self.gateway,
+            self.bot_path, pending_corrections, self.gateway,
             "", "", correcoes_acumuladas_path="",
             current_code=current_code,
             reflection_section=reflection_section
