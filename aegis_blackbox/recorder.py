@@ -584,13 +584,19 @@ JS_MINIMAL_LISTENERS = """
         if (target.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(target.type)) return;
         
         let selector = getAegisSelector(target);
-        let val = target.value;
-        
+        // <select multiple>: .value só retorna a 1a opção selecionada (spec
+        // do HTMLSelectElement) — descartaria silenciosamente as demais.
+        // Lê todas via .selectedOptions quando for multi-select.
+        let val = (target.tagName === 'SELECT' && target.multiple)
+            ? Array.from(target.selectedOptions).map(o => o.value)
+            : target.value;
+        let valKey = Array.isArray(val) ? JSON.stringify(val) : val;
+
         // Evita duplicar se o valor já foi gravado recentemente
-        if (window.__aegis_last_recorded_values__[selector] === val) {
+        if (window.__aegis_last_recorded_values__[selector] === valKey) {
             return;
         }
-        window.__aegis_last_recorded_values__[selector] = val;
+        window.__aegis_last_recorded_values__[selector] = valKey;
         
         let parentData = getAegisParentData(target);
         let name = getSemanticFieldName(target);
@@ -610,22 +616,30 @@ JS_MINIMAL_LISTENERS = """
     }
 
     function flushAllInputs() {
-        // 'select' excluído aqui de propósito: um <select> nativo SEMPRE tem
-        // .value não-vazio (a 1a <option> fica selecionada por padrão antes
-        // de qualquer interação real do usuário) — usar esse flush
-        // genérico pegaria esse valor-padrão como se fosse uma ação real na
-        // primeira vez que QUALQUER clique acontecesse na página, gravando
-        // um passo fantasma. input/textarea começam vazios por padrão, então
-        // não sofrem desse falso-positivo. O <select> já é coberto de forma
+        // 'select' excluído aqui de propósito: já é coberto de forma
         // confiável pelo listener nativo 'change' (dispara sempre que o
-        // usuário de fato escolhe uma opção).
+        // usuário de fato escolhe uma opção) — não passa por flush.
+        //
+        // input/textarea usam baseline PREGUIÇOSA (lazy) por selector: a 1a
+        // vez que um campo é visto aqui, seu valor atual vira baseline
+        // silenciosa (sem emitir evento) — só a partir da 2a leitura, se o
+        // valor mudou em relação a essa baseline, é tratado como ação real
+        // do usuário. Isso evita gravar como "ação do usuário" um valor
+        // pré-preenchido no HTML (`value="X"` no markup) ou hidratado
+        // tardiamente por um SPA (ex.: Angular renderizando um campo depois
+        // do load inicial, sem reload de página) — mesma classe de bug já
+        // corrigida para <select> nativo, generalizada aqui sem depender de
+        // timing de carregamento da página.
         const inputs = document.querySelectorAll('input, textarea');
         for (let input of inputs) {
             if (input.closest('#aegis-indicator-host')) continue;
             if (input.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(input.type)) continue;
             let selector = getAegisSelector(input);
             let val = input.value;
-            // Só grava se o elemento possuir valor e este diferir do último valor gravado
+            if (!(selector in window.__aegis_last_recorded_values__)) {
+                window.__aegis_last_recorded_values__[selector] = val;
+                continue;
+            }
             if (val && window.__aegis_last_recorded_values__[selector] !== val) {
                 recordFill(input);
             }

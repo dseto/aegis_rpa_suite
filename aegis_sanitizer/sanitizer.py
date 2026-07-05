@@ -633,6 +633,7 @@ class SanitizerService:
             return opener_parent_has_text
         return fallback_description
 
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
     def _reorder_dropdown_pairs(self, steps: list) -> list:
         """
         Corrige um padrão de gravação que quebra em produção: abrir um dropdown
@@ -712,6 +713,7 @@ class SanitizerService:
 
         return result
 
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
     def _drop_redundant_select_corrections(self, steps: list) -> list:
         """
         `_reorder_dropdown_pairs` colapsa cada par abridor+opção num step
@@ -748,6 +750,7 @@ class SanitizerService:
             result.append(s)
         return result
 
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
     def _drop_redundant_pretrigger_clicks(self, steps: list) -> list:
         """
         Mesmo após `_dedup_consecutive_clicks`, sobra um padrão de clique
@@ -788,6 +791,23 @@ class SanitizerService:
         nesse caso o selector muda a cada clique, mas o `parent` gravado é
         idêntico. Mantém apenas o último clique (mais próximo do elemento
         real) de cada sequência consecutiva que aponta pro mesmo widget.
+
+        Risco teórico não resolvido: este guard só cobre cliques
+        CONSECUTIVOS. Dois widgets físicos distintos com selector genérico
+        idêntico e texto diferente que colidam NÃO-consecutivamente em
+        `_reorder_dropdown_pairs`, `_drop_redundant_select_corrections` ou
+        `_drop_redundant_pretrigger_clicks` não seriam pegos por esse guard.
+        Avaliado e descartado propagar o mesmo guard pra essas 3 funções:
+        `_reorder_dropdown_pairs` casa por regex no próprio selector, não
+        por colisão genérica; `_drop_redundant_select_corrections` opera
+        sobre steps "select" já mesclados, sem o campo `text` de clique
+        disponível; e `_drop_redundant_pretrigger_clicks` depende
+        justamente de bubbling (div -> span -> input) ter textos
+        DIFERENTES entre si para reconhecer o mesmo clique físico — um
+        guard de "texto diferente = widget diferente" ali quebraria a
+        própria deduplicação que a função existe pra fazer. Sem caso real
+        observado ainda; se aparecer, tratar cada função individualmente,
+        não replicar este guard cegamente.
         """
         def same_widget(a: dict, b: dict) -> bool:
             # Selector genérico (ex.: "label" nu, sem id/data-testid) casa
