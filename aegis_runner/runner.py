@@ -614,10 +614,18 @@ class TransactionRunner:
         ]
 
         print(f"[AEGIS RUNNER] Tentando selecionar a opção '{option_text}'...")
-        for sel in option_selectors:
-            option_clicked = self._click_option_with_fallback(page, sel, option_text)
-            if option_clicked:
-                break
+        if trigger_clicked:
+            for sel in option_selectors:
+                option_clicked = self._click_option_with_fallback(page, sel, option_text)
+                if option_clicked:
+                    break
+        else:
+            # Sem painel de opções aberto (trigger_clicked=False), nenhum dos
+            # 5 seletores x 4 estratégias de _click_option_with_fallback vai
+            # achar algo — são ~20 tentativas garantidamente inúteis (~20-30s)
+            # antes de chegar no self-healing. Pula direto pros fallbacks que
+            # não dependem do painel: geometria ao vivo, coords gravadas, IA.
+            print(f"[AEGIS RUNNER] Painel de opções não abriu — pulando cascata de seletores de opção, indo direto aos fallbacks finais.")
 
         # Fallback por geometria DOM ao vivo: busca o elemento de opção pelo
         # texto (dado que já temos, vindo do plano) e clica no centro do seu

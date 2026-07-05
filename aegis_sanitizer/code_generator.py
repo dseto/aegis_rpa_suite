@@ -109,6 +109,21 @@ class CodeGeneratorService:
         )
         return normalized
 
+    @staticmethod
+    def _strip_internal_step_fields(steps: list) -> list:
+        """
+        Remove campos internos de bookkeeping do sanitizer (trigger_selector,
+        option_selector) antes de expor os steps do plano pra LLM — esses
+        campos nao sao kwargs validos de select_option_resilient (que so
+        aceita original_coords_trigger/original_coords_option) e a LLM os
+        confunde com nomes de parametro, gerando TypeError em runtime.
+        """
+        internal_fields = ("trigger_selector", "option_selector")
+        return [
+            {k: v for k, v in step.items() if k not in internal_fields}
+            for step in steps
+        ]
+
     def generate(self) -> bool:
         print("\n" + "=" * 60)
         print("🤖 AEGIS CODE GENERATOR: GERAÇÃO COGNITIVA DE ROBÔS RPA")
@@ -658,7 +673,7 @@ Exemplo de chamada de Skill:
             with open(self.plan_path, "r", encoding="utf-8") as pf:
                 plan = json.load(pf)
             plan_steps = plan.get("steps", [])
-            plan_steps_json = json.dumps(plan_steps, indent=2, ensure_ascii=False)
+            plan_steps_json = json.dumps(self._strip_internal_step_fields(plan_steps), indent=2, ensure_ascii=False)
 
         # Constrói o Prompt de Compilação para a LLM
         print("[INFO] Montando prompt estruturado para o motor de IA...")
@@ -960,7 +975,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         if context_after and context_after["step_id"]:
             relevant_ids.add(context_after["step_id"])
         plan_slice = [s for s in plan_steps if s.get("step_id") in relevant_ids]
-        plan_slice_json = json.dumps(plan_slice, indent=2, ensure_ascii=False)
+        plan_slice_json = json.dumps(self._strip_internal_step_fields(plan_slice), indent=2, ensure_ascii=False)
 
         context_section = ""
         if context_before:
@@ -1048,7 +1063,8 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
     def _surgical_correct(self, bot_path: str, pending_corrections: list, gateway,
                           project_json_path: str, code_dir: str,
                           correcoes_acumuladas_path: str,
-                          reflection_section=None, current_code=None) -> str | None:
+                          reflection_section=None, current_code=None,
+                          current_diff=None) -> str | None:
         if current_code is not None:
             existing_code = current_code
             print("[INFO] Usando código fornecido (reflection loop)...")
@@ -1125,7 +1141,7 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
             with open(self.plan_path, "r", encoding="utf-8") as pf:
                 plan = json.load(pf)
             plan_steps = plan.get("steps", [])
-            plan_steps_json = json.dumps(plan_steps, indent=2, ensure_ascii=False)
+            plan_steps_json = json.dumps(self._strip_internal_step_fields(plan_steps), indent=2, ensure_ascii=False)
 
         reflection_block = ""
         if reflection_section:
@@ -1139,7 +1155,15 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         # elimina por construção (não por instrução em prosa) a classe de erro
         # "drift em step_id não relacionado à correção pedida" catalogada em
         # múltiplas tentativas de correção de st_055 (ver PROBLEMA_ST055.md).
-        target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")})
+        # Inclui step_ids dos erros da tentativa ATUAL (current_diff), não só
+        # de pending_corrections (correções antigas aprovadas, potencialmente
+        # de step_id diferente) — sem isso o modo escopado trava reeditando
+        # sempre o mesmo bloco antigo enquanto o erro real migrou pra outro
+        # step_id, esgotando tentativas do Ralph Loop sem progresso possível.
+        live_error_step_ids = set()
+        if current_diff:
+            live_error_step_ids = {e.get("step_id") for e in current_diff.get("errors", []) if e.get("step_id")}
+        target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")} | live_error_step_ids)
         if target_step_ids:
             scoped_plan = self._build_scoped_edit_plan(existing_code, target_step_ids)
             if scoped_plan is not None:
@@ -1288,7 +1312,8 @@ Por que o erro aconteceu? (Pense passo a passo):
             self.bot_path, pending_corrections, self.gateway,
             "", "", correcoes_acumuladas_path="",
             current_code=current_code,
-            reflection_section=reflection_section
+            reflection_section=reflection_section,
+            current_diff=current_diff
         )
 
     def _extract_failing_snippets(self, bot_code, diff):
