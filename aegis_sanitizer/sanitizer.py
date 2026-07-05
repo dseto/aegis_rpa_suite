@@ -191,7 +191,7 @@ class SanitizerService:
                 last_fill_selector = selector
                 
             cleaned_events.append(ev)
-            
+
         # Carrega metadados do projeto para buscar descrição de negócio e resultado esperado
         project_json_path = os.path.join(self.telemetry_dir, "project.json")
         business_desc = ""
@@ -221,13 +221,15 @@ class SanitizerService:
         self._write_execution_plan(events)
 
         # Normalização do dataset_inicial.json existente
+        dataset_rows = []
         dataset_path = os.path.join(self.telemetry_dir, "dataset_inicial.json")
         if os.path.exists(dataset_path):
             try:
                 with open(dataset_path, "r", encoding="utf-8") as f:
                     ds_data = json.load(f)
-                
+
                 if isinstance(ds_data, list):
+                    dataset_rows = ds_data
                     ds_changed = False
                     for row in ds_data:
                         for k, v in row.items():
@@ -521,6 +523,41 @@ class SanitizerService:
                 markdown.append(f"* Campo **`{inp['semantic_key']}`** (Seletor: `{inp['selector']}` - Confiabilidade: {inp.get('confidence')}%).")
             for out in low_confidence_outputs:
                 markdown.append(f"* Campo de Saída **`{out['semantic_key']}`** (Seletor: `{out['selector']}` - Confiabilidade: {out.get('confidence')}%).")
+
+        # 6. Auditoria de valor dinâmico hardcoded em has_text (Padrão Q)
+        # Um `has_text` gravado pode misturar um identificador gerado pelo
+        # próprio sistema-alvo em runtime (protocolo, número de proposta/pedido)
+        # com valores estáveis do dataset (nome, CPF). Esse identificador nunca
+        # se repete entre execuções, fazendo o parent_locator nunca resolver
+        # depois da gravação — bug confirmado em produção (st_063 do
+        # portal_segura, reportado inicialmente como falso positivo de
+        # self-healing). Detecta tokens em formato de código (LETRAS-DIGITOS)
+        # dentro de has_text que não aparecem em nenhum valor do dataset.
+        dynamic_token_re = re.compile(r"\b[A-Za-zÀ-ÿ]{2,8}-\d{3,}\b")
+        dataset_values_str = " | ".join(
+            str(v) for row in dataset_rows for v in row.values() if isinstance(v, (str, int, float))
+        ).lower()
+        suspicious_has_text = []
+        seen_suspicious = set()
+        for ev in events:
+            parent = ev.get("parent")
+            if not parent:
+                continue
+            ht = parent.get("has_text")
+            if not ht or not isinstance(ht, str):
+                continue
+            for token in dynamic_token_re.findall(ht):
+                if token.lower() not in dataset_values_str and token not in seen_suspicious:
+                    seen_suspicious.add(token)
+                    suspicious_has_text.append((token, ht, parent.get("selector", "")))
+
+        if suspicious_has_text:
+            markdown.append("\n" + "-" * 60)
+            markdown.append("\n## 🚨 Alerta CRÍTICO: Possível Valor Dinâmico Hardcoded em `has_text`")
+            markdown.append("Os seguintes filtros `has_text` (Padrão Q — Locator Encadeado) contêm um token em formato de código/identificador que **não aparece em nenhum campo do `dataset_inicial.json`**. Isso indica um valor gerado pelo próprio sistema-alvo em runtime (protocolo, número de proposta, pedido), que muda a cada execução e nunca vai bater depois da gravação. **NÃO copie o `has_text` gravado verbatim** — reconstrua-o usando somente os fragmentos estáveis vindos do dataset (ex.: `row.get('nome_cliente')`, `row.get('cpf_cliente')`).")
+            for token, ht, sel in suspicious_has_text:
+                markdown.append(f"* Token suspeito **`{token}`** dentro de `has_text=\"{ht}\"` (seletor pai: `{sel}`).")
+            print(f"[AEGIS SANITIZER] [WARNING] {len(suspicious_has_text)} token(s) suspeito(s) de valor dinâmico hardcoded em has_text. Ver relatorio.md.")
 
         with open(self.report_file, "w", encoding="utf-8") as f:
             f.write("\n".join(markdown))

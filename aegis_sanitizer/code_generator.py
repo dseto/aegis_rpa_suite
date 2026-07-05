@@ -1160,9 +1160,25 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         # de step_id diferente) — sem isso o modo escopado trava reeditando
         # sempre o mesmo bloco antigo enquanto o erro real migrou pra outro
         # step_id, esgotando tentativas do Ralph Loop sem progresso possível.
+        # Erros de plano (step_validator.py: COUNT_MISMATCH, STEP_ID_MISMATCH,
+        # MISSING_STEPS, EXTRA_STEPS) não usam a chave "step_id" — usam
+        # "expected_id"/"found_id" (STEP_ID_MISMATCH) ou "step_ids", uma lista
+        # (MISSING_STEPS/EXTRA_STEPS). Só olhar "step_id" (usado por
+        # pattern_result, ex. MISSING_ORIGINAL_COORDS) faz esses erros de
+        # plano nunca entrarem no escopo — a LLM fica reeditando só os blocos
+        # de pending_corrections + pattern errors, sem nunca tocar no step_id
+        # realmente ausente/deslocado, repetindo os mesmos 47 erros em todas
+        # as 15 tentativas até esgotar o loop (bug real reproduzido: st_021
+        # ausente do plano nunca entrava em target_step_ids).
         live_error_step_ids = set()
         if current_diff:
-            live_error_step_ids = {e.get("step_id") for e in current_diff.get("errors", []) if e.get("step_id")}
+            for e in current_diff.get("errors", []):
+                for key in ("step_id", "expected_id", "found_id"):
+                    v = e.get(key)
+                    if v:
+                        live_error_step_ids.add(v)
+                for v in e.get("step_ids") or []:
+                    live_error_step_ids.add(v)
         target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")} | live_error_step_ids)
         if target_step_ids:
             scoped_plan = self._build_scoped_edit_plan(existing_code, target_step_ids)

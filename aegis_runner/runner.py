@@ -322,77 +322,87 @@ class TransactionRunner:
         self._log_step(step_id=step_id, action="click_by_coordinates", selector="coords", target_description=target_description, status="SUCCESS")
         return True
 
-    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None, strict=False) -> bool:
-        # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
-        if "strict mode violation" in str(e) or "resolved to" in str(e):
+    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None, strict=False, identity_scoped=False) -> bool:
+        # Níveis 1.5/2.5/2.75 reconsultam `selector` como string plana via
+        # page.locator()/document.querySelector(). Chamadores encadeados
+        # (click_chained) montam essa string concatenando parent >> child sem
+        # o filtro .filter(has_text=...) do pai — impossível de expressar em
+        # CSS puro. Sem o filtro, esses níveis podem casar com a PRIMEIRA
+        # ocorrência do seletor no DOM inteiro (linha/registro errado) e
+        # reportar status="SUCCESS" (nem "HEALED"), um falso-positivo pior e
+        # mais silencioso que o de self-healing por IA. identity_scoped=True
+        # pula esses níveis quando o pai tem filtro de identidade (has_text).
+        if not identity_scoped:
+            # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
+            if "strict mode violation" in str(e) or "resolved to" in str(e):
+                try:
+                    print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
+                    page.locator(selector).first.click(timeout=timeout)
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                    return True
+                except Exception as inner_e:
+                    e = inner_e
+
+            # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
+            print(f"[AEGIS RUNNER] Falha de clique físico em '{selector}'. Tentando limpar overlays via Escape...")
             try:
-                print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
-                page.locator(selector).first.click(timeout=timeout)
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.locator(selector).first.click(timeout=3000)
                 self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
                 return True
-            except Exception as inner_e:
-                e = inner_e
+            except Exception:
+                pass
 
-        # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
-        print(f"[AEGIS RUNNER] Falha de clique físico em '{selector}'. Tentando limpar overlays via Escape...")
-        try:
-            page.keyboard.press("Escape")
-            time.sleep(0.3)
-            page.locator(selector).first.click(timeout=3000)
-            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-            print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
-            return True
-        except Exception:
-            pass
-
-        # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
-        try:
-            print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
-            clicked = page.evaluate(r"""(sel) => {
-                const pane = document.querySelector('.cdk-overlay-pane');
-                if (pane) {
-                    pane.style.position = 'fixed';
-                    pane.style.top = '80px';
-                    pane.style.left = '50px';
-                    pane.style.maxHeight = '80vh';
-                    pane.style.overflow = 'auto';
-                }
-                let el = null;
-                try { el = document.querySelector(sel); } catch(e) {}
-                if (!el) {
-                    let searchText = null;
-                    const re = /:has-text\(['"]([^'"]*)['"]\)/g;
-                    let m, last;
-                    while ((m = re.exec(sel)) !== null) { last = m; }
-                    if (last) { searchText = last[1]; }
-                    if (searchText) {
-                        const opts = document.querySelectorAll('.mat-option, [role="option"]');
-                        for (const opt of opts) {
-                            if (opt.textContent.trim().includes(searchText)) {
-                                el = opt; break;
+            # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
+            try:
+                print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
+                clicked = page.evaluate(r"""(sel) => {
+                    const pane = document.querySelector('.cdk-overlay-pane');
+                    if (pane) {
+                        pane.style.position = 'fixed';
+                        pane.style.top = '80px';
+                        pane.style.left = '50px';
+                        pane.style.maxHeight = '80vh';
+                        pane.style.overflow = 'auto';
+                    }
+                    let el = null;
+                    try { el = document.querySelector(sel); } catch(e) {}
+                    if (!el) {
+                        let searchText = null;
+                        const re = /:has-text\(['"]([^'"]*)['"]\)/g;
+                        let m, last;
+                        while ((m = re.exec(sel)) !== null) { last = m; }
+                        if (last) { searchText = last[1]; }
+                        if (searchText) {
+                            const opts = document.querySelectorAll('.mat-option, [role="option"]');
+                            for (const opt of opts) {
+                                if (opt.textContent.trim().includes(searchText)) {
+                                    el = opt; break;
+                                }
                             }
                         }
                     }
-                }
-                if (!el) return false;
-                const rect = el.getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                    el.dispatchEvent(new MouseEvent('click', {
-                        clientX: rect.left + rect.width / 2,
-                        clientY: rect.top + rect.height / 2,
-                        bubbles: true, cancelable: true, button: 0, view: window
-                    }));
-                    return true;
-                }
-                el.click(); return true;
-            }""", selector)
-            if clicked:
-                time.sleep(0.3)
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
-                return True
-        except Exception:
-            pass
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        el.dispatchEvent(new MouseEvent('click', {
+                            clientX: rect.left + rect.width / 2,
+                            clientY: rect.top + rect.height / 2,
+                            bubbles: true, cancelable: true, button: 0, view: window
+                        }));
+                        return true;
+                    }
+                    el.click(); return true;
+                }""", selector)
+                if clicked:
+                    time.sleep(0.3)
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                    print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
+                    return True
+            except Exception:
+                pass
 
         # Nível 3/4: Self-Healing Cognitivo e Fallback por Coordenadas — pulados em modo
         # strict, pois ambos "adivinham" um alvo (via visão de IA ou coordenada histórica
@@ -480,7 +490,7 @@ class TransactionRunner:
     def select_option_resilient(self, page, dropdown_label, option_text,
                                 original_coords_trigger=None,
                                 original_coords_option=None,
-                                timeout=5000, step_id=None) -> bool:
+                                timeout=5000, step_id=None, strict: bool = False) -> bool:
         """
         Seleciona uma opção de um dropdown/select customizado (não-nativo).
         Abre o dropdown antes de clicar na opção desejada.
@@ -660,8 +670,13 @@ class TransactionRunner:
             except Exception as e:
                 print(f"[AEGIS RUNNER] Falha ao clicar nas coordenadas da opção: {e}")
 
-        # Se falhou, aciona o Cognitive Gateway se ativo
-        if not option_clicked and self.cognitive.is_active():
+        # Se falhou, aciona o Cognitive Gateway se ativo (pulado em modo strict:
+        # a opção certa depende do dropdown certo ter sido aberto/identificado
+        # corretamente, e IA visual não confirma essa identidade, só "acha"
+        # texto parecido na tela — mesmo risco de adivinhação do click_chained).
+        if not option_clicked and strict:
+            print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{dropdown_label}' (self-healing desativado para este passo).")
+        elif not option_clicked and self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha nas tentativas normais. Acionando Self-Healing Cognitivo para a opção...")
             try:
                 # Tenta localizar visualmente o texto da opção na tela
@@ -688,7 +703,7 @@ class TransactionRunner:
             self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="FAILED", error_msg=msg)
             raise RuntimeError(msg)
 
-    def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None) -> bool:
+    def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None, strict: bool = False) -> bool:
         """
         Seleciona uma opção de um <select> HTML nativo via page.select_option().
         Diferente de select_option_resilient (dropdown customizado/overlay JS),
@@ -727,7 +742,11 @@ class TransactionRunner:
             except Exception:
                 pass
 
-            if self.cognitive.is_active():
+            if strict:
+                print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{selector}' (self-healing desativado para este passo).")
+                self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise e
+            elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Falha padrão ao selecionar '{option_text}' em '{selector}'. Acionando localização visual por screenshot...")
                 clicked = self.cognitive.self_healing_click(page, selector, target_description)
                 if clicked:
@@ -893,7 +912,7 @@ class TransactionRunner:
         return child_clean
 
     def click_chained(self, page, parent: dict, child: dict, target_description: str,
-                      timeout: int = 5000, original_coords: tuple = None, step_id=None) -> bool:
+                      timeout: int = 5000, original_coords: tuple = None, step_id=None, strict: bool = False) -> bool:
         """
         Clique resiliente com escopo hierárquico (chained locator).
         Resolve o elemento pai via Playwright .filter(has_text=...) e encadeia o filho.
@@ -906,6 +925,11 @@ class TransactionRunner:
         parent_repr = f"{parent.get('selector')}[{parent.get('has_text','')}]"
         child_sel_clean = self._get_relative_child_selector(parent.get('selector',''), child.get('selector',''))
         selector_full = f"{parent_repr} >> {child_sel_clean}"
+        # Selector plano (sem os colchetes de log de has_text, que não são
+        # sintaxe CSS válida) usado apenas nos níveis determinísticos de
+        # _handle_click_failure — reaproveita child_sel_clean (relativizado)
+        # em vez do child.selector bruto/absoluto gravado.
+        query_selector = f"{parent.get('selector','')} >> {child_sel_clean}"
 
         if getattr(self, "realtime_logs", True):
             print(f"[AEGIS_STEP] START | {step_id} | click_chained | {selector_full} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
@@ -948,15 +972,16 @@ class TransactionRunner:
                 if attempt == 2:
                     return self._handle_click_failure(
                         page,
-                        f"{parent.get('selector','')} >> {child.get('selector','')}",
-                        target_description, timeout, e, original_coords, step_id=step_id
+                        query_selector,
+                        target_description, timeout, e, original_coords, step_id=step_id, strict=strict,
+                        identity_scoped=bool(parent.get("has_text"))
                     )
 
         return False
 
     def fill_chained(self, page, parent: dict, child: dict, text_val: str,
                      target_description: str, strategy: str = "DIRECT",
-                     delay_ms: int = 60, timeout: int = 5000, step_id=None) -> bool:
+                     delay_ms: int = 60, timeout: int = 5000, step_id=None, strict: bool = False) -> bool:
         """
         Preenche campo com escopo hierárquico (chained locator).
         strategy="HUMAN_LIKE": digitação cadenciada com limpeza Control+A + Backspace.
@@ -1026,9 +1051,11 @@ class TransactionRunner:
 
         except Exception as e:
             print(f"[AEGIS RUNNER] Falha no fill_chained: {e}")
-            if self.cognitive.is_active():
+            if strict:
+                print(f"[AEGIS RUNNER] [STRICT] Falha definitiva em '{selector_full}' (self-healing desativado para este passo, pai é identificado por has_text).")
+            elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para fill_chained...")
-                clicked = self.cognitive.self_healing_click(page, child.get("selector", ""), target_description)
+                clicked = self.cognitive.self_healing_click(page, child_sel_clean, target_description)
                 if clicked:
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
@@ -1039,7 +1066,7 @@ class TransactionRunner:
             raise e
 
     def fill_resilient(self, page, selector, text_val, target_description,
-                       strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None) -> bool:
+                       strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None, strict: bool = False) -> bool:
         """
         Preenche um campo de forma resiliente.
         - strategy="DIRECT": usa .fill() padrão (rápido, sem eventos keydown).
@@ -1104,7 +1131,11 @@ class TransactionRunner:
             except Exception:
                 pass
 
-            if self.cognitive.is_active():
+            if strict:
+                print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao preencher '{selector}' (self-healing desativado para este passo).")
+                self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise e
+            elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Falha no preenchimento padrão de '{selector}'. Acionando localização visual por screenshot...")
                 clicked = self.cognitive.self_healing_click(page, selector, target_description)
                 if clicked:
