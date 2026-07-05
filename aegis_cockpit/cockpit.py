@@ -335,7 +335,8 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 'has_bot': has_bot,
                 'recording': recording,
                 'skills_recordings': skills_recordings,
-                'steps_history': steps_history_data
+                'steps_history': steps_history_data,
+                'execution_plan': load_json('plano_execucao.json') or None
             })
 
         elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions'):

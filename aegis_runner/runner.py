@@ -196,6 +196,16 @@ class TransactionRunner:
             except Exception:
                 pass
 
+        # Botões conhecidos que começam disabled e só habilitam depois de um
+        # timer/fetch assíncrono real do app (ex.: '#btn-confirm-payment-progress'
+        # fica "Aguardando Pagamento..." por ~6s) — o clique físico mais abaixo
+        # usa force=True (necessário para outros seletores instáveis), que
+        # ignora a checagem de enabled do Playwright. Sem esperar aqui, o robô
+        # clica cedo demais e a ação não tem efeito. Ver
+        # .specs/handoff-autocomplete-select-nao-verificavel.md ("st_054 em
+        # diante"). Escopo restrito a selectors literais conhecidos.
+        self._wait_for_known_disabled_button(page, selector)
+
         # 2. Loop de retentativas com Auto-Healing de UI
         last_exception = None
         for attempt in range(1, 3):
@@ -216,6 +226,7 @@ class TransactionRunner:
                 if not locators:
                     print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
                     page.locator(selector).click(timeout=timeout)
+                    self._wait_if_wizard_transition_button(page, selector)
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
                     return True
 
@@ -283,6 +294,7 @@ class TransactionRunner:
                         continue
 
                 if clicked:
+                    self._wait_if_wizard_transition_button(page, selector)
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
                     return True
                 else:
@@ -293,6 +305,55 @@ class TransactionRunner:
                 print(f"[AEGIS RUNNER] Tentativa {attempt} de clique falhou para '{selector}': {e}")
                 if attempt == 2:
                     return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id, strict=strict)
+
+    def _wait_for_known_disabled_button(self, page, selector, timeout_ms=15000):
+        """
+        Espera PRÉ-clique para botões conhecidos que iniciam 'disabled' e só
+        habilitam depois de um timer/fetch assíncrono real do app (ex.:
+        '#btn-confirm-payment-progress'). Simétrico a
+        _wait_if_wizard_transition_button (que espera DEPOIS do clique, para
+        botões que se desabilitam ao serem clicados) — aqui a espera é
+        ANTES, porque o botão já nasce desabilitado. Escopo restrito a
+        selectors literais conhecidos, não afeta outros cliques.
+        """
+        known_disabled_at_start = {"#btn-confirm-payment-progress"}
+        if selector not in known_disabled_at_start:
+            return
+        waited_ms = 0
+        while waited_ms < timeout_ms:
+            try:
+                if page.locator(selector).first.is_enabled():
+                    break
+            except Exception:
+                pass
+            page.wait_for_timeout(300)
+            waited_ms += 300
+
+    def _wait_if_wizard_transition_button(self, page, selector, timeout_ms=15000):
+        """
+        '#btn-next-step' neste tipo de wizard pode disparar uma transição
+        assíncrona (fetch simulando cálculo/submissão) que desabilita o
+        próprio botão de forma síncrona no clique e só o libera (ou troca de
+        tela) quando a resposta chega — bug real confirmado (ver
+        .specs/handoff-autocomplete-select-nao-verificavel.md, seção 'st_054
+        em diante'): sem esperar isso, o passo seguinte do bot tenta
+        interagir com uma tela que ainda não foi renderizada. Escopo
+        restrito a este selector literal — não afeta outros cliques.
+        """
+        if selector != "#btn-next-step":
+            return
+        waited_ms = 0
+        while waited_ms < timeout_ms:
+            try:
+                if not page.locator(selector).first.is_disabled():
+                    break
+            except Exception:
+                # Elemento sumiu/mudou de identidade no meio da checagem —
+                # sinal de que a tela já trocou (re-render destruiu o botão
+                # antigo). Seguro assumir que a transição terminou.
+                break
+            page.wait_for_timeout(300)
+            waited_ms += 300
 
     def click_by_coordinates(self, page, original_coords, target_description, step_id=None) -> bool:
         """
@@ -1179,6 +1240,29 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] Digitacão cadenciada (HUMAN_LIKE) em '{selector}' ({len(str(text_val))} chars, {delay_ms}ms/tecla)...")
             element = page.locator(selector).first
             element.scroll_into_view_if_needed()
+
+            # click(force=True) abaixo ignora a checagem de actionability nativa
+            # do Playwright (inclusive "enabled") — necessário pra campos que o
+            # Playwright julga erroneamente "não estáveis" (animação/transição
+            # CSS). Efeito colateral: também ignora um campo genuinamente
+            # desabilitado por busca assíncrona em andamento (ex.: auto-fill de
+            # nome disparado pelo preenchimento do CPF, que deixa o campo
+            # disabled por alguns segundos) — sem esperar isso, o robô digita
+            # num campo bloqueado e o valor é sobrescrito/descartado quando a
+            # resposta assíncrona chega. Poll limitado por is_enabled() antes
+            # do force-click cobre esse caso sem reintroduzir o problema de
+            # estabilidade que o force=True resolve.
+            wait_budget_ms = min(timeout, 8000)
+            waited_ms = 0
+            while waited_ms < wait_budget_ms:
+                try:
+                    if element.is_enabled():
+                        break
+                except Exception:
+                    pass
+                page.wait_for_timeout(200)
+                waited_ms += 200
+
             element.click(timeout=timeout, force=True)
             page.keyboard.press("Control+A")
             page.keyboard.press("Backspace")

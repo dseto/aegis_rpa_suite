@@ -164,22 +164,28 @@ class SanitizerService:
                 if ev_type == "click" and last.get("type") == "click" and selector == last.get("selector"):
                     continue
             
-            # 2. Ignora cliques em overlays genéricos de CDK ou placeholder "Nenhum resultado"
-            if ev_type == "click" and ("cdk-overlay-container" in selector or "backdrop" in selector or "Nenhum resultado" in selector or "Nenhum resultado" in ev.get("text", "")):
+            # 2. Ignora cliques em overlays genéricos de CDK ou placeholder "Nenhum resultado".
+            # Não pega clique em opção específica dentro do overlay (ex.:
+            # "#cdk-overlay-container #mat-select-panel-x [role='option']:has-text('...')")
+            # — isso é uma seleção real, não ruído de overlay/backdrop vazio.
+            is_generic_overlay_click = (
+                ("cdk-overlay-container" in selector and "[role='option']" not in selector and "has-text(" not in selector)
+                or "backdrop" in selector
+                or "Nenhum resultado" in selector
+                or "Nenhum resultado" in ev.get("text", "")
+            )
+            if ev_type == "click" and is_generic_overlay_click:
                 continue
                 
-            # 3. Ignora cliques em autocomplete que não seguem o preenchimento do input correspondente
-            if ev_type == "click" and "mat-autocomplete-panel-" in selector:
-                panel_name = selector.split("mat-autocomplete-panel-")[1].split(" ")[0]
-                if last_fill_selector:
-                    if panel_name == "marca" and "brand" not in last_fill_selector:
-                        continue
-                    if panel_name == "modelo" and "model" not in last_fill_selector:
-                        continue
-                    if panel_name == "versao" and "version" not in last_fill_selector:
-                        continue
-                else:
-                    continue
+            # 3. Ignora cliques em autocomplete de painel órfão (sem nenhum
+            # preenchimento prévio no fluxo) — sinal de painel stale/leftover.
+            # Não usa mais matching de idioma/nome de campo (ex.: "brand" em
+            # "marca") pois selectors gravados são no idioma do app-alvo e a
+            # ordem de fills nem sempre é 1-para-1 com a ordem dos cliques de
+            # seleção (ex.: preencher marca+modelo antes de selecionar ambos),
+            # o que derrubava cliques de seleção legítimos.
+            if ev_type == "click" and "mat-autocomplete-panel-" in selector and not last_fill_selector:
+                continue
                 
             # 4. Trata preenchimentos duplicados (mesmo seletor e mesmo valor no mesmo cenário)
             if ev_type in ["fill", "change"]:
@@ -191,6 +197,9 @@ class SanitizerService:
                 last_fill_selector = selector
                 
             cleaned_events.append(ev)
+
+        events = cleaned_events
+        raw_data["events"] = events
 
         # Carrega metadados do projeto para buscar descrição de negócio e resultado esperado
         project_json_path = os.path.join(self.telemetry_dir, "project.json")
@@ -217,10 +226,10 @@ class SanitizerService:
         with open(self.dict_file, "w", encoding="utf-8") as f:
             json.dump(dict_data, f, indent=4, ensure_ascii=False)
 
-        # Gera o plano de execução a partir dos eventos final já limpos e refinados
-        self._write_execution_plan(events)
-
-        # Normalização do dataset_inicial.json existente
+        # Normalização do dataset_inicial.json existente (carregado ANTES do
+        # plano de execução porque _write_execution_plan precisa de
+        # dataset_rows para sanitizar has_text com tokens dinâmicos — ver
+        # Padrão Q logo abaixo)
         dataset_rows = []
         dataset_path = os.path.join(self.telemetry_dir, "dataset_inicial.json")
         if os.path.exists(dataset_path):
@@ -243,6 +252,9 @@ class SanitizerService:
                         print("[AEGIS SANITIZER] dataset_inicial.json normalizado com datas em formato DD/MM/YYYY.")
             except Exception as e:
                 print(f"[WARNING] Falha ao normalizar dataset_inicial.json: {e}")
+
+        # Gera o plano de execução a partir dos eventos final já limpos e refinados
+        self._write_execution_plan(events, dataset_rows)
 
         # Normalização de arquivos CSV correspondentes se existirem
         for csv_name in ["template.csv", "dados_entrada.csv"]:
@@ -910,11 +922,38 @@ class SanitizerService:
             result.append(s)
         return result
 
-    def _write_execution_plan(self, events: list):
+    def _write_execution_plan(self, events: list, dataset_rows: list = None):
         """Gera plano_execucao.json com steps filtrados (click, fill, filechooser apenas)."""
         plan_path = os.path.join(self.telemetry_dir, "plano_execucao.json")
         steps = []
         allowed_types = {"click", "fill", "filechooser"}
+
+        # Sanitização de valor dinâmico hardcoded em has_text (Padrão Q).
+        # Um `has_text` gravado pode misturar um identificador gerado pelo
+        # próprio sistema-alvo em runtime (protocolo, número de proposta/
+        # pedido, ex.: "PRO-80935") com valores estáveis do dataset (nome,
+        # CPF). Esse identificador nunca se repete entre execuções, fazendo
+        # o parent_locator nunca resolver depois da gravação — bug real
+        # confirmado em produção (st_063 do portal_segura). Em vez de só
+        # alertar no relatorio.md (checagem antiga, mantida como auditoria
+        # complementar mais abaixo em `sanitize()`), remove o token
+        # diretamente do has_text usado no plano, antes de chegar no
+        # code_generator — corrige na origem, sem depender de correção
+        # manual pra cada projeto/campo que tiver esse padrão.
+        dynamic_token_re = re.compile(r"\b[A-Za-zÀ-ÿ]{2,8}-\d{3,}\b")
+        dataset_values_str = " | ".join(
+            str(v) for row in (dataset_rows or []) for v in row.values() if isinstance(v, (str, int, float))
+        ).lower()
+
+        def sanitize_has_text(ht):
+            if not ht or not isinstance(ht, str):
+                return ht
+            cleaned = ht
+            for token in dynamic_token_re.findall(ht):
+                if token.lower() not in dataset_values_str:
+                    print(f"[AEGIS SANITIZER] [Padrão Q] Removendo token dinâmico '{token}' de has_text (não encontrado no dataset): \"{ht}\"")
+                    cleaned = re.sub(r"\s{2,}", " ", cleaned.replace(token, "")).strip()
+            return cleaned
 
         for ev in events:
             ev_type = ev.get("type", "").lower()
@@ -969,7 +1008,7 @@ class SanitizerService:
                 step["selector"] = label_input_match.group(1)
                 parent = None
             elif parent:
-                step["parent"] = {"selector": parent.get("selector", ""), "has_text": parent.get("has_text")}
+                step["parent"] = {"selector": parent.get("selector", ""), "has_text": sanitize_has_text(parent.get("has_text"))}
             if ev_type == "click":
                 x = ev.get("x_percent")
                 y = ev.get("y_percent")

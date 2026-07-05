@@ -3060,7 +3060,7 @@
                     renderReport(data.report);
                     renderValidation(data.validation);
                     // SEMPRE re-renderiza passos (a heurística de "executando" depende de dados frescos)
-                    renderSteps(data.recording, data.steps_history, data.skills_recordings);
+                    renderSteps(data.recording, data.steps_history, data.skills_recordings, data.execution_plan);
                     
                     const runBotBtn = document.getElementById('btn-run-bot');
                     if (runBotBtn) {
@@ -3650,7 +3650,7 @@
             reader.readAsText(file, 'UTF-8');
         }
 
-        function renderSteps(recording, stepsHistory = null, skillsRecordings = null) {
+        function renderSteps(recording, stepsHistory = null, skillsRecordings = null, executionPlan = null) {
             const div = document.getElementById('steps-view');
             const btnReset = document.getElementById('btn-reset-steps');
             const btnPromote = document.getElementById('btn-promote-skill');
@@ -3744,24 +3744,31 @@
                 // Complementa com passos planejados que não chegaram a ser executados.
                 // Só faz isso se o histórico é cru (sem STOPPED) — se já tem STOPPED,
                 // é porque foi mesclado ou editado antes e não deve ser re-expandido.
+                // Fonte: plano_execucao.json (já colapsado pelo sanitizer — 1 step_id
+                // por ação do bot). NUNCA usar gravacao.json cru aqui: ele guarda cada
+                // evento físico gravado (múltiplos cliques por dropdown), então sua
+                // contagem não bate com o total real de passos do bot e gerava
+                // passos fantasma (ex.: cliques de exploração de dropdown virando
+                // "passos não alcançados" que nunca existiram no bot compilado).
                 const alreadyMerged = robotSteps.some(s => s.status === 'STOPPED');
-                if (!alreadyMerged) {
-                    const planned = buildPlannedFromRecording(recording, skillsRecordings);
+                if (!alreadyMerged && executionPlan && Array.isArray(executionPlan.steps)) {
+                    const planSteps = executionPlan.steps;
                     const executedCount = robotSteps.length;
-                    if (planned.length > executedCount) {
-                        for (let i = executedCount; i < planned.length; i++) {
+                    if (planSteps.length > executedCount) {
+                        for (let i = executedCount; i < planSteps.length; i++) {
+                            const ps = planSteps[i];
                             robotSteps.push({
-                                index: i + 1,
-                                exec_order: i + 1,
-                                type: planned[i].type,
-                                selector: planned[i].selector,
-                                desc: planned[i].desc,
+                                index: ps.step_id || (i + 1),
+                                exec_order: ps.step_id || (i + 1),
+                                type: ps.type,
+                                selector: ps.selector,
+                                desc: ps.description,
                                 status: 'STOPPED',   // não foi alcançado
                                 error: '',
                                 usedHealing: false,
                                 screenshot: null,
                                 row_id: null,
-                                event_index: planned[i].event_index !== undefined ? planned[i].event_index : null
+                                event_index: null
                             });
                         }
                     }

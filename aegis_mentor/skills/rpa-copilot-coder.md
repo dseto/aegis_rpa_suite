@@ -169,11 +169,19 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
       delay_ms=60
   )
 
-  # Aguarda o AJAX do backend preencher campos dependentes (ex: nome auto-fill)
-  time.sleep(2.0)
+  # ✅ CORRETO — polling até o campo dependente sair do estado de
+  # carregamento (disabled e/ou valor de placeholder tipo "Buscando..."),
+  # NUNCA time.sleep(N) fixo: a busca assíncrona no backend não tem duração
+  # constante entre execuções/ambientes, e um sleep fixo tanto pode ser curto
+  # demais (campo ainda bloqueado) quanto desperdiçar tempo à toa.
+  campo_nome = page.locator("[data-testid='client-name-input']")
+  for _ in range(30):  # ~6s de budget, ajuste o timeout ao caso real
+      if campo_nome.is_enabled():
+          break
+      page.wait_for_timeout(200)
 
   # ✅ CORRETO — verifica se o nome foi preenchido pelo AJAX antes de digitar
-  nome_atual = page.locator("[data-testid='client-name-input']").input_value()
+  nome_atual = campo_nome.input_value()
   if not nome_atual or nome_atual.strip() == "":
       # Só digita se o AJAX não preencheu — redigitar reseta o trust state!
       runner.fill_human_like(
@@ -183,6 +191,7 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
           delay_ms=60
       )
   ```
+  > ⚠️ **Nunca use `time.sleep(N)` fixo para esperar o AJAX** — poll pelo estado real do campo (`is_enabled()` e/ou `input_value()` mudando). Se a telemetria/dicionário indicar um valor literal de placeholder de carregamento (ex.: `"Buscando cadastro..."`), prefira pollar até o valor deixar de ser exatamente esse literal em vez de só checar `is_enabled()` — bug real confirmado: campo `Nome Completo` do portal_segura fica com `value="Buscando cadastro..."` e `disabled=true` por até ~2.5s após o CPF ser preenchido; preencher antes disso é descartado quando a API responde e sobrescreve o campo.
 * **Exemplo de código gerado INCORRETAMENTE (nunca faça isso para campos HUMAN_LIKE):**
   ```python
   # ❌ ERRADO — .fill() não dispara keydown → keystrokes = 0 → botão bloqueado
