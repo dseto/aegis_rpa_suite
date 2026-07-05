@@ -742,6 +742,7 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
         kwargs: Dict[str, Any] = {}
         dict_kwargs = set()
         dict_contents: Dict[str, Dict[str, Any]] = {}
+        dict_dynamic_keys: Dict[str, set] = {}
         for kw in node.keywords:
             if kw.arg is None:
                 continue
@@ -754,14 +755,24 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
                 if isinstance(kw.value, ast.Dict):
                     dict_kwargs.add(kw.arg)
                     literal_dict = {}
+                    dynamic_keys = set()
                     for dk, dv in zip(kw.value.keys, kw.value.values):
-                        if isinstance(dk, ast.Constant) and isinstance(dv, ast.Constant):
-                            literal_dict[dk.value] = dv.value
+                        if isinstance(dk, ast.Constant):
+                            if isinstance(dv, ast.Constant):
+                                literal_dict[dk.value] = dv.value
+                            else:
+                                # Valor dinâmico (f-string/concat/chamada) — ex.: filtro de
+                                # has_text montado a partir de campos do dataset (row.get(...))
+                                # em vez de literal fixo. Não dá pra comparar por igualdade
+                                # de string, mas não significa que o filtro foi omitido.
+                                dynamic_keys.add(dk.value)
                     dict_contents[kw.arg] = literal_dict
+                    dict_dynamic_keys[kw.arg] = dynamic_keys
         if step_id is None:
             continue
         calls_by_step.setdefault(step_id, []).append({
-            "method": method_name, "kwargs": kwargs, "dict_kwargs": dict_kwargs, "dict_contents": dict_contents
+            "method": method_name, "kwargs": kwargs, "dict_kwargs": dict_kwargs,
+            "dict_contents": dict_contents, "dict_dynamic_keys": dict_dynamic_keys
         })
 
     def kwarg_present(step_id, method, kwarg_name):
@@ -854,13 +865,23 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
                 plan_has_text = parent.get("has_text")
                 if plan_has_text:
                     code_parent_dict = {}
+                    code_parent_dynamic_keys = set()
                     for call in calls_by_step.get(step_id, []):
                         if call["method"] == chained_method:
                             code_parent_dict = call.get("dict_contents", {}).get("parent", {})
+                            code_parent_dynamic_keys = call.get("dict_dynamic_keys", {}).get("parent", set())
                             break
                     code_has_text = code_parent_dict.get("has_text")
                     code_selector = code_parent_dict.get("selector") or ""
-                    has_text_ok = (code_has_text == plan_has_text) or (plan_has_text in code_selector)
+                    # has_text montado dinamicamente (f-string/concat com row.get(...)) não dá
+                    # pra comparar por igualdade de string com o literal gravado no plano, mas
+                    # é uma parametrização legítima — o dataset é a fonte de verdade em runtime,
+                    # não o valor congelado no momento da gravação.
+                    has_text_ok = (
+                        (code_has_text == plan_has_text)
+                        or (plan_has_text in code_selector)
+                        or ("has_text" in code_parent_dynamic_keys)
+                    )
                     if not has_text_ok:
                         errors.append({
                             "type": "MISSING_PARENT_HAS_TEXT",
@@ -1416,7 +1437,7 @@ class _FakeRunner:
         pass
     def run(self, url=None, headless=True, slow_mo=50, channel="msedge"):
         pass
-    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None):
+    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False):
         return True
     def fill_resilient(self, page, selector, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None):
         return True

@@ -161,7 +161,7 @@ class TransactionRunner:
         except Exception:
             pass  # Falha silenciosa - não interrompe execução
 
-    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None) -> bool:
+    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
         Executa um clique resiliente e inteligente.
         - Expansão de Submenu (Hover-to-Reveal): Se o seletor for composto (>>), tenta fazer hover no pai.
@@ -292,7 +292,7 @@ class TransactionRunner:
                 last_exception = e
                 print(f"[AEGIS RUNNER] Tentativa {attempt} de clique falhou para '{selector}': {e}")
                 if attempt == 2:
-                    return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id)
+                    return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id, strict=strict)
 
     def click_by_coordinates(self, page, original_coords, target_description, step_id=None) -> bool:
         """
@@ -322,7 +322,7 @@ class TransactionRunner:
         self._log_step(step_id=step_id, action="click_by_coordinates", selector="coords", target_description=target_description, status="SUCCESS")
         return True
 
-    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None) -> bool:
+    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None, strict=False) -> bool:
         # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
         if "strict mode violation" in str(e) or "resolved to" in str(e):
             try:
@@ -393,6 +393,18 @@ class TransactionRunner:
                 return True
         except Exception:
             pass
+
+        # Nível 3/4: Self-Healing Cognitivo e Fallback por Coordenadas — pulados em modo
+        # strict, pois ambos "adivinham" um alvo (via visão de IA ou coordenada histórica
+        # da gravação) sem confirmar que o elemento esperado realmente existe no DOM atual.
+        # Quando o elemento genuinamente não existe (ex.: fluxo quebrado por bug upstream
+        # na app-alvo), essa adivinhação clica em algo errado, silenciosamente corrompendo
+        # o estado da página e mascarando a causa raiz em passos subsequentes — pior do
+        # que uma falha limpa e rastreável neste passo.
+        if strict:
+            print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao clicar em '{selector}' (self-healing e fallback por coordenadas desativados para este passo).")
+            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+            raise e
 
         # Nível 3: Self-Healing Cognitivo por IA
         healed_by_ia = False
@@ -1124,7 +1136,6 @@ class TransactionRunner:
         if os.path.exists(exec_dataset):
             print(f"[AEGIS RUNNER] Carregando dataset filtrado da pasta de execução: {exec_dataset}")
             with open(exec_dataset, "r", encoding="utf-8") as f:
-                import json
                 return json.load(f)
 
         if os.path.exists(self.dataset_json):
