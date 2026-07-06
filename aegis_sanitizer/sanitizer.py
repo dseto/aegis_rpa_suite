@@ -928,6 +928,24 @@ class SanitizerService:
         steps = []
         allowed_types = {"click", "fill", "filechooser"}
 
+        # Preserva a marcação `flaky` de steps já existentes no plano anterior
+        # ao regenerar. O casamento é feito por (type, selector) — não por
+        # step_id, que é posicional (f"st_{i+1:03d}") e desloca a cada
+        # regeração (steps inseridos/removidos mudam o índice de todo mundo
+        # depois). Protegido contra plano antigo ausente ou malformado: nesse
+        # caso, nenhum flaky é herdado, mas a geração do plano novo segue normal.
+        old_flaky_keys = set()
+        try:
+            with open(plan_path, "r", encoding="utf-8") as f:
+                old_plan = json.load(f)
+            old_flaky_keys = {
+                (s.get("type"), s.get("selector"))
+                for s in old_plan.get("steps", [])
+                if s.get("flaky")
+            }
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            old_flaky_keys = set()
+
         # Sanitização de valor dinâmico hardcoded em has_text (Padrão Q).
         # Um `has_text` gravado pode misturar um identificador gerado pelo
         # próprio sistema-alvo em runtime (protocolo, número de proposta/
@@ -1033,6 +1051,7 @@ class SanitizerService:
                     "type": s["type"],
                     "selector": s.get("selector", ""),
                     "description": s["description"],
+                    **({"flaky": True} if (s["type"], s.get("selector", "")) in old_flaky_keys else {}),
                     **({"parent": s["parent"]} if "parent" in s else {}),
                     **({"coords": s["coords"]} if "coords" in s else {}),
                     **({"dropdown_label": s["dropdown_label"]} if "dropdown_label" in s else {}),

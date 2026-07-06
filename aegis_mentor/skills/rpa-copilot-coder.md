@@ -300,6 +300,26 @@ Ao gerar ou refatorar scripts de automação, utilize os padrões abaixo no cód
   )
   ```
 
+### 🔄 Padrão R: Passos Flaky com Restart Automático por Linha
+* **Problema:** Alguns passos são conhecidamente intermitentes (ex.: Padrão J regra estendida — dropdown condicional que não renderiza a tempo em ~1 a cada N execuções), sem ser falhas estruturais reais (selector mudou, elemento não existe). Para esses casos, a ação certa não é "adivinhar" via self-healing (coordenada/IA) — é simplesmente tentar de novo do zero, já que a re-execução normalmente não bate na mesma janela de corrida.
+* **Marcação:** Um passo é sinalizado como flaky através do campo booleano `"flaky": true` no `plano_execucao.json` (ex.: `{ "step_id": "st_034", "type": "click", ..., "flaky": true }`), marcado manualmente via Cockpit (tela de Passos) depois que um humano/QA confirma que a intermitência é conhecida.
+* **Solução:** O `TransactionRunner` já carrega `plano_execucao.json` na inicialização e monta um mapa `step_id → flaky`. Para a linha do dataset que sofre uma falha num passo marcado `flaky`, o runner reinicia a **transação inteira daquela linha** (fecha a página/context atual, abre uma nova — mesmo padrão de isolamento de 1 página por linha que já existe hoje — e roda o cenário completo de novo desde o passo 1), até 3 tentativas completas nesses passos. Se as 3 tentativas falharem todas no mesmo passo flaky, a 4ª tentativa libera o self-healing (coordenada/IA) como último recurso para esse(s) passo(s) especificamente — exatamente como já acontece hoje para qualquer passo com `strict=False`. Outras linhas do dataset seguem seu fluxo normal, sem qualquer relação com as tentativas desta linha. **Importante:** o gatilho de restart-por-linha é exclusivamente a marcação `flaky: true` no plano — ele é **independente do valor de `strict`** que o bot passa naquela chamada (o runner avalia internamente `strict OU is_flaky_step`). Um passo pode estar marcado `flaky` e continuar sendo chamado com `strict=False` (o caso normal, default) ou, no residual do Padrão Q, com `strict=True` — em ambos os casos o restart por linha se aplica do mesmo jeito.
+* **Responsabilidade é 100% do runner:** Esta é uma decisão de runtime, não de geração de código. O bot compilado **não precisa de nenhuma lógica nova** — ele continua chamando `runner.click_resilient(...)`, `runner.fill_resilient(...)`, `runner.select_option_resilient(...)`, etc. exatamente como já faz hoje, **sem alterar o valor de `strict` que já passaria de qualquer forma** (default `False` na grande maioria dos passos; `True` apenas no caso residual do Padrão Q). **O `code_generator.py` (LLM) NÃO deve passar a emitir `strict=True` por causa deste padrão** — a única regra para decidir `strict=True` continua sendo a do Padrão Q (ausência de fragmento estável de `has_text`). O `code_generator.py` não gera código diferente para passos flaky e não precisa sequer ler o campo `flaky` do plano — toda a decisão dinâmica ("essa falha dispara restart, é definitiva, ou libera self-healing?") vive centralizada dentro do `TransactionRunner`, que combina (a) o `step_id` estar marcado `flaky` no plano, (b) o valor de `strict` recebido na chamada (`False` na maioria dos casos) e (c) qual é a tentativa atual daquela linha do dataset.
+* **Custo de marcar `flaky` incorretamente:** marcar `flaky: true` num passo que na verdade tem uma falha estrutural (selector quebrado, elemento removido da tela) — e não uma intermitência real — custa ~3 execuções completas extras daquela linha do dataset (reinício da transação do zero a cada tentativa) antes do self-healing finalmente entrar na 4ª tentativa. Só marque `flaky` depois de confirmação humana/QA de que a falha é intermitente, não determinística.
+* **Exemplo (nenhuma ação necessária no script gerado — o runner já trata automaticamente):**
+  ```python
+  # [PASSO 34] Selecionar Nível da Blindagem (passo marcado flaky=true no plano)
+  runner.select_option_resilient(
+      page,
+      dropdown_label="Nível da Blindagem",
+      option_text=row.get("nivel_blindagem", ""),
+      original_coords_trigger=(0.4531, 0.6782),
+      original_coords_option=(0.4617, 0.7420)
+  )
+  # Código idêntico ao de um passo não-flaky — o restart por linha,
+  # se necessário, acontece de forma transparente dentro do runner.
+  ```
+
 ---
 
 ## 🎯 2. Diretrizes de Codificação RPA de Produção

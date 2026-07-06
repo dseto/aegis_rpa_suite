@@ -1129,6 +1129,11 @@
                                     ✨ <span id="feedback-pending-count">0</span> correções pendentes
                                 </span>
                             </div>
+                            <div id="feedback-needs-review-badge-container" style="margin-top: 8px; display: none; text-align: center;">
+                                <span style="background: #f59e0b; color: #fff; font-size: 10px; padding: 4px 8px; border-radius: 4px; display: inline-block; font-weight: bold; box-shadow: 0 2px 8px rgba(245,158,11,0.3);">
+                                    🔎 <span id="feedback-needs-review-count">0</span> precisa(m) revisão
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -3713,6 +3718,16 @@
                 const primaryRowId = activeRowIds.length > 0 ? activeRowIds[0] : null;
                 const filteredStepsHistory = primaryRowId ? realStepsHistory.filter(s => s.row_id === primaryRowId) : realStepsHistory;
 
+                // Mapa step_id -> flaky, lido do plano de execução persistido em disco
+                const flakyByStepId = {};
+                if (executionPlan && Array.isArray(executionPlan.steps)) {
+                    executionPlan.steps.forEach(ps => {
+                        if (ps.step_id !== undefined && ps.step_id !== null) {
+                            flakyByStepId[String(ps.step_id)] = !!ps.flaky;
+                        }
+                    });
+                }
+
                 robotSteps = filteredStepsHistory.map((s, idx) => {
                     let evIdx = s.event_index !== undefined ? s.event_index : null;
                     if (evIdx === null && needsEventIndex && recordingEvents.length > 0) {
@@ -3737,7 +3752,8 @@
                         usedHealing: s.usedHealing || false,
                         screenshot: s.screenshot || null,
                         row_id: s.row_id || null,
-                        event_index: evIdx
+                        event_index: evIdx,
+                        flaky: flakyByStepId[String(stepId)] || false
                     };
                 });
 
@@ -3768,7 +3784,8 @@
                                 usedHealing: false,
                                 screenshot: null,
                                 row_id: null,
-                                event_index: null
+                                event_index: null,
+                                flaky: !!ps.flaky
                             });
                         }
                     }
@@ -3815,7 +3832,8 @@
                 status: 'PENDING',
                 error: '',
                 usedHealing: false,
-                event_index: s.event_index !== undefined ? s.event_index : null
+                event_index: s.event_index !== undefined ? s.event_index : null,
+                flaky: false
             }));
 
             currentStepIndex = 0;
@@ -3857,7 +3875,7 @@
             html += '<tr>';
             html += `<th style="width:5%; cursor:pointer;" onclick="sortSteps('id')"># ${stepsSortKey === 'id' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
             html += `<th style="width:8%; cursor:pointer;" onclick="sortSteps('exec_order')">Ordem ${stepsSortKey === 'exec_order' ? (stepsSortAsc ? '▲' : '▼') : '⇅'}</th>`;
-            html += '<th style="width:10%">Registro</th><th style="width:11%">Tipo</th><th style="width:25%">Seletor Físico</th><th style="width:16%">Ação Esperada</th><th style="width:11%">Status</th><th style="width:6%" title="Excluir passo">Ações</th>';
+            html += '<th style="width:10%">Registro</th><th style="width:11%">Tipo</th><th style="width:23%">Seletor Físico</th><th style="width:14%">Ação Esperada</th><th style="width:11%">Status</th><th style="width:5%" title="Marcar passo como instável (flaky)">Flaky</th><th style="width:6%" title="Excluir passo">Ações</th>';
             html += '</tr>';
             
             // Heurística: apenas o PRIMEIRO passo pendente logo após o último passo com atividade
@@ -3923,6 +3941,9 @@
                     <td style="font-family:monospace;font-size:10px;" title="${step.selector}">${selectorDisplay}</td>
                     <td ${titleAttr} ${styleErr}>${step.desc}</td>
                     <td><span class="status-badge-step ${statusClass}">${statusText}</span></td>
+                    <td style="text-align:center;">
+                        <input type="checkbox" ${step.flaky ? 'checked' : ''} onchange="toggleStepFlaky('${step.index}', this.checked)" title="Marcar passo ${step.index} como flaky">
+                    </td>
                     <td style="text-align:center;">
                         <button onclick="deleteStep(${step.index})" title="Excluir passo ${step.index}" style="background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;color:var(--text-muted);font-size:13px;transition:color .15s,background .15s;" onmouseover="this.style.color='#ef4444';this.style.background='rgba(239,68,68,0.1)'" onmouseout="this.style.color='var(--text-muted)';this.style.background='none'">🗑️</button>
                     </td>
@@ -3999,6 +4020,29 @@
                     }
                 })
                 .catch(e => console.error('Erro de rede ao salvar exclusão de passo:', e));
+            }
+        }
+
+        window.toggleStepFlaky = function(stepId, flakyValue) {
+            // Atualiza estado local sem recarregar a tela inteira
+            const step = robotSteps.find(s => String(s.index) === String(stepId));
+            if (step) {
+                step.flaky = flakyValue;
+            }
+
+            if (activeProjectSlug && activeTestSlug) {
+                fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/steps/${encodeURIComponent(stepId)}/flaky`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ flaky: flakyValue })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.success) {
+                        console.error('Falha ao salvar flaky no servidor:', data.message);
+                    }
+                })
+                .catch(e => console.error('Erro de rede ao salvar flaky do passo:', e));
             }
         }
 
@@ -4829,6 +4873,8 @@
             if (!activeProjectSlug || !activeTestSlug) {
                 const container = document.getElementById('feedback-badge-container');
                 if (container) container.style.display = 'none';
+                const needsReviewContainer = document.getElementById('feedback-needs-review-badge-container');
+                if (needsReviewContainer) needsReviewContainer.style.display = 'none';
                 return;
             }
             fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/correcoes-status`)
@@ -4842,6 +4888,17 @@
                             badgeContainer.style.display = 'block';
                         } else {
                             badgeContainer.style.display = 'none';
+                        }
+                    }
+
+                    const needsReviewBadgeContainer = document.getElementById('feedback-needs-review-badge-container');
+                    const needsReviewCountSpan = document.getElementById('feedback-needs-review-count');
+                    if (needsReviewBadgeContainer && needsReviewCountSpan) {
+                        if (data.success && data.needs_review > 0) {
+                            needsReviewCountSpan.innerText = data.needs_review;
+                            needsReviewBadgeContainer.style.display = 'block';
+                        } else {
+                            needsReviewBadgeContainer.style.display = 'none';
                         }
                     }
                 })

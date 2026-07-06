@@ -643,6 +643,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             applied_count = 0
             failed_count = 0
             resolved_count = 0
+            needs_review_count = 0
             corrections = []
             
             if os.path.exists(corr_file):
@@ -653,15 +654,17 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     applied_count = len([c for c in corrections if c.get("status") == "applied"])
                     failed_count = len([c for c in corrections if c.get("status") == "failed_attempt"])
                     resolved_count = len([c for c in corrections if c.get("status") == "resolved"])
+                    needs_review_count = len([c for c in corrections if c.get("status") == "needs_review"])
                 except:
                     pass
-                    
+
             self._json({
                 'success': True,
                 'pending': pending_count,
                 'applied': applied_count,
                 'failed_attempt': failed_count,
                 'resolved': resolved_count,
+                'needs_review': needs_review_count,
                 'total': len(corrections)
             })
 
@@ -1545,6 +1548,52 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': True, 'message': f'Status da correção {corr_id} atualizado para {new_status}{insight_note}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao atualizar status: {e}'}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/steps/' in path and path.endswith('/flaky'):
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            step_id = urllib.parse.unquote(parts[7])
+
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+
+            flaky_value = body.get('flaky')
+            if not isinstance(flaky_value, bool):
+                self._json({'success': False, 'message': 'Campo "flaky" (booleano) é obrigatório.'}, 400)
+                return
+
+            plan_file = os.path.join(test_dir, "plano_execucao.json")
+            if not os.path.exists(plan_file):
+                self._json({'success': False, 'message': 'plano_execucao.json não encontrado.'}, 404)
+                return
+
+            try:
+                with open(plan_file, "r", encoding="utf-8") as f:
+                    plan = json.load(f)
+
+                steps = plan.get("steps", []) if isinstance(plan, dict) else []
+                found = False
+                for step in steps:
+                    if str(step.get("step_id")) == str(step_id):
+                        step["flaky"] = flaky_value
+                        found = True
+                        break
+
+                if not found:
+                    self._json({'success': False, 'message': f'Passo {step_id} não encontrado no plano.'}, 404)
+                    return
+
+                with open(plan_file, "w", encoding="utf-8") as f:
+                    json.dump(plan, f, indent=4, ensure_ascii=False)
+
+                self._json({'success': True, 'message': f'Passo {step_id} marcado como flaky={flaky_value}.'})
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao atualizar flaky: {e}'}, 500)
 
         else:
             self.send_response(404)

@@ -12,6 +12,23 @@ try:
 except ImportError:
     from aegis_runner.cognitive_fallback import CognitiveGateway
 
+
+class FlakyStepFailure(Exception):
+    """Levantada quando um passo marcado como 'flaky' no plano de execução falha
+    em modo strict dentro das primeiras 3 tentativas da linha atual. Sinaliza ao
+    loop de execução (run()) que a linha deve ser reiniciada, em vez de propagar
+    a exceção original como falha definitiva. A exceção original é preservada
+    como atributo para log/investigação."""
+
+    def __init__(self, step_id, selector, original_exception):
+        self.step_id = step_id
+        self.selector = selector
+        self.original_exception = original_exception
+        super().__init__(
+            f"Passo flaky '{step_id}' ({selector}) falhou: {original_exception}"
+        )
+
+
 class TransactionRunner:
     def __init__(self, project_dir, error_message_selector=".toast-error, .alert-danger, #angular-field-status-message", cognitive_gateway=None, initial_url=None, **kwargs):
         self.project_dir = os.path.abspath(project_dir)
@@ -33,6 +50,13 @@ class TransactionRunner:
 
         # Plano de execução carregado (opcional)
         self.execution_plan = None
+        # Mapa step_id -> flaky derivado do plano de execução (populado em run()).
+        # Inicializado vazio aqui para permitir chamadas diretas aos métodos
+        # resilientes fora do loop de run() (ex.: testes unitários).
+        self.flaky_step_ids = {}
+        # Tentativa atual da linha em execução para passos flaky. Valor default de
+        # segurança; resetado por linha dentro do loop de run() por outra tarefa.
+        self.current_row_flaky_attempt = 1
 
         # Direcionamento de logs de execução para pasta separada se configurado
         self.output_dir = os.environ.get("AEGIS_EXECUTION_DIR")
@@ -72,7 +96,7 @@ class TransactionRunner:
         self.scenarios[scenario_name] = callback
         print(f"[AEGIS RUNNER] Cenário '{scenario_name}' registrado com sucesso.")
 
-    def _log_step(self, step_id, action, selector, target_description, status, error_msg=""):
+    def _log_step(self, step_id, action, selector, target_description, status, error_msg="", healing_method=None):
         """Registra um passo no histórico interno da execução com atualização in-place por step_id."""
         # Captura screenshot se SUCCESS/HEALED e step_screenshots ativo
         screenshot_filename = ""
@@ -143,6 +167,12 @@ class TransactionRunner:
         # Escreve histórico em tempo real para polling (evita mostrar dados velhos durante execução)
         self._write_steps_realtime()
 
+        # Sensor F1: toda vez que um passo é resolvido via healing, registra
+        # automaticamente uma entrada 'needs_review' em correcoes_acumuladas.json
+        # para revisão humana/QA posterior (não-fatal por design).
+        if status == "HEALED":
+            self._register_healing_for_review(step_id, selector, action, healing_method)
+
     def _write_steps_realtime(self):
         """Escreve steps_history atual para arquivo imediatamente (para polling live)."""
         try:
@@ -160,6 +190,129 @@ class TransactionRunner:
                 pass
         except Exception:
             pass  # Falha silenciosa - não interrompe execução
+
+    def _with_file_lock(self, file_handle):
+        """Context manager simples de lock exclusivo de arquivo (Windows via msvcrt)."""
+        class _FileLock:
+            def __init__(self, fh):
+                self.fh = fh
+                self.locked = False
+
+            def __enter__(self):
+                try:
+                    import msvcrt
+                    self.fh.seek(0)
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+                    self.locked = True
+                except Exception:
+                    pass
+                return self.fh
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if self.locked:
+                    try:
+                        import msvcrt
+                        self.fh.seek(0)
+                        msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                return False
+
+        return _FileLock(file_handle)
+
+    def _register_healing_for_review(self, step_id, selector, action, healing_method=None):
+        """
+        Sensor F1: registra automaticamente uma entrada 'needs_review' em
+        correcoes_acumuladas.json sempre que um passo é resolvido via healing
+        (status='HEALED'), com dedup por (action, failed_selector) e escrita
+        segura via lock exclusivo de arquivo (read-modify-write atômico).
+
+        Não-fatal por design: qualquer falha aqui é apenas logada, nunca
+        propagada, para jamais derrubar a transação em execução.
+        """
+        try:
+            action_key = (action or "").strip().lower()
+            selector_key = (selector or "").strip()
+
+            # Throttle: evita escritas repetidas em disco para o mesmo par
+            # (action, failed_selector) dentro de uma janela curta na mesma execução.
+            if not hasattr(self, "_healing_throttle"):
+                self._healing_throttle = {}
+            throttle_key = (action_key, selector_key)
+            now_ts = time.time()
+            last_ts = self._healing_throttle.get(throttle_key)
+            if last_ts is not None and (now_ts - last_ts) < 30:
+                return
+            self._healing_throttle[throttle_key] = now_ts
+
+            corr_file = os.path.join(self.project_dir, "correcoes_acumuladas.json")
+
+            execution_id = os.environ.get("AEGIS_EXECUTION_ID", "local")
+            now_iso = datetime.now().isoformat()
+
+            # Garante existência do arquivo antes de abrir em modo r+
+            if not os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "w", encoding="utf-8") as init_f:
+                        json.dump([], init_f, indent=4, ensure_ascii=False)
+                except Exception:
+                    pass
+
+            with open(corr_file, "r+", encoding="utf-8") as f:
+                with self._with_file_lock(f):
+                    try:
+                        f.seek(0)
+                        content = f.read()
+                        all_corrs = json.loads(content) if content.strip() else []
+                        if not isinstance(all_corrs, list):
+                            all_corrs = []
+                    except Exception:
+                        all_corrs = []
+
+                    # Status que indicam que já existe correção conhecida para este par
+                    known_statuses = ("needs_review", "pending", "applied", "resolved", "failed_attempt")
+
+                    existing_needs_review = None
+                    has_other_known = False
+                    for corr in all_corrs:
+                        ca = (corr.get("action") or "").strip().lower()
+                        cs = (corr.get("failed_selector") or "").strip()
+                        if ca == action_key and cs == selector_key and corr.get("status") in known_statuses:
+                            if corr.get("status") == "needs_review":
+                                existing_needs_review = corr
+                            else:
+                                has_other_known = True
+
+                    if existing_needs_review is not None:
+                        existing_needs_review["occurrences"] = existing_needs_review.get("occurrences", 1) + 1
+                        existing_needs_review["timestamp"] = now_iso
+                        existing_needs_review["execution_id"] = execution_id
+                        existing_needs_review["step_id"] = step_id
+                    elif not has_other_known:
+                        new_entry = {
+                            "id": f"healing_{execution_id}_{step_id}",
+                            "timestamp": now_iso,
+                            "execution_id": execution_id,
+                            "step_id": step_id,
+                            "action": action,
+                            "failed_selector": selector,
+                            "root_cause": None,
+                            "proposed_fix": None,
+                            "qa_insight": None,
+                            "healing_method": healing_method,
+                            "occurrences": 1,
+                            "status": "needs_review",
+                        }
+                        all_corrs.append(new_entry)
+                    else:
+                        # Já existe correção conhecida com outro status - não duplica.
+                        return
+
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(all_corrs, f, indent=4, ensure_ascii=False)
+        except Exception as sensor_err:
+            print(f"[AEGIS RUNNER] [WARNING] Sensor de healing falhou ao registrar correcoes_acumuladas.json: {sensor_err}")
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
@@ -472,7 +625,12 @@ class TransactionRunner:
         # na app-alvo), essa adivinhação clica em algo errado, silenciosamente corrompendo
         # o estado da página e mascarando a causa raiz em passos subsequentes — pior do
         # que uma falha limpa e rastreável neste passo.
-        if strict:
+        is_flaky_step = self.flaky_step_ids.get(step_id, False)
+        flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
+        if (strict or is_flaky_step) and not flaky_healing_unlocked:
+            if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise FlakyStepFailure(step_id, selector, e)
             print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao clicar em '{selector}' (self-healing e fallback por coordenadas desativados para este passo).")
             self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
@@ -485,7 +643,7 @@ class TransactionRunner:
             try:
                 healed_by_ia = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
                 if healed_by_ia:
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED")
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                     return True
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
@@ -501,7 +659,7 @@ class TransactionRunner:
                 y = int(viewport["height"] * original_coords[1])
                 print(f"[AEGIS RUNNER] [FALLBACK ÚLTIMO RECURSO] Clicando em coordenadas históricas da gravação: ({x}, {y})")
                 page.mouse.click(x, y)
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used")
+                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
                 return True
             except Exception as coords_err:
                 print(f"[AEGIS RUNNER] Falha crítica no clique por coordenadas de fallback: {coords_err}")
@@ -562,6 +720,9 @@ class TransactionRunner:
         if getattr(self, "realtime_logs", True):
             print(f"[AEGIS_STEP] START | {step_id} | select_option | {dropdown_label} -> {option_text} | Selecionar dropdown | | | {row_id}")
             sys.stdout.flush()
+
+        is_flaky_step = self.flaky_step_ids.get(step_id, False)
+        flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
 
         slug = self._slugify(dropdown_label)
 
@@ -676,6 +837,7 @@ class TransactionRunner:
 
         # 2. Seleciona a opção
         option_clicked = False
+        healed_via_fallback = None
         option_selectors = [
             f"[role='option']:has-text('{option_text}')",
             f".mat-option:has-text('{option_text}')",
@@ -712,7 +874,7 @@ class TransactionRunner:
         # a coordenada gravada estivesse obsoleta, o robô "selecionava" o
         # vazio e seguia reportando SUCCESS com o valor antigo inalterado
         # (causa raiz confirmada da falha em cascata do st_052/cenário 001).
-        if not option_clicked and original_coords_option and len(original_coords_option) == 2:
+        if not option_clicked and original_coords_option and len(original_coords_option) == 2 and not (is_flaky_step and self.current_row_flaky_attempt <= 3):
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords_option[0])
@@ -726,6 +888,7 @@ class TransactionRunner:
                     print(f"[AEGIS RUNNER] Selecionando opção via coordenadas de fallback: ({x}, {y})")
                     page.mouse.click(x, y)
                     option_clicked = True
+                    healed_via_fallback = "coordinate"
                 else:
                     print(f"[AEGIS RUNNER] Coordenada de fallback ({x}, {y}) não corresponde a '{option_text}' (encontrado: {normalized_hit!r}). Clique descartado.")
             except Exception as e:
@@ -735,18 +898,20 @@ class TransactionRunner:
         # a opção certa depende do dropdown certo ter sido aberto/identificado
         # corretamente, e IA visual não confirma essa identidade, só "acha"
         # texto parecido na tela — mesmo risco de adivinhação do click_chained).
-        if not option_clicked and strict:
+        if not option_clicked and (strict or is_flaky_step) and not flaky_healing_unlocked:
             print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{dropdown_label}' (self-healing desativado para este passo).")
         elif not option_clicked and self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha nas tentativas normais. Acionando Self-Healing Cognitivo para a opção...")
             try:
                 # Tenta localizar visualmente o texto da opção na tela
                 option_clicked = self.cognitive.self_healing_click(
-                    page, 
-                    selector=f"[role='option']:has-text('{option_text}')", 
+                    page,
+                    selector=f"[role='option']:has-text('{option_text}')",
                     target_description=f"Opção {option_text} do dropdown {dropdown_label}",
                     original_coords=original_coords_option
                 )
+                if option_clicked:
+                    healed_via_fallback = "visual_ai"
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro no self-healing cognitivo para opção: {ia_err}")
 
@@ -756,12 +921,17 @@ class TransactionRunner:
                 time.sleep(0.3)
             except Exception:
                 pass
-            self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="SUCCESS")
+            if healed_via_fallback:
+                self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="HEALED", healing_method=healed_via_fallback)
+            else:
+                self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="SUCCESS")
             return True
         else:
             msg = f"Não foi possível selecionar a opção '{option_text}' no dropdown '{dropdown_label}'."
             print(f"[AEGIS RUNNER] ❌ {msg}")
             self._log_step(step_id=step_id, action="select_option", selector=f"[role='option']:has-text('{option_text}')", target_description=f"Selecionar '{option_text}' no dropdown '{dropdown_label}'", status="FAILED", error_msg=msg)
+            if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                raise FlakyStepFailure(step_id, f"[role='option']:has-text('{option_text}')", RuntimeError(msg))
             raise RuntimeError(msg)
 
     def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None, strict: bool = False) -> bool:
@@ -803,7 +973,12 @@ class TransactionRunner:
             except Exception:
                 pass
 
-            if strict:
+            is_flaky_step = self.flaky_step_ids.get(step_id, False)
+            flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
+            if (strict or is_flaky_step) and not flaky_healing_unlocked:
+                if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                    self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                    raise FlakyStepFailure(step_id, selector, e)
                 print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{selector}' (self-healing desativado para este passo).")
                 self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
                 raise e
@@ -813,7 +988,7 @@ class TransactionRunner:
                 if clicked:
                     try:
                         page.locator(selector).first.select_option(label=option_text, timeout=timeout)
-                        self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="HEALED")
+                        self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
                     except Exception:
                         pass
@@ -1112,7 +1287,12 @@ class TransactionRunner:
 
         except Exception as e:
             print(f"[AEGIS RUNNER] Falha no fill_chained: {e}")
-            if strict:
+            is_flaky_step = self.flaky_step_ids.get(step_id, False)
+            flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
+            if (strict or is_flaky_step) and not flaky_healing_unlocked:
+                if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                    self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="FAILED", error_msg=str(e))
+                    raise FlakyStepFailure(step_id, selector_full, e)
                 print(f"[AEGIS RUNNER] [STRICT] Falha definitiva em '{selector_full}' (self-healing desativado para este passo, pai é identificado por has_text).")
             elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para fill_chained...")
@@ -1121,7 +1301,7 @@ class TransactionRunner:
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
-                    self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALED")
+                    self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALED", healing_method="visual_ai")
                     return True
             self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
@@ -1192,7 +1372,12 @@ class TransactionRunner:
             except Exception:
                 pass
 
-            if strict:
+            is_flaky_step = self.flaky_step_ids.get(step_id, False)
+            flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
+            if (strict or is_flaky_step) and not flaky_healing_unlocked:
+                if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                    raise FlakyStepFailure(step_id, selector, e)
                 print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao preencher '{selector}' (self-healing desativado para este passo).")
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
                 raise e
@@ -1204,7 +1389,7 @@ class TransactionRunner:
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
                     page.evaluate("() => { const active = document.activeElement; if (active) { active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
-                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED")
+                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                     return True
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg="IA self-healing failed")
                 raise e
@@ -1289,7 +1474,7 @@ class TransactionRunner:
                     for char in str(text_val):
                         page.keyboard.press(char)
                         _t2.sleep(delay_ms / 1000.0)
-                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED")
+                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                     return True
             self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
@@ -1448,6 +1633,12 @@ class TransactionRunner:
             self.execution_plan = None
             print(f"[AEGIS RUNNER] Nenhum plano_execucao.json encontrado. Operando em modo legado (append de steps).")
 
+        # Mapa step_id -> flaky derivado do plano de execução (default False se ausente)
+        self.flaky_step_ids = {s['step_id']: s.get('flaky', False) for s in self.execution_plan['steps']} if self.execution_plan else {}
+        # Tentativa atual da linha em execução para passos flaky. Valor default de
+        # segurança; resetado por linha dentro do loop de run() por outra tarefa.
+        self.current_row_flaky_attempt = 1
+
         print("\n" + "=" * 80)
         print("🛡️ AEGIS RUNNER LIBRARY: EXECUTANDO LOOP TRANSACIONAL EM LOTE")
         print("=" * 80)
@@ -1465,229 +1656,276 @@ class TransactionRunner:
             page = None
             
             for idx, row in enumerate(dataset):
-                # Cria uma nova página para cada transação para garantir isolamento total e evitar
-                # que erros/diálogos abertos/quedas de página afetem transações subsequentes.
-                if page:
-                    try:
-                        page.close()
-                    except:
-                        pass
-                
-                try:
-                    page = context.new_page()
-                    # Dispensa automaticamente todos os diálogos JavaScript (alert, confirm, prompt)
-                    page.on("dialog", lambda d: d.dismiss())
-                except Exception as page_err:
-                    print(f"[AEGIS RUNNER] Erro crítico ao instanciar nova página: {page_err}. Tentando recuperar context...")
-                    try:
-                        context = browser.new_context()
-                        page = context.new_page()
-                        page.on("dialog", lambda d: d.dismiss())
-                    except:
-                        continue
-                
                 row_id = row.get("id", str(idx + 1))
-                self.current_row_id = row_id
-                self.step_counter = 0
-                self.page = page  # Store reference for _log_step screenshot fallback
-                # Inicializa steps_history com PENDING para cada step do plano, ou vazio se não houver plano
-                if self.execution_plan:
-                    self.steps_history = []
-                    for step in self.execution_plan["steps"]:
-                        self.steps_history.append({
-                            "step_id": step["step_id"],
-                            "type": step["type"],
-                            "selector": step.get("selector", ""),
-                            "desc": step.get("description", ""),
-                            "status": "PENDING",
-                            "error": "",
-                            "usedHealing": False,
-                            "screenshot": None,
-                            "row_id": row_id,
-                            "timestamp": None
-                        })
-                else:
-                    self.steps_history = []  # Reset por transação para não acumular passos de transações anteriores
-                scenario = row.get("aegis_scenario", "default")
-                expected = row.get("expected_result", "SUCCESS").upper()
-                expected_token = row.get("expected_error_token", "")
-                
-                # Se a URL não foi fornecida por argumento, tenta usar a URL configurada na inicialização, ou do project.json
-                target_url = url or self.initial_url
-                if not target_url:
-                    # Tenta ler do project.json se existir
-                    project_json = os.path.join(self.project_dir, "project.json")
-                    if os.path.exists(project_json):
+                # Reinicia o contador de tentativas flaky no início de cada linha do
+                # dataset. O laço abaixo permite reiniciar a transação COMPLETA da
+                # linha (página/contexto novo + histórico de steps do zero) até 3
+                # vezes quando um passo flaky falha em modo strict; a 4ª tentativa
+                # roda sem restart posterior (self-healing liberado internamente
+                # pelos métodos resilientes).
+                self.current_row_flaky_attempt = 1
+                while self.current_row_flaky_attempt <= 4:
+                    # Cria uma nova página para cada transação/tentativa para garantir isolamento
+                    # total e evitar que erros/diálogos abertos/quedas de página afetem
+                    # transações subsequentes.
+                    if page:
                         try:
-                            with open(project_json, "r", encoding="utf-8") as f:
-                                meta = json.load(f)
-                                target_url = meta.get("url")
+                            page.close()
                         except:
                             pass
-                
-                if not target_url:
-                    target_url = "http://localhost:5173/?e2e=true" # Fallback local
-                
-                print(f"\n[🚀 TRANSAÇÃO {row_id}/{len(dataset)}] Cenário: '{scenario}' | Expectativa: '{expected}'")
-                print(f"[AEGIS_TRANSACTION] START | {row_id} | {scenario}")
-                sys.stdout.flush()
-                start_time = time.time()
-                
-                # Executa a automação registrada
-                try:
-                    if scenario not in self.scenarios:
-                        raise ValueError(f"Cenário '{scenario}' não foi registrado no runner.")
-                    
-                    try:
-                        page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
-                    except Exception as goto_err:
-                        print(f"[AEGIS WARNING] Limite de tempo de carregamento da página excedido no runner: {goto_err}. Prosseguindo com execução...")
-                    
-                    # Chama o callback do robô de negócio
-                    import inspect
-                    sig = inspect.signature(self.scenarios[scenario])
-                    if len(sig.parameters) >= 3:
-                        self.scenarios[scenario](page, row, self)
-                    else:
-                        self.scenarios[scenario](page, row)
-                    
-                    # Aguarda 1.5s após a conclusão para certificar estabilidade
-                    time.sleep(1.5)
-                    duration = round(time.time() - start_time, 2)
-                    
-                    if expected == "BUSINESS_BLOCKED":
-                        # Deu sucesso, mas a regra esperava erro de negócio!
-                        print(f"[🚨 ALERTA] Concluído com sucesso, mas esperava bloqueio de negócio!")
-                        reports.append({
-                            "id": row_id,
-                            "aegis_scenario": scenario,
-                            "status": "CRITICAL_UNEXPECTED_SUCCESS",
-                            "error_message": "O portal permitiu concluir o fluxo de forma inesperada.",
-                            "failed_field": "None",
-                            "extracted_value": "None",
-                            "duration_seconds": duration
-                        })
-                        print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
-                        sys.stdout.flush()
-                    else:
-                        # Sucesso
-                        extracted_val = "EMITTED-OK"
-                        print(f"[✓ SUCESSO] Transação {row_id} executada com sucesso!")
-                        
-                        # Captura screenshot da última tela do robô
-                        screenshot_path = os.path.join(self.output_dir, "screenshots", "screenshot_script.png")
-                        try:
-                            page.screenshot(path=screenshot_path)
-                            print(f"[AEGIS RUNNER] Screenshot da última tela do robô gravado em: {screenshot_path}")
-                        except Exception as e:
-                            print(f"[WARNING] Não foi possível capturar o screenshot da última tela do robô: {e}")
 
-                        reports.append({
-                            "id": row_id,
-                            "aegis_scenario": scenario,
-                            "status": "SUCCESS",
-                            "error_message": "None",
-                            "failed_field": "None",
-                            "extracted_value": extracted_val,
-                            "duration_seconds": duration
-                        })
-                        print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
-                        sys.stdout.flush()
-                        
-                except Exception as e:
-                    self._mark_remaining_stopped()
-                    duration = round(time.time() - start_time, 2)
-                    
-                    # Verifica se há mensagem de erro de negócio visível na tela
-                    error_text = ""
-                    is_business_error = False
                     try:
-                        error_locator = page.locator(self.error_message_selector)
-                        if error_locator.is_visible(timeout=1500):
-                            is_business_error = True
-                            error_text = error_locator.inner_text().strip()
-                    except:
-                        pass
-                    
-                    if expected == "BUSINESS_BLOCKED" and is_business_error:
-                        if expected_token.lower() in error_text.lower():
-                            print(f"[✓ BLOQUEIO ESPERADO] Transação {row_id} bloqueada por regra de negócio: '{error_text}'")
-                            reports.append({
-                                "id": row_id,
-                                "aegis_scenario": scenario,
-                                "status": "SUCCESS_BLOCKED",
-                                "error_message": f"Bloqueio Validado: {error_text}",
-                                "failed_field": "None",
-                                "extracted_value": "None",
-                                "duration_seconds": duration
+                        page = context.new_page()
+                        # Dispensa automaticamente todos os diálogos JavaScript (alert, confirm, prompt)
+                        page.on("dialog", lambda d: d.dismiss())
+                    except Exception as page_err:
+                        print(f"[AEGIS RUNNER] Erro crítico ao instanciar nova página: {page_err}. Tentando recuperar context...")
+                        try:
+                            context = browser.new_context()
+                            page = context.new_page()
+                            page.on("dialog", lambda d: d.dismiss())
+                        except:
+                            break
+
+                    self.current_row_id = row_id
+                    self.step_counter = 0
+                    self.page = page  # Store reference for _log_step screenshot fallback
+                    # Inicializa steps_history com PENDING para cada step do plano, ou vazio se não houver plano
+                    if self.execution_plan:
+                        self.steps_history = []
+                        for step in self.execution_plan["steps"]:
+                            self.steps_history.append({
+                                "step_id": step["step_id"],
+                                "type": step["type"],
+                                "selector": step.get("selector", ""),
+                                "desc": step.get("description", ""),
+                                "status": "PENDING",
+                                "error": "",
+                                "usedHealing": False,
+                                "screenshot": None,
+                                "row_id": row_id,
+                                "timestamp": None
                             })
-                            print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
-                            sys.stdout.flush()
+                    else:
+                        self.steps_history = []  # Reset por transação para não acumular passos de transações anteriores
+                    scenario = row.get("aegis_scenario", "default")
+                    expected = row.get("expected_result", "SUCCESS").upper()
+                    expected_token = row.get("expected_error_token", "")
+
+                    # Se a URL não foi fornecida por argumento, tenta usar a URL configurada na inicialização, ou do project.json
+                    target_url = url or self.initial_url
+                    if not target_url:
+                        # Tenta ler do project.json se existir
+                        project_json = os.path.join(self.project_dir, "project.json")
+                        if os.path.exists(project_json):
+                            try:
+                                with open(project_json, "r", encoding="utf-8") as f:
+                                    meta = json.load(f)
+                                    target_url = meta.get("url")
+                            except:
+                                pass
+
+                    if not target_url:
+                        target_url = "http://localhost:5173/?e2e=true" # Fallback local
+
+                    print(f"\n[🚀 TRANSAÇÃO {row_id}/{len(dataset)}] Cenário: '{scenario}' | Expectativa: '{expected}'")
+                    print(f"[AEGIS_TRANSACTION] START | {row_id} | {scenario}")
+                    sys.stdout.flush()
+                    start_time = time.time()
+
+                    # Executa a automação registrada
+                    try:
+                        if scenario not in self.scenarios:
+                            raise ValueError(f"Cenário '{scenario}' não foi registrado no runner.")
+
+                        try:
+                            page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
+                        except Exception as goto_err:
+                            print(f"[AEGIS WARNING] Limite de tempo de carregamento da página excedido no runner: {goto_err}. Prosseguindo com execução...")
+
+                        # Chama o callback do robô de negócio
+                        import inspect
+                        sig = inspect.signature(self.scenarios[scenario])
+                        if len(sig.parameters) >= 3:
+                            self.scenarios[scenario](page, row, self)
                         else:
-                            print(f"[❌ FALSO POSITIVO] Bloqueado com erro incorreto. Esperava '{expected_token}', obteve '{error_text}'")
+                            self.scenarios[scenario](page, row)
+
+                        # Aguarda 1.5s após a conclusão para certificar estabilidade
+                        time.sleep(1.5)
+                        duration = round(time.time() - start_time, 2)
+
+                        if expected == "BUSINESS_BLOCKED":
+                            # Deu sucesso, mas a regra esperava erro de negócio!
+                            print(f"[🚨 ALERTA] Concluído com sucesso, mas esperava bloqueio de negócio!")
                             reports.append({
                                 "id": row_id,
                                 "aegis_scenario": scenario,
-                                "status": "FAILED_WRONG_BUSINESS_ERROR",
-                                "error_message": f"Erro de negócio incorreto. Tela: '{error_text}'",
+                                "status": "CRITICAL_UNEXPECTED_SUCCESS",
+                                "error_message": "O portal permitiu concluir o fluxo de forma inesperada.",
                                 "failed_field": "None",
                                 "extracted_value": "None",
                                 "duration_seconds": duration
                             })
                             print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
                             sys.stdout.flush()
-                    else:
-                        # Erro sistêmico
-                        # Tenta extrair seletor que causou timeout
-                        failed_field = "Unknown"
-                        if "waiting for locator" in str(e):
-                            match = re.search(r"waiting for locator\(['\"]([^'\"]+)['\"]\)", str(e))
-                            if match:
-                                failed_field = match.group(1)
-                        
-                        # Diagnóstico Inteligente via IA
-                        diagnose_info = ""
-                        if self.cognitive.is_active():
+                        else:
+                            # Sucesso
+                            extracted_val = "EMITTED-OK"
+                            print(f"[✓ SUCESSO] Transação {row_id} executada com sucesso!")
+
+                            # Captura screenshot da última tela do robô
+                            screenshot_path = os.path.join(self.output_dir, "screenshots", "screenshot_script.png")
                             try:
-                                print(f"[AEGIS RUNNER] Acionando diagnóstico de falha via IA...")
-                                diag = self.cognitive.diagnose_failure(page, str(e), steps_history=self.steps_history)
-                                if diag and isinstance(diag, dict):
-                                    category = diag.get("category", "UNKNOWN")
-                                    cause = diag.get("root_cause_summary", "")
-                                    fix = diag.get("actionable_fix", "")
-                                    diagnose_info = f" | IA DIAGNOSE [{category}]: {cause} (Recomendação: {fix})"
-                                    print(f"[AEGIS RUNNER] Diagnóstico IA concluído: {diagnose_info}")
-                            except Exception as diag_err:
-                                print(f"[AEGIS RUNNER] Falha ao executar diagnóstico de IA: {diag_err}")
-                        
-                        # Tira screenshot do erro
-                        screenshot_path = os.path.join(self.output_dir, "screenshots", f"screenshot_erro_transacao_{row_id}.png")
-                        try:
-                            page.screenshot(path=screenshot_path)
-                            print(f"[❌ FALHA] Transação {row_id} quebrou por erro sistêmico. Screenshot salvo em: {screenshot_path}")
-                        except:
-                            pass
-                            
+                                page.screenshot(path=screenshot_path)
+                                print(f"[AEGIS RUNNER] Screenshot da última tela do robô gravado em: {screenshot_path}")
+                            except Exception as e:
+                                print(f"[WARNING] Não foi possível capturar o screenshot da última tela do robô: {e}")
+
+                            reports.append({
+                                "id": row_id,
+                                "aegis_scenario": scenario,
+                                "status": "SUCCESS",
+                                "error_message": "None",
+                                "failed_field": "None",
+                                "extracted_value": extracted_val,
+                                "duration_seconds": duration
+                            })
+                            print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
+                            sys.stdout.flush()
+
+                        # Transação da linha concluída (com ou sem bloqueio de negócio
+                        # esperado) sem levantar exceção: encerra o laço de restart.
+                        break
+
+                    except FlakyStepFailure as flaky_err:
+                        # Um passo marcado como flaky falhou em modo strict dentro das
+                        # primeiras 3 tentativas da linha. Reinicia a transação completa
+                        # da linha (nova página/contexto + histórico do zero) em vez de
+                        # registrar falha definitiva.
+                        if self.current_row_flaky_attempt < 4:
+                            print(f"[AEGIS RUNNER] [FLAKY RETRY] Passo '{flaky_err.step_id}' falhou na tentativa {self.current_row_flaky_attempt} da linha {row_id}. Reiniciando transação da linha...")
+                            self.current_row_flaky_attempt += 1
+                            continue
+                        # Defensivo/inalcançável por design: a lógica dos métodos
+                        # resilientes garante que FlakyStepFailure só é levantada quando
+                        # current_row_flaky_attempt <= 3 — na 4ª tentativa o passo flaky
+                        # cai no self-healing em vez de relançar essa exceção. Mantido
+                        # como rede de segurança para registrar a falha definitiva da
+                        # linha exatamente como o bloco de exceção genérico abaixo faria.
+                        e = flaky_err
+                        self._mark_remaining_stopped()
+                        duration = round(time.time() - start_time, 2)
+
+                        failed_field = flaky_err.selector or "Unknown"
                         reports.append({
                             "id": row_id,
                             "aegis_scenario": scenario,
                             "status": "SYSTEM_FAILED",
-                            "error_message": f"{str(e).replace('\n', ' ')} {diagnose_info}".strip(),
+                            "error_message": str(e).replace('\n', ' ').strip(),
                             "failed_field": failed_field,
                             "extracted_value": "None",
                             "duration_seconds": duration
                         })
-                        
-                        # Registra o passo falho no histórico se o último passo já não for uma falha
-                        has_failed_step = len(self.steps_history) > 0 and self.steps_history[-1]["status"] == "FAILED"
-                        if not has_failed_step:
-                            err_desc = f"Falha na execução: {cause}" if 'cause' in locals() and cause else f"Falha na execução: {str(e)}"
-                            inferred_action = "click" if "click" in str(e).lower() else ("fill" if "fill" in str(e).lower() or "type" in str(e).lower() else "action")
-                            self._log_step(step_id=None, action=inferred_action, selector=failed_field, target_description=err_desc, status="FAILED", error_msg=f"{str(e).replace('\n', ' ')} {diagnose_info}".strip())
-                            
                         print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
                         sys.stdout.flush()
-            
+                        break
+
+                    except Exception as e:
+                        self._mark_remaining_stopped()
+                        duration = round(time.time() - start_time, 2)
+
+                        # Verifica se há mensagem de erro de negócio visível na tela
+                        error_text = ""
+                        is_business_error = False
+                        try:
+                            error_locator = page.locator(self.error_message_selector)
+                            if error_locator.is_visible(timeout=1500):
+                                is_business_error = True
+                                error_text = error_locator.inner_text().strip()
+                        except:
+                            pass
+
+                        if expected == "BUSINESS_BLOCKED" and is_business_error:
+                            if expected_token.lower() in error_text.lower():
+                                print(f"[✓ BLOQUEIO ESPERADO] Transação {row_id} bloqueada por regra de negócio: '{error_text}'")
+                                reports.append({
+                                    "id": row_id,
+                                    "aegis_scenario": scenario,
+                                    "status": "SUCCESS_BLOCKED",
+                                    "error_message": f"Bloqueio Validado: {error_text}",
+                                    "failed_field": "None",
+                                    "extracted_value": "None",
+                                    "duration_seconds": duration
+                                })
+                                print(f"[AEGIS_TRANSACTION] SUCCESS | {row_id}")
+                                sys.stdout.flush()
+                            else:
+                                print(f"[❌ FALSO POSITIVO] Bloqueado com erro incorreto. Esperava '{expected_token}', obteve '{error_text}'")
+                                reports.append({
+                                    "id": row_id,
+                                    "aegis_scenario": scenario,
+                                    "status": "FAILED_WRONG_BUSINESS_ERROR",
+                                    "error_message": f"Erro de negócio incorreto. Tela: '{error_text}'",
+                                    "failed_field": "None",
+                                    "extracted_value": "None",
+                                    "duration_seconds": duration
+                                })
+                                print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
+                                sys.stdout.flush()
+                        else:
+                            # Erro sistêmico
+                            # Tenta extrair seletor que causou timeout
+                            failed_field = "Unknown"
+                            if "waiting for locator" in str(e):
+                                match = re.search(r"waiting for locator\(['\"]([^'\"]+)['\"]\)", str(e))
+                                if match:
+                                    failed_field = match.group(1)
+
+                            # Diagnóstico Inteligente via IA
+                            diagnose_info = ""
+                            if self.cognitive.is_active():
+                                try:
+                                    print(f"[AEGIS RUNNER] Acionando diagnóstico de falha via IA...")
+                                    diag = self.cognitive.diagnose_failure(page, str(e), steps_history=self.steps_history)
+                                    if diag and isinstance(diag, dict):
+                                        category = diag.get("category", "UNKNOWN")
+                                        cause = diag.get("root_cause_summary", "")
+                                        fix = diag.get("actionable_fix", "")
+                                        diagnose_info = f" | IA DIAGNOSE [{category}]: {cause} (Recomendação: {fix})"
+                                        print(f"[AEGIS RUNNER] Diagnóstico IA concluído: {diagnose_info}")
+                                except Exception as diag_err:
+                                    print(f"[AEGIS RUNNER] Falha ao executar diagnóstico de IA: {diag_err}")
+
+                            # Tira screenshot do erro
+                            screenshot_path = os.path.join(self.output_dir, "screenshots", f"screenshot_erro_transacao_{row_id}.png")
+                            try:
+                                page.screenshot(path=screenshot_path)
+                                print(f"[❌ FALHA] Transação {row_id} quebrou por erro sistêmico. Screenshot salvo em: {screenshot_path}")
+                            except:
+                                pass
+
+                            reports.append({
+                                "id": row_id,
+                                "aegis_scenario": scenario,
+                                "status": "SYSTEM_FAILED",
+                                "error_message": f"{str(e).replace('\n', ' ')} {diagnose_info}".strip(),
+                                "failed_field": failed_field,
+                                "extracted_value": "None",
+                                "duration_seconds": duration
+                            })
+
+                            # Registra o passo falho no histórico se o último passo já não for uma falha
+                            has_failed_step = len(self.steps_history) > 0 and self.steps_history[-1]["status"] == "FAILED"
+                            if not has_failed_step:
+                                err_desc = f"Falha na execução: {cause}" if 'cause' in locals() and cause else f"Falha na execução: {str(e)}"
+                                inferred_action = "click" if "click" in str(e).lower() else ("fill" if "fill" in str(e).lower() or "type" in str(e).lower() else "action")
+                                self._log_step(step_id=None, action=inferred_action, selector=failed_field, target_description=err_desc, status="FAILED", error_msg=f"{str(e).replace('\n', ' ')} {diagnose_info}".strip())
+
+                            print(f"[AEGIS_TRANSACTION] FAILED | {row_id}")
+                            sys.stdout.flush()
+                        break
+
             # Fecha navegador e grava relatório
             self._write_report(reports)
             
