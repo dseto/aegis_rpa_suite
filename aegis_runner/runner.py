@@ -54,6 +54,11 @@ class TransactionRunner:
         # Inicializado vazio aqui para permitir chamadas diretas aos métodos
         # resilientes fora do loop de run() (ex.: testes unitários).
         self.flaky_step_ids = {}
+        # Mapa step_id -> fallback_selectors (lista) derivado do plano de execução
+        # (populado em run()). M5: cadeia de fallback determinístico gravado na
+        # captura. Inicializado vazio para permitir chamadas diretas aos métodos
+        # resilientes fora do loop de run() (ex.: testes unitários).
+        self.fallback_selectors_by_step = {}
         # Tentativa atual da linha em execução para passos flaky. Valor default de
         # segurança; resetado por linha dentro do loop de run() por outra tarefa.
         self.current_row_flaky_attempt = 1
@@ -269,15 +274,24 @@ class TransactionRunner:
                     except Exception:
                         all_corrs = []
 
-                    # Status que indicam que já existe correção conhecida para este par
-                    known_statuses = ("needs_review", "pending", "applied", "resolved", "failed_attempt")
+                    # Status ATIVOS que indicam correção em andamento para este par
+                    # (action, failed_selector). 'resolved'/'applied'/'failed_attempt'
+                    # são decisões PASSADAS — se o mesmo par volta a precisar de healing
+                    # depois de já ter sido dado como resolvido/aplicado, isso é uma
+                    # REGRESSÃO nova e deve gerar entrada nova, não ser suprimida.
+                    # Suprimir também esses status fazia qualquer seletor já resolvido
+                    # uma vez nunca mais reaparecer no painel de needs_review, mesmo
+                    # quebrando de novo em execuções futuras (bug real reproduzido:
+                    # st_024/st_025 pararam de gerar needs_review após serem marcados
+                    # 'resolved' uma vez, mesmo curando via IA de novo em runs depois).
+                    active_statuses = ("needs_review", "pending")
 
                     existing_needs_review = None
                     has_other_known = False
                     for corr in all_corrs:
                         ca = (corr.get("action") or "").strip().lower()
                         cs = (corr.get("failed_selector") or "").strip()
-                        if ca == action_key and cs == selector_key and corr.get("status") in known_statuses:
+                        if ca == action_key and cs == selector_key and corr.get("status") in active_statuses:
                             if corr.get("status") == "needs_review":
                                 existing_needs_review = corr
                             else:
@@ -313,6 +327,123 @@ class TransactionRunner:
                     json.dump(all_corrs, f, indent=4, ensure_ascii=False)
         except Exception as sensor_err:
             print(f"[AEGIS RUNNER] [WARNING] Sensor de healing falhou ao registrar correcoes_acumuladas.json: {sensor_err}")
+
+    _CLICK_EFFECT_EXCLUDED_SELECTORS = {"#btn-confirm-payment-progress", "#btn-next-step"}
+
+    def _click_effect_sensor_enabled(self) -> bool:
+        """Flag mestre M2: AEGIS_CLICK_EFFECT_SENSOR (default true). false desativa
+        completamente o sensor CLICK_NO_EFFECT, sem nenhum page.evaluate() extra."""
+        return os.environ.get("AEGIS_CLICK_EFFECT_SENSOR", "true").lower() in ("true", "1", "yes")
+
+    def _click_effect_register_enabled(self) -> bool:
+        """Fase piloto log-only do plano M2: AEGIS_CLICK_EFFECT_REGISTER (default
+        false). Só quando true a detecção grava needs_review em
+        correcoes_acumuladas.json; caso contrário apenas loga CLICK_NO_EFFECT."""
+        return os.environ.get("AEGIS_CLICK_EFFECT_REGISTER", "false").lower() in ("true", "1", "yes")
+
+    def _capture_click_effect_snapshot(self, page, selector=None):
+        """Snapshot barato do estado da página em uma única chamada page.evaluate(),
+        usado pelo sensor CLICK_NO_EFFECT (M2). Sinais de efeito: url, contagem de
+        nós DOM, contagem de overlays, e fingerprint de classe do elemento clicado +
+        seus irmãos diretos (4º sinal — ver abaixo). document.activeElement NÃO é
+        sinal de efeito (o próprio clique move o foco no engine Chromium/MS Edge,
+        mascarando justamente o caso-alvo de clique force=True sob overlay). Falha
+        do próprio evaluate (ex.: página navegando) retorna None - tratado como
+        "efeito detectado" pelo chamador, nunca como erro.
+
+        4º sinal (siblingClassFingerprint): cobre o caso de troca de estado
+        "só-CSS" — ex. abas React/Tailwind que só alternam className entre
+        elementos JÁ existentes (sem adicionar/remover nós, sem navegação, sem
+        overlay). Achado real no piloto do site novo (.specs/relatorio-piloto-site-novo.md):
+        clique em aba de região (LATAM/EMEA/APAC) funcionava de verdade (troca de
+        conteúdo confirmada por screenshot) mas os 3 sinais antigos não detectavam
+        nada, gerando falso positivo. Concatena className + aria-selected/
+        aria-current/aria-pressed do elemento clicado E de seus irmãos diretos
+        (o grupo de abas/toggle inteiro) — não depende de o site usar atributos
+        ARIA (o Fimm não usa), só de a classe do irmão ativo mudar.
+
+        A resolução do elemento usa `page.locator(selector).evaluate(...)`, NÃO
+        `document.querySelector(sel)` dentro do `page.evaluate` — seletores como
+        `button:has-text('APAC')` ou `parent >> child` são sintaxe exclusiva do
+        Playwright, inválida para `querySelector` nativo do browser (lança
+        SyntaxError, capturado pelo try/catch, fingerprint sempre vazio nos dois
+        lados = sinal nunca dispara). `page.locator()` resolve essa sintaxe antes
+        de rodar o JS no elemento encontrado. Bug real reproduzido: com
+        `querySelector`, o 4º sinal nunca detectava a troca de aba real do site
+        piloto (fingerprint '' == '' sempre)."""
+        base = {}
+        try:
+            base = page.evaluate(
+                "() => ({"
+                "url: location.href,"
+                "domSize: document.getElementsByTagName('*').length,"
+                "overlays: document.querySelectorAll('.cdk-overlay-container *, [role=dialog], .modal.show').length"
+                "})"
+            )
+        except Exception:
+            return None
+
+        if not isinstance(base, dict):
+            # page.evaluate() retornou algo que não é o snapshot esperado (ex.:
+            # falsy simples usado por outro ponto do código/teste) — trata como
+            # captura indisponível, igual a uma exceção, nunca quebra o passo.
+            return None
+
+        fingerprint = ""
+        if selector:
+            try:
+                fingerprint = page.locator(selector).first.evaluate(
+                    "(el) => {"
+                    "  const parent = el.parentElement;"
+                    "  const scope = parent ? Array.from(parent.children) : [el];"
+                    "  return scope.map(c => (c.className || '') + '|' + (c.getAttribute('aria-selected')||'') + (c.getAttribute('aria-current')||'') + (c.getAttribute('aria-pressed')||'')).join(';;');"
+                    "}"
+                )
+            except Exception:
+                fingerprint = ""
+        base["siblingClassFingerprint"] = fingerprint
+        return base
+
+    def _click_effect_signals_changed(self, before, after) -> bool:
+        """Compara dois snapshots do sensor CLICK_NO_EFFECT. Tolerância de +/-2 na
+        contagem de nós DOM. Qualquer entrada ausente/inválida é tratada como
+        'efeito detectado' (nunca bloqueia nem gera falso negativo por erro)."""
+        if not before or not after:
+            return True
+        try:
+            if before.get("url") != after.get("url"):
+                return True
+            if abs(int(after.get("domSize", 0)) - int(before.get("domSize", 0))) > 2:
+                return True
+            if int(after.get("overlays", 0)) != int(before.get("overlays", 0)):
+                return True
+            if (before.get("siblingClassFingerprint") or "") != (after.get("siblingClassFingerprint") or ""):
+                return True
+            return False
+        except Exception:
+            return True
+
+    def _detect_click_no_effect(self, page, before_snapshot, selector, step_id):
+        """Polling early-exit pós-clique (M2): recaptura o snapshot em ~100/300/800ms
+        (o tempo entre checagens, não o total acumulado - sai assim que algum sinal
+        mudar). Se ao final nenhum sinal mudou, loga CLICK_NO_EFFECT e, apenas com
+        AEGIS_CLICK_EFFECT_REGISTER=true (fase log-only por default), registra
+        needs_review via _register_healing_for_review. Nunca muda o resultado do
+        passo - é chamado só depois do log SUCCESS ser decidido pelo chamador."""
+        if before_snapshot is None:
+            return
+        try:
+            for wait_ms in (100, 300, 800):
+                page.wait_for_timeout(wait_ms)
+                after_snapshot = self._capture_click_effect_snapshot(page, selector)
+                if self._click_effect_signals_changed(before_snapshot, after_snapshot):
+                    return
+            print(f"[AEGIS RUNNER] ⚠️ CLICK_NO_EFFECT | {step_id} | {selector}")
+            if self._click_effect_register_enabled():
+                self._register_healing_for_review(step_id, selector, "click", healing_method="click_no_effect")
+        except Exception:
+            # Falha no próprio sensor nunca deve impactar a execução do passo.
+            pass
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
@@ -359,6 +490,19 @@ class TransactionRunner:
         # diante"). Escopo restrito a selectors literais conhecidos.
         self._wait_for_known_disabled_button(page, selector)
 
+        # Sensor M2 (CLICK_NO_EFFECT): snapshot pré-clique, só quando aplicável.
+        # Exclusões: validate_navigation=True (já tem verificação própria de
+        # navegação) e seletores das famílias conhecidas de
+        # wizard/disabled-button (_wait_for_known_disabled_button /
+        # _wait_if_wizard_transition_button), que já têm tratamento dedicado.
+        click_effect_before_snapshot = None
+        if (
+            self._click_effect_sensor_enabled()
+            and not validate_navigation
+            and selector not in self._CLICK_EFFECT_EXCLUDED_SELECTORS
+        ):
+            click_effect_before_snapshot = self._capture_click_effect_snapshot(page, selector)
+
         # 2. Loop de retentativas com Auto-Healing de UI
         last_exception = None
         for attempt in range(1, 3):
@@ -381,6 +525,8 @@ class TransactionRunner:
                     page.locator(selector).click(timeout=timeout)
                     self._wait_if_wizard_transition_button(page, selector)
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                    if click_effect_before_snapshot is not None:
+                        self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
                     return True
 
                 # Heurística Estática (Separar âncoras locais de links externos reais)
@@ -449,6 +595,8 @@ class TransactionRunner:
                 if clicked:
                     self._wait_if_wizard_transition_button(page, selector)
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                    if click_effect_before_snapshot is not None:
+                        self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
                     return True
                 else:
                     raise RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM.")
@@ -617,6 +765,28 @@ class TransactionRunner:
                     return True
             except Exception:
                 pass
+
+        # Nível 2.9 (M5): Fallback de seletores determinísticos gravados na captura.
+        # Diferente do self-healing cognitivo (Nível 3) e do fallback por coordenadas
+        # (Nível 4), estes seletores são estratégias alternativas DISTINTAS para o
+        # MESMO elemento, validadas por unicidade no DOM no momento da gravação —
+        # determinístico, não "adivinhação". Por isso roda mesmo sob strict=True
+        # (decisão de design M5, ver .specs/plans/melhorias-precisao-bots-gerados.md
+        # seção M5): não interfere no Padrão R porque, se o elemento genuinamente não
+        # existe no DOM (flake de timing), os fallbacks para o mesmo elemento também
+        # falham e o restart de linha acontece normalmente.
+        fallback_selectors = self.fallback_selectors_by_step.get(step_id, []) if hasattr(self, "fallback_selectors_by_step") else []
+        if fallback_selectors:
+            for fb_selector in fallback_selectors:
+                try:
+                    print(f"[AEGIS RUNNER] [FALLBACK SELECTOR] Tentando seletor alternativo gravado: '{fb_selector}'...")
+                    page.locator(fb_selector).first.click(timeout=2000)
+                    # _log_step já registra needs_review via _register_healing_for_review
+                    # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
+                    self._log_step(step_id=step_id, action="click", selector=fb_selector, target_description=target_description, status="HEALED", healing_method="fallback_selector")
+                    return True
+                except Exception:
+                    continue
 
         # Nível 3/4: Self-Healing Cognitivo e Fallback por Coordenadas — pulados em modo
         # strict, pois ambos "adivinham" um alvo (via visão de IA ou coordenada histórica
@@ -1372,6 +1542,27 @@ class TransactionRunner:
             except Exception:
                 pass
 
+            # Nível 2.9 (M5): Fallback de seletores determinísticos gravados na captura
+            # (mesma semântica de click_resilient/_handle_click_failure — ver comentário
+            # lá). fill_resilient não tem parâmetro strict, então este nível roda sempre
+            # que houver fallbacks disponíveis para o passo, antes da checagem flaky.
+            fallback_selectors = self.fallback_selectors_by_step.get(step_id, []) if hasattr(self, "fallback_selectors_by_step") else []
+            if fallback_selectors:
+                fallback_resolved = False
+                for fb_selector in fallback_selectors:
+                    try:
+                        print(f"[AEGIS RUNNER] [FALLBACK SELECTOR] Tentando preencher seletor alternativo gravado: '{fb_selector}'...")
+                        page.locator(fb_selector).first.fill(text_val, timeout=2000)
+                        # _log_step já registra needs_review via _register_healing_for_review
+                        # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
+                        self._log_step(step_id=step_id, action="fill", selector=fb_selector, target_description=target_description, status="HEALED", healing_method="fallback_selector")
+                        fallback_resolved = True
+                        break
+                    except Exception:
+                        continue
+                if fallback_resolved:
+                    return True
+
             is_flaky_step = self.flaky_step_ids.get(step_id, False)
             flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
             if (strict or is_flaky_step) and not flaky_healing_unlocked:
@@ -1635,6 +1826,12 @@ class TransactionRunner:
 
         # Mapa step_id -> flaky derivado do plano de execução (default False se ausente)
         self.flaky_step_ids = {s['step_id']: s.get('flaky', False) for s in self.execution_plan['steps']} if self.execution_plan else {}
+        # Mapa step_id -> fallback_selectors (M5): seletores alternativos gravados
+        # na captura (cascata de estratégias distintas, validados por unicidade no
+        # DOM no momento da gravação). Usado como novo nível determinístico na
+        # cadeia de resiliência de click_resilient/fill_resilient, entre a
+        # heurística determinística atual e o fallback cognitivo.
+        self.fallback_selectors_by_step = {s['step_id']: s.get('fallback_selectors', []) for s in self.execution_plan['steps']} if self.execution_plan else {}
         # Tentativa atual da linha em execução para passos flaky. Valor default de
         # segurança; resetado por linha dentro do loop de run() por outra tarefa.
         self.current_row_flaky_attempt = 1
@@ -1726,7 +1923,19 @@ class TransactionRunner:
                                 pass
 
                     if not target_url:
+                        # Achado real (.specs/relatorio-piloto-site-novo.md): sem
+                        # `project.json` (raiz OU pasta do teste) com campo "url",
+                        # esse fallback silencioso apontava o robô pro Portal
+                        # Segura em outro projeto sem nenhum erro visível --
+                        # confundível com "está tudo certo". Agora avisa alto.
                         target_url = "http://localhost:5173/?e2e=true" # Fallback local
+                        print(
+                            f"[AEGIS RUNNER] [WARNING] Nenhuma URL configurada (nem argumento, nem project.json "
+                            f"em '{self.project_dir}' ou na raiz do projeto) — usando fallback hardcoded "
+                            f"'{target_url}'. Confirme se este é o site pretendido; provavelmente falta "
+                            f"o campo \"url\" no project.json do teste."
+                        )
+                        sys.stdout.flush()
 
                     print(f"\n[🚀 TRANSAÇÃO {row_id}/{len(dataset)}] Cenário: '{scenario}' | Expectativa: '{expected}'")
                     print(f"[AEGIS_TRANSACTION] START | {row_id} | {scenario}")

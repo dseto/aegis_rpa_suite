@@ -4371,12 +4371,12 @@
             }
             
             let html = '<div class="table-wrap"><table>';
-            html += '<tr><th style="width:7%">#</th><th style="width:15%">Tipo</th><th style="width:40%">Seletor Físico</th><th style="width:23%">Ação Esperada</th><th style="width:15%">Status</th></tr>';
-            
+            html += '<tr><th style="width:7%">#</th><th style="width:14%">Tipo</th><th style="width:35%">Seletor Físico</th><th style="width:20%">Ação Esperada</th><th style="width:14%">Status</th><th style="width:10%">QA</th></tr>';
+
             filteredSteps.forEach(step => {
                 let statusClass = 'status-step-pending';
                 let statusText = 'Pendente';
-                
+
                 if (step.status === 'RUNNING') {
                     statusClass = 'status-step-running';
                     statusText = '⏳ Executando';
@@ -4396,34 +4396,66 @@
                     statusClass = 'status-step-bypassed';
                     statusText = '⏭ Ignorado';
                 }
-                
+
                 let typeClass = 'type-other';
                 if (step.type === 'click') typeClass = 'type-click';
                 else if (step.type === 'fill') typeClass = 'type-fill';
-                
+
                 const titleAttr = step.error ? `title="${step.error.replace(/"/g, '&quot;')}"` : '';
                 const styleErr = step.error ? 'style="cursor:help; border-bottom: 1px dotted var(--error);"' : '';
-                
+
                 const selectorDisplay = step.selector.length > 40 ? step.selector.substring(0, 37) + '...' : step.selector;
-                
+
                 let screenshotBtn = '';
                 if (step.screenshot) {
                     screenshotBtn = `<button onclick="event.stopPropagation(); showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')" class="btn btn-sm btn-ghost" style="padding: 1px 4px; margin-left: 6px; font-size: 10px;" title="Ver screenshot">📸</button>`;
                 }
-                
+
                 const clickHandler = step.screenshot ? `onclick="showStepScreenshot('${activeHistoryExecutionId}', '${step.screenshot}')"` : '';
                 const pointerStyle = step.screenshot ? 'style="cursor:pointer;"' : '';
-                
+
+                const stepIdForMark = step.step_id !== undefined && step.step_id !== null ? step.step_id : (step.index !== undefined ? step.index : '');
+                const isSynthetic = typeof stepIdForMark === 'string' && stepIdForMark.startsWith('auto_');
+                const markFailedBtn = (stepIdForMark && !isSynthetic)
+                    ? `<button onclick="event.stopPropagation(); markStepFailed('${stepIdForMark}')" class="btn btn-sm btn-ghost" style="padding: 1px 6px; font-size: 10px; color: var(--error);" title="Marcar este passo como falho e descrever o problema (mesmo que o status mostre Sucesso)">🚩 Falho</button>`
+                    : '';
+
                 html += `<tr ${clickHandler} ${pointerStyle} class="proj-grid-card-row">
                     <td><strong>${step.step_id !== undefined && step.step_id !== null ? step.step_id : (step.index !== undefined ? step.index : '-')}</strong></td>
                     <td><span class="type-badge ${typeClass}">${step.type}</span></td>
                     <td style="font-family:monospace;font-size:9px;" title="${step.selector}">${selectorDisplay}</td>
                     <td ${titleAttr} ${styleErr} style="font-size:10px;">${step.desc}${screenshotBtn}</td>
                     <td><span class="status-badge-step ${statusClass}" style="font-size:9px;padding:1px 4px;">${statusText}</span></td>
+                    <td style="text-align:center;">${markFailedBtn}</td>
                 </tr>`;
             });
             html += '</table></div>';
             div.innerHTML = html;
+        }
+
+        window.markStepFailed = function(stepId) {
+            if (!activeProjectSlug || !activeTestSlug) {
+                alert('Nenhum projeto/cenário ativo.');
+                return;
+            }
+            const description = prompt(`Descreva o problema real do passo ${stepId} (o Aegis marcou este passo como bem-sucedido, mas o QA identificou que não funcionou de fato):`);
+            if (!description || !description.trim()) {
+                return;
+            }
+            fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/tests/${encodeURIComponent(activeTestSlug)}/steps/${encodeURIComponent(stepId)}/mark-failed`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: description.trim() })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Passo ${stepId} marcado como falho. Correção registrada (${data.correction_id}) e pronta para o gerador de código.`);
+                } else {
+                    alert(`Falha ao marcar passo: ${data.message}`);
+                }
+            })
+            .catch(e => alert(`Erro de rede ao marcar passo: ${e}`));
         }
 
         function renderLegacyHistorySteps() {

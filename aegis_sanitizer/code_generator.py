@@ -70,12 +70,15 @@ class CodeGeneratorService:
             'from aegis_runner.runner import TransactionRunner',
         ]
 
+        _error_selector = getattr(self, "error_message_selector", ".toast-error, .alert-danger")
+        _error_selector_escaped = _error_selector.replace('"', '\\"')
+
         canonical_main = [
             'if __name__ == "__main__":',
             '    current_dir = os.path.dirname(os.path.abspath(__file__))',
             '    project_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "code" else current_dir',
             '',
-            '    runner = TransactionRunner(project_dir=project_dir, error_message_selector=".toast-error, .alert-danger")',
+            f'    runner = TransactionRunner(project_dir=project_dir, error_message_selector="{_error_selector_escaped}")',
             '    runner.register_scenario(scenario_name="default", callback=execute_scenario_default)',
             '    runner.run()',
         ]
@@ -113,12 +116,14 @@ class CodeGeneratorService:
     def _strip_internal_step_fields(steps: list) -> list:
         """
         Remove campos internos de bookkeeping do sanitizer (trigger_selector,
-        option_selector) antes de expor os steps do plano pra LLM — esses
-        campos nao sao kwargs validos de select_option_resilient (que so
-        aceita original_coords_trigger/original_coords_option) e a LLM os
+        option_selector, fallback_selectors) antes de expor os steps do plano
+        pra LLM — esses campos nao sao kwargs validos de select_option_resilient
+        (que so aceita original_coords_trigger/original_coords_option) e a LLM os
         confunde com nomes de parametro, gerando TypeError em runtime.
+        fallback_selectors e bookkeeping interno do sanitizer para self-healing
+        e nao deve ser exposto/manipulado pela LLM.
         """
-        internal_fields = ("trigger_selector", "option_selector")
+        internal_fields = ("trigger_selector", "option_selector", "fallback_selectors")
         return [
             {k: v for k, v in step.items() if k not in internal_fields}
             for step in steps
@@ -153,6 +158,20 @@ class CodeGeneratorService:
         dict_path = os.path.join(self.project_dir, "dicionario.json")
         report_path = os.path.join(self.project_dir, "relatorio.md")
         project_json_path = os.path.join(self.project_dir, "project.json")
+
+        # Campo opcional 'error_message_selector' em project.json permite customizar
+        # o seletor de mensagem de erro usado pelo TransactionRunner (default abaixo
+        # é o boilerplate canônico histórico, mantido para projetos sem o campo).
+        self.error_message_selector = ".toast-error, .alert-danger"
+        if os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, "r", encoding="utf-8") as f:
+                    _proj_cfg = json.load(f)
+                _custom_selector = _proj_cfg.get("error_message_selector")
+                if _custom_selector:
+                    self.error_message_selector = _custom_selector
+            except Exception as e:
+                print(f"[WARNING] Falha ao ler 'error_message_selector' de project.json: {e}")
 
         if not os.path.exists(dict_path):
             print(f"[ERRO] Dicionário de dados não encontrado em: {dict_path}")
@@ -342,10 +361,22 @@ Exemplo de chamada de Skill:
                 # (que uma vez "applied" não deve mais poluir o prompt), essas
                 # nunca "saem de moda": sem isso, uma regeneração do zero
                 # perde silenciosamente o wait já validado antes.
+                # EXCETO quando o QA já marcou a entrada como 'resolved' ou
+                # 'applied' no Cockpit (cockpit.py, endpoint de update de
+                # status) — aí é uma decisão humana terminal de que aquele
+                # caso está fechado, e reforçar o invariante mecânico
+                # (validate_required_*_patterns) não precisa da entrada no
+                # prompt/escopo cirúrgico. Sem essa exclusão, bugs já
+                # resolvidos voltavam a ser enviados como "correção
+                # obrigatória" e entravam no escopo de edição (_surgical_correct,
+                # target_step_ids) a cada regeneração futura.
                 pending_corrections = [
                     c for c in all_corrs
-                    if c.get("status") == "pending" or c.get("required_wait") or c.get("required_reopen")
-                    or c.get("required_method")
+                    if c.get("status") not in ("resolved", "applied")
+                    and (
+                        c.get("status") == "pending" or c.get("required_wait")
+                        or c.get("required_reopen") or c.get("required_method")
+                    )
                 ]
             except Exception as e:
                 print(f"[WARNING] Failed to read correcoes_acumuladas.json: {e}")
@@ -677,6 +708,8 @@ Exemplo de chamada de Skill:
 
         # Constrói o Prompt de Compilação para a LLM
         print("[INFO] Montando prompt estruturado para o motor de IA...")
+        _error_selector = getattr(self, "error_message_selector", ".toast-error, .alert-danger")
+        _error_selector_escaped = _error_selector.replace('"', '\\"')
         prompt = f"""
 Você é um Engenheiro de IA especialista em Automação de Processos Robóticos (RPA) de alta resiliência usando Playwright e Python.
 Sua tarefa é gerar o código de automação completo para o arquivo `bot_producao.py` de um robô RPA baseando-se estritamente nas diretrizes de resiliência, no relatório de telemetria gravada, no dicionário de dados e no dataset inicial fornecidos.
@@ -752,7 +785,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         project_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "code" else current_dir
         runner = TransactionRunner(
             project_dir=project_dir,
-            error_message_selector=".toast-error, .alert-danger"
+            error_message_selector="{_error_selector_escaped}"
         )
        runner.register_scenario("default", execute_scenario_default)
        runner.run(headless=False)
@@ -843,6 +876,18 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
     ATENÇÃO: 'page' é OBRIGATÓRIO como primeiro argumento posicional em TODA chamada ao runner.
     ATENÇÃO: O parâmetro correto é 'text_val', NUNCA 'value'.
     ATENÇÃO: O step_id DEVE ser passado como keyword argument.
+
+    ⚠️ **ATENÇÃO — PASSOS COM `"weak_selector": true` (SELETOR DE BAIXA CONFIABILIDADE):**
+    Se um passo do plano acima tiver o campo `"weak_selector": true`, o seletor gravado teve baixa
+    confiança na gravação e é **PROIBIDO** usá-lo sozinho, "cru", sem reforço de ancoragem. Você é
+    **OBRIGADO** a ancorar esse passo com pelo menos UM dos mecanismos abaixo:
+      - Usar `runner.click_chained(...)`/`runner.fill_chained(...)` com `parent={{"selector": "...", "has_text": "..."}}`
+        (ou o texto embutido diretamente no seletor do parent via `:has-text(...)`); OU
+      - Embutir um filtro `:has-text("...")` diretamente no próprio seletor/parent passado a
+        `click_resilient`/`fill_resilient`.
+    Passar apenas `original_coords`/`original_coords_trigger`/`original_coords_option` **NÃO CONTA**
+    como ancoragem — coordenadas são um fallback de self-healing, não uma forma de desambiguar o
+    elemento certo. Passos SEM `weak_selector: true` não precisam desse reforço extra.
 13. **Padrão Select Nativo (`<select>` HTML puro, NÃO customizado):**
     Se um passo do plano de execução tiver `"type": "select_native"`, o elemento é um `<select>` HTML nativo
     (confirmado pela telemetria) — `.fill()` do Playwright **NÃO FUNCIONA** nele (só aceita `<input>`,

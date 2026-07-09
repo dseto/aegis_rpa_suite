@@ -992,6 +992,35 @@ class SanitizerService:
                 "selector": selector,
                 "description": desc
             }
+            # Flag weak_selector: só quando o evento de origem TEM o campo
+            # `confidence` explicitamente E ele é < 70. Gravações antigas
+            # (sem o campo, pré-evaluate_selector_reliability) não recebem
+            # a flag — nunca usar um default aqui, isso quebraria
+            # retrocompatibilidade marcando gravações antigas indevidamente.
+            confidence = ev.get("confidence")
+            if confidence is not None and confidence < 70:
+                step["weak_selector"] = True
+            # Propaga fallback_selectors do evento (gravados pelo recorder como
+            # candidatos alternativos únicos) pro step do plano, aplicando as
+            # mesmas sanitizações do seletor primário: remoção de token
+            # dinâmico em has-text (Padrão Q) e dedup contra o primário e entre
+            # si. Um fallback idêntico ao selector primário não agrega nada
+            # (mesmo alvo) e um fallback dinâmico não sanitizado reintroduziria
+            # o mesmo bug que o Padrão Q resolve no seletor principal.
+            raw_fallbacks = ev.get("fallback_selectors")
+            if raw_fallbacks:
+                seen = {selector}
+                clean_fallbacks = []
+                for fb in raw_fallbacks:
+                    if not fb or not isinstance(fb, str):
+                        continue
+                    fb_clean = sanitize_has_text(fb)
+                    if fb_clean in seen:
+                        continue
+                    seen.add(fb_clean)
+                    clean_fallbacks.append(fb_clean)
+                if clean_fallbacks:
+                    step["fallback_selectors"] = clean_fallbacks
             if ev_type == "click":
                 # Só usado internamente por _dedup_consecutive_clicks (same_widget)
                 # pra distinguir 2 widgets físicos diferentes que colapsam no
@@ -1052,6 +1081,8 @@ class SanitizerService:
                     "selector": s.get("selector", ""),
                     "description": s["description"],
                     **({"flaky": True} if (s["type"], s.get("selector", "")) in old_flaky_keys else {}),
+                    **({"weak_selector": True} if s.get("weak_selector") else {}),
+                    **({"fallback_selectors": s["fallback_selectors"]} if s.get("fallback_selectors") else {}),
                     **({"parent": s["parent"]} if "parent" in s else {}),
                     **({"coords": s["coords"]} if "coords" in s else {}),
                     **({"dropdown_label": s["dropdown_label"]} if "dropdown_label" in s else {}),

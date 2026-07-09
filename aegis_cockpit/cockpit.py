@@ -533,7 +533,21 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 if tr_steps:
                     failed_steps = [s for s in tr_steps if s.get("status") == "FAILED"]
                     if failed_steps:
-                        failed_step = failed_steps[-1]
+                        # Prefere o último passo FAILED com step_id real (st_XXX) sobre
+                        # o diagnóstico sintético de fim-de-transação que o runner
+                        # registra com step_id auto-gerado (padrão "auto_N", ver
+                        # runner.py::_log_step, fallback quando step_id não bate com
+                        # nenhum bloco do plano). Esse "auto_N" é sempre cronologicamente
+                        # o ÚLTIMO FAILED da transação, mas nunca existe como anchor
+                        # "# [PASSO X]" em nenhum bot gerado — usá-lo como step_id da
+                        # correção faz o code_generator._build_scoped_edit_plan nunca
+                        # encontrar o bloco e cair (silenciosamente) no modo full-file,
+                        # reescrevendo o robô inteiro a cada correção.
+                        real_failed_steps = [
+                            s for s in failed_steps
+                            if s.get("step_id") and not str(s.get("step_id")).startswith("auto_")
+                        ]
+                        failed_step = real_failed_steps[-1] if real_failed_steps else failed_steps[-1]
                     else:
                         failed_step = tr_steps[-1]
                 
@@ -573,7 +587,12 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 insights.append({
                     "transaction_id": row_id,
-                    "step_number": failed_step.get("index") if failed_step else None,
+                    # "index" nunca existiu nos registros de historico_passos.json
+                    # (a chave real é "step_id", ex.: "st_059") — com a chave errada
+                    # step_number saia sempre None, e a correção criada a partir daqui
+                    # nunca tinha como ser escopada cirurgicamente pelo code_generator
+                    # (que precisa de um step_id de verdade em target_step_ids).
+                    "step_number": failed_step.get("step_id") if failed_step else None,
                     "action": action,
                     "selector": selector,
                     "description": description,
@@ -1463,6 +1482,14 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                     "timestamp": now_str,
                     "execution_id": execution_id,
                     "step_number": corr.get("step_number"),
+                    # step_id explícito (mesmo valor de step_number, que já é o
+                    # step_id real do passo desde a correção de cockpit.py:576) —
+                    # code_generator._surgical_correct monta target_step_ids a
+                    # partir de "step_id", não de "step_number". Sem essa chave,
+                    # a correção nunca entra no escopo cirúrgico e o code
+                    # generator cai no modo full-file (risco de reescrever passos
+                    # não relacionados à correção pedida).
+                    "step_id": corr.get("step_number"),
                     "failed_selector": sel,
                     "action": act,
                     "root_cause": corr.get("root_cause"),
@@ -1594,6 +1621,82 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': True, 'message': f'Passo {step_id} marcado como flaky={flaky_value}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao atualizar flaky: {e}'}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/steps/' in path and path.endswith('/mark-failed'):
+            # QA marca manualmente um passo como falho, com descrição própria.
+            # Existe porque o runner pode marcar SUCCESS um passo que na prática
+            # não teve o efeito esperado (a IA de diagnóstico só roda quando o
+            # runner detecta um erro técnico; se o passo "funciona" tecnicamente
+            # mas produz o resultado errado, nada aciona correção automática, e
+            # a causa raiz real nunca entra no pipeline de correção cirúrgica —
+            # travando o Ralph Loop num loop sem solução em passos downstream).
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            step_id = urllib.parse.unquote(parts[7])
+
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+
+            description = (body.get('description') or '').strip()
+            if not description:
+                self._json({'success': False, 'message': 'Campo "description" é obrigatório.'}, 400)
+                return
+
+            # Busca seletor/ação do passo no plano (opcional, só para contexto —
+            # a correção funciona mesmo sem, já que o escopo cirúrgico usa step_id).
+            failed_selector = None
+            action = "manual_flag"
+            plan_file = os.path.join(test_dir, "plano_execucao.json")
+            if os.path.exists(plan_file):
+                try:
+                    with open(plan_file, "r", encoding="utf-8") as f:
+                        plan = json.load(f)
+                    for step in plan.get("steps", []) if isinstance(plan, dict) else []:
+                        if str(step.get("step_id")) == str(step_id):
+                            failed_selector = step.get("selector")
+                            action = step.get("type", action)
+                            break
+                except Exception:
+                    pass
+
+            corr_file = os.path.join(test_dir, "correcoes_acumuladas.json")
+            existing_corrections = []
+            if os.path.exists(corr_file):
+                try:
+                    with open(corr_file, "r", encoding="utf-8") as f:
+                        existing_corrections = json.load(f)
+                except Exception:
+                    pass
+
+            now_str = datetime.now().isoformat()
+            ts_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+            new_corr = {
+                "id": f"corr_manual_{ts_suffix}",
+                "timestamp": now_str,
+                "execution_id": "manual",
+                "step_id": step_id,
+                "failed_selector": failed_selector,
+                "action": action,
+                "root_cause": f"Marcado manualmente pelo QA como falho: {description}",
+                "proposed_fix": description,
+                "qa_insight": description,
+                "failed_screenshot": None,
+                "status": "pending"
+            }
+            existing_corrections.append(new_corr)
+
+            try:
+                with open(corr_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_corrections, f, indent=4, ensure_ascii=False)
+                project_manager.update_project_activity(slug)
+                self._json({'success': True, 'message': f'Passo {step_id} marcado como falho para correção.', 'correction_id': new_corr['id']})
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao registrar correção manual: {e}'}, 500)
 
         else:
             self.send_response(404)

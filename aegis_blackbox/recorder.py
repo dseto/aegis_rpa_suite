@@ -83,14 +83,20 @@ JS_MINIMAL_LISTENERS = """
     }
 
     // Seletores resilientes Aegis V4
-    function getAegisSelector(element, isNested) {
-        if (!element || element === document.body || element === document.documentElement) return "";
-        
+    //
+    // Normaliza o elemento-alvo (redireciona SVG/path, sobe até o elemento
+    // interativo mais próximo ou ancestral com atributo de teste). Usado
+    // tanto pela cascata de geração de seletor quanto pela coleta de
+    // candidatos múltiplos, para garantir que ambas operem sobre o MESMO
+    // elemento resolvido.
+    function resolveAegisTargetElement(element) {
+        if (!element || element === document.body || element === document.documentElement) return null;
+
         // Redireciona cliques em caminhos de SVG para o elemento gráfico raiz SVG
         if (element.tagName && element.tagName.toLowerCase() === 'path') {
             element = element.closest('svg') || element;
         }
-        
+
         // Redireciona para o elemento interativo mais próximo se o clique foi em um elemento interno (ex: mat-icon ou span)
         let interactive = element.closest('button, a, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="listbox"], [role="treeitem"], [role="gridcell"], [role="link"], mat-option, .mat-option, .mat-menu-item');
         if (interactive) {
@@ -102,30 +108,299 @@ JS_MINIMAL_LISTENERS = """
                 element = testIdAncestor;
             }
         }
+        return element;
+    }
+
+    // Provedores de estratégia de seletor (cascata Aegis V4), extraídos do
+    // corpo original de getAegisSelector SEM alterar nenhuma heurística —
+    // cada provedor reproduz byte-a-byte o trecho equivalente da versão
+    // anterior, apenas isolado para poder ser tentado independentemente por
+    // getAegisSelectorCandidates. A ORDEM da lista é a ordem de prioridade
+    // original (data-testid → id → has-text/label → genérico).
+    const AEGIS_SELECTOR_STRATEGY_PROVIDERS = [
+        // 1) data-testid / data-test-id / data-test / data-qa
+        function testIdStrategy(el) {
+            const testIdAttrs = ['data-testid', 'data-test-id', 'data-test', 'data-qa'];
+            for (let attr of testIdAttrs) {
+                let val = el.getAttribute(attr);
+                if (val) {
+                    return `[${attr}='${val}']`;
+                }
+            }
+            return null;
+        },
+        // 2) id estável (ignora ids dinâmicos numéricos ou gerados pelo Angular Material)
+        function idStrategy(el) {
+            if (el.id && !/\\d{8,}/.test(el.id) && !el.id.startsWith('mat-input-') && !el.id.startsWith('mat-select-')) {
+                return `#${el.id}`;
+            }
+            return null;
+        },
+        // 3) texto visível em botão/link/item de menu/role interativo
+        function textStrategy(el) {
+            let elementRole = el.getAttribute('role') || '';
+            let isInteractiveRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(elementRole);
+            let isMenuClass = el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
+
+            if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) &&
+                el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
+
+                let cleanText = el.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : el.tagName.toLowerCase();
+                return `${tagPrefix}:has-text('${cleanText}')`;
+            }
+            return null;
+        },
+        // 4) placeholder / name / rótulo de formulário (input, textarea, select, dropdown trigger)
+        function formFieldStrategy(el) {
+            let isDropdownTrigger = (el.tagName === 'DIV' || el.tagName === 'SPAN') &&
+                el.innerText &&
+                (/selecione/i.test(el.innerText) || /escolha/i.test(el.innerText) || el.classList.contains('select-trigger') || el.classList.contains('mat-select-trigger') || el.classList.contains('mat-select-value-text'));
+
+            if (!(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || isDropdownTrigger)) {
+                return null;
+            }
+
+            if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('placeholder')) {
+                return `${el.tagName.toLowerCase()}[placeholder='${el.getAttribute('placeholder')}']`;
+            }
+            if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('name')) {
+                return `${el.tagName.toLowerCase()}[name='${el.getAttribute('name')}']`;
+            }
+
+            // Resolvedor Universal de Rótulo de Formulário
+            let labelText = "";
+            let selectorType = "";
+            let labelNode = null;
+
+            if (el.id) {
+                let label = document.querySelector(`label[for='${el.id}']`);
+                if (label) {
+                    labelText = label.innerText || label.textContent || "";
+                    selectorType = "explicit-label";
+                    labelNode = label;
+                }
+            }
+            if (!labelText) {
+                let parentLabel = el.closest('label');
+                if (parentLabel) {
+                    let tempLabel = parentLabel.cloneNode(true);
+                    let innerInput = tempLabel.querySelector('input, textarea, select');
+                    if (innerInput) innerInput.remove();
+                    labelText = tempLabel.innerText || tempLabel.textContent || "";
+                    selectorType = "implicit-label";
+                    labelNode = parentLabel;
+                }
+            }
+            if (!labelText) {
+                let sibling = el.previousElementSibling;
+                while (sibling) {
+                    if (sibling.tagName === 'LABEL') {
+                        labelText = sibling.innerText || sibling.textContent || "";
+                        selectorType = "sibling-label";
+                        labelNode = sibling;
+                        break;
+                    }
+                    sibling = sibling.previousElementSibling;
+                }
+            }
+            if (!labelText) {
+                const formField = el.closest('mat-form-field');
+                if (formField) {
+                    const labelEl = formField.querySelector('.mat-form-field-label');
+                    if (labelEl) {
+                        labelText = labelEl.innerText || labelEl.textContent || "";
+                        selectorType = "mat-form-field";
+                        labelNode = formField;
+                    }
+                }
+            }
+            if (!labelText) {
+                let formGroup = el.closest('.form-group, .form-control-container, .field, .mb-3, .form-row, .form-field');
+                if (formGroup) {
+                    let label = formGroup.querySelector('label, .label');
+                    if (label) {
+                        labelText = label.innerText || label.textContent || "";
+                        selectorType = "form-group";
+                        labelNode = formGroup;
+                    }
+                }
+            }
+
+            labelText = labelText.trim();
+            if (labelText && labelText.length < 45) {
+                let cleanLabel = labelText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                let tag = el.tagName.toLowerCase();
+                if (selectorType === "mat-form-field") {
+                    return `mat-form-field:has-text('${cleanLabel}') ${tag}`;
+                } else if (selectorType === "implicit-label") {
+                    return `label:has-text('${cleanLabel}') ${tag}`;
+                } else if (selectorType === "explicit-label" || selectorType === "sibling-label") {
+                    return `label:has-text('${cleanLabel}') ~ ${tag}`;
+                } else if (selectorType === "form-group") {
+                    let classList = Array.from(labelNode.classList);
+                    let semClass = classList.find(cls => cls.includes('form-group') || cls.includes('field') || cls.includes('mb-3'));
+                    if (semClass) {
+                        return `.${semClass}:has-text('${cleanLabel}') ${tag}`;
+                    }
+                    return `div:has-text('${cleanLabel}') ${tag}`;
+                }
+            }
+            return null;
+        },
+        // 5) fallback genérico: apenas a tag do elemento
+        function tagStrategy(el) {
+            return el.tagName.toLowerCase();
+        }
+    ];
+
+    // Sobe a árvore DOM adicionando prefixos de ancestrais estáveis até o
+    // seletor ficar único (ou esgotar a profundidade/máx de tentativas) —
+    // reproduz byte-a-byte a lógica de "ancestor-climbing" original.
+    function makeAegisSelectorUnique(el, baseSelector) {
+        const testIdAttrs = ['data-testid', 'data-test-id', 'data-test', 'data-qa'];
+
+        let genericTags = ['img', 'span', 'div', 'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'i', 'b', 'strong', 'em', 'small', 'a', 'svg', 'mat-icon'];
+        let isGeneric = genericTags.includes(el.tagName.toLowerCase());
+        let isButtonOrMenu = el.tagName.toLowerCase() === 'button' || el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
+        let isSemanticRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(el.getAttribute('role') || '');
+        let isFormFieldWithLabel = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') &&
+            (baseSelector.startsWith('mat-form-field:has-text') || baseSelector.startsWith('label:has-text') || baseSelector.startsWith('div:has-text') || baseSelector.includes(':has-text'));
+
+        if ((isGeneric || isButtonOrMenu || isSemanticRole || isFormFieldWithLabel) && (!el.id || /\\d{8,}/.test(el.id))) {
+            let parent = el.parentElement;
+            let depth = 0;
+            let root = el.getRootNode();
+            let isUnique = queryLength(baseSelector, root) === 1;
+
+            while (parent && depth < 5 && !isUnique) {
+                let parentTag = parent.tagName.toLowerCase();
+                let parentTestId = null;
+                for (let attr of testIdAttrs) {
+                    if (parent.getAttribute(attr)) {
+                        parentTestId = `[${attr}='${parent.getAttribute(attr)}']`;
+                        break;
+                    }
+                }
+
+                let prefix = null;
+                if (parentTestId) {
+                    prefix = parentTestId;
+                } else if (parent.id && !/\\d{8,}/.test(parent.id) && !parent.id.startsWith('mat-input-')) {
+                    prefix = `#${parent.id}`;
+                } else if (['article', 'section', 'nav', 'aside', 'header', 'footer', 'form', 'table', 'tr', 'fieldset', 'details', 'summary'].includes(parentTag)) {
+                    prefix = parentTag;
+                } else {
+                    let classList = Array.from(parent.classList);
+                    let semanticClass = classList.find(cls =>
+                        cls.includes('post') || cls.includes('card') || cls.includes('item') ||
+                        cls.includes('thumbnail') || cls.includes('menu') || cls.includes('wrapper') ||
+                        cls.includes('container') || cls.includes('block') || cls.includes('grid')
+                    );
+                    if (semanticClass) {
+                        prefix = `.${semanticClass}`;
+                    }
+                }
+
+                if (prefix) {
+                    let candidateSelector = `${prefix} ${baseSelector}`;
+                    let matchesCount = queryLength(candidateSelector, root);
+                    baseSelector = candidateSelector; // Mantém o mais restritivo obtido
+                    if (matchesCount === 1) {
+                        isUnique = true;
+                        break;
+                    }
+                }
+                parent = parent.parentElement;
+                depth++;
+            }
+
+            if (!isUnique) {
+                console.warn(`[Aegis Recorder] Seletor gerado pode ser ambíguo na página: "${baseSelector}"`);
+                return { selector: baseSelector, ambiguous: true };
+            }
+        }
+        return { selector: baseSelector, ambiguous: false };
+    }
+
+    // Computa o seletor "primário" reproduzindo EXATAMENTE a cascata
+    // original: para cada elemento, apenas UM provedor de estratégia se
+    // aplica (é um if/else-if, não um "tenta todos até achar único") —
+    // seguido da subida de ancestrais para tentar unicidade. Retorna o
+    // baseSelector mesmo se a unicidade não puder ser garantida (apenas
+    // emite o console.warn de aviso), IDÊNTICO ao getAegisSelector antigo.
+    // Retorna também o rawSelector (pré-climbing) para permitir que o
+    // coletor de candidatos evite reprocessar a mesma estratégia (e
+    // duplicar o console.warn de ambiguidade).
+    function computeAegisPrimarySelectorRaw(el) {
+        let baseSelector = "";
+        let hasTestId = false;
+
+        let testIdResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[0](el); // testIdStrategy
+        if (testIdResult) {
+            baseSelector = testIdResult;
+            hasTestId = true;
+        }
+
+        if (!hasTestId) {
+            let idResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[1](el); // idStrategy
+            if (idResult) {
+                baseSelector = idResult;
+            } else {
+                baseSelector = el.tagName.toLowerCase();
+                let textResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[2](el); // textStrategy
+                let formFieldResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[3](el); // formFieldStrategy
+                if (textResult) {
+                    baseSelector = textResult;
+                } else if (formFieldResult) {
+                    baseSelector = formFieldResult;
+                }
+                // Se nenhuma estratégia específica se aplicou, mantém o fallback de tag (5).
+            }
+        }
+
+        return baseSelector;
+    }
+
+    function computeAegisPrimarySelector(el) {
+        return makeAegisSelectorUnique(el, computeAegisPrimarySelectorRaw(el)).selector;
+    }
+
+    // Coleta até 3 candidatos de seletor ÚNICOS gerados por estratégias
+    // DISTINTAS (data-testid, id, texto/rótulo, tag genérica...), na mesma
+    // ordem de prioridade da cascata original. O candidato [0] é sempre o
+    // seletor primário — mesmo que ele não seja único (mantendo o
+    // comportamento antigo de getAegisSelector); os demais candidatos
+    // (fallback_selectors) SÃO exigidos únicos.
+    function getAegisSelectorCandidates(element, isNested) {
+        let resolved = resolveAegisTargetElement(element);
+        if (!resolved) return [];
 
         // --- DETECÇÃO DE SUBMENU / DROPDOWN HOVER-TO-REVEAL ---
+        // Mantém o comportamento recursivo original: quando aplicável, o
+        // resultado é o seletor combinado único (sem candidatos alternativos).
         if (!isNested) {
-            let subMenuContainer = element.closest('.sub-menu, .dropdown-menu, .dropdown, [role="menu"], .hfe-has-submenu');
+            let subMenuContainer = resolved.closest('.sub-menu, .dropdown-menu, .dropdown, [role="menu"], .hfe-has-submenu');
             if (subMenuContainer) {
-                let parentMenu = subMenuContainer.parentElement; // Geralmente o <li> correspondente ao menu pai
-                if (parentMenu && parentMenu !== element) {
+                let parentMenu = subMenuContainer.parentElement;
+                if (parentMenu && parentMenu !== resolved) {
                     let parentSelector = getAegisSelector(parentMenu, true);
-                    let childSelector = getAegisSelector(element, true);
+                    let childSelector = getAegisSelector(resolved, true);
                     if (parentSelector && childSelector) {
                         if (childSelector.startsWith(parentSelector + " ")) {
                             childSelector = childSelector.substring(parentSelector.length).trim();
                         }
-                        return parentSelector + " >> " + childSelector;
+                        return [parentSelector + " >> " + childSelector];
                     }
                 }
             }
         }
 
         let shadowPath = "";
-        let current = element;
+        let current = resolved;
         while (current) {
             let parent = current.parentNode || current.host;
-            if (parent && parent.nodeType === 11) { 
+            if (parent && parent.nodeType === 11) {
                 let host = parent.host;
                 let hostSelector = getAegisSelector(host);
                 shadowPath = hostSelector + " >> ";
@@ -134,191 +409,59 @@ JS_MINIMAL_LISTENERS = """
             }
             current = parent;
         }
-        let el = element;
-        let baseSelector = "";
-        let hasTestId = false;
 
-        const testIdAttrs = ['data-testid', 'data-test-id', 'data-test', 'data-qa'];
-        for (let attr of testIdAttrs) {
-            let val = el.getAttribute(attr);
-            if (val) {
-                baseSelector = `[${attr}='${val}']`;
-                hasTestId = true;
-                break;
+        let el = resolved;
+        let root = el.getRootNode();
+
+        let primaryRaw = computeAegisPrimarySelectorRaw(el);
+        let primaryResult = makeAegisSelectorUnique(el, primaryRaw);
+        let primarySelector = shadowPath + primaryResult.selector;
+        if (!primarySelector) return [];
+
+        let candidates = [primarySelector];
+        let seen = new Set([primarySelector]);
+        let rawSeen = new Set([primaryRaw]);
+
+        for (let provider of AEGIS_SELECTOR_STRATEGY_PROVIDERS) {
+            if (candidates.length >= 3) break;
+            let rawSelector = provider(el);
+            if (!rawSelector) continue;
+            // Já processado como candidato primário — evita repetir o
+            // climbing (e o console.warn de ambiguidade) para a mesma estratégia.
+            if (rawSeen.has(rawSelector)) continue;
+            rawSeen.add(rawSelector);
+
+            let finalSelector = shadowPath + makeAegisSelectorUnique(el, rawSelector).selector;
+            if (seen.has(finalSelector)) continue;
+
+            try {
+                if (queryLength(finalSelector, root) === 1) {
+                    seen.add(finalSelector);
+                    candidates.push(finalSelector);
+                }
+            } catch (err) {
+                // Seletor inválido para esta estratégia — ignora e tenta a próxima
             }
         }
 
-        if (!hasTestId) {
-            if (el.id && !/\\d{8,}/.test(el.id) && !el.id.startsWith('mat-input-') && !el.id.startsWith('mat-select-')) {
-                baseSelector = `#${el.id}`;
-            } else {
-                baseSelector = el.tagName.toLowerCase();
-                let elementRole = el.getAttribute('role') || '';
-                let isInteractiveRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(elementRole);
-                let isMenuClass = el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
-                
-                let isDropdownTrigger = (el.tagName === 'DIV' || el.tagName === 'SPAN') && 
-                    el.innerText && 
-                    (/selecione/i.test(el.innerText) || /escolha/i.test(el.innerText) || el.classList.contains('select-trigger') || el.classList.contains('mat-select-trigger') || el.classList.contains('mat-select-value-text'));
+        // Ambiguidade do PRIMÁRIO detectada pelo próprio climbing de ancestrais
+        // (isUnique nunca virou true) é anexada ao array como propriedade extra
+        // -- não muda o contrato de retorno (array de strings) que getAegisSelector
+        // e os handlers de click/fill já consomem. Consumida em record_action
+        // (Python) para rebaixar confidence/ativar weak_selector: achado real do
+        // piloto de site novo (.specs/relatorio-piloto-site-novo.md) -- o console.warn
+        // de ambiguidade já existia mas nunca chegava no confidence/plano.
+        candidates.primaryAmbiguous = primaryResult.ambiguous;
+        return candidates;
+    }
+    window.getAegisSelectorCandidates = getAegisSelectorCandidates;
 
-                if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) && 
-                    el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
-                    
-                    let cleanText = el.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
-                    let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : el.tagName.toLowerCase();
-                    baseSelector = `${tagPrefix}:has-text('${cleanText}')`;
-                    
-                } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || isDropdownTrigger) {
-                    if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('placeholder')) {
-                        baseSelector = `${el.tagName.toLowerCase()}[placeholder='${el.getAttribute('placeholder')}']`;
-                    } else if (el.tagName !== 'DIV' && el.tagName !== 'SPAN' && el.getAttribute('name')) {
-                        baseSelector = `${el.tagName.toLowerCase()}[name='${el.getAttribute('name')}']`;
-                    } else {
-                        // Resolvedor Universal de Rótulo de Formulário
-
-                        let labelText = "";
-                        let selectorType = "";
-                        let labelNode = null;
-                        
-                        if (el.id) {
-                            let label = document.querySelector(`label[for='${el.id}']`);
-                            if (label) {
-                                labelText = label.innerText || label.textContent || "";
-                                selectorType = "explicit-label";
-                                labelNode = label;
-                            }
-                        }
-                        if (!labelText) {
-                            let parentLabel = el.closest('label');
-                            if (parentLabel) {
-                                let tempLabel = parentLabel.cloneNode(true);
-                                let innerInput = tempLabel.querySelector('input, textarea, select');
-                                if (innerInput) innerInput.remove();
-                                labelText = tempLabel.innerText || tempLabel.textContent || "";
-                                selectorType = "implicit-label";
-                                labelNode = parentLabel;
-                            }
-                        }
-                        if (!labelText) {
-                            let sibling = el.previousElementSibling;
-                            while (sibling) {
-                                if (sibling.tagName === 'LABEL') {
-                                    labelText = sibling.innerText || sibling.textContent || "";
-                                    selectorType = "sibling-label";
-                                    labelNode = sibling;
-                                    break;
-                                }
-                                sibling = sibling.previousElementSibling;
-                            }
-                        }
-                        if (!labelText) {
-                            const formField = el.closest('mat-form-field');
-                            if (formField) {
-                                const labelEl = formField.querySelector('.mat-form-field-label');
-                                if (labelEl) {
-                                    labelText = labelEl.innerText || labelEl.textContent || "";
-                                    selectorType = "mat-form-field";
-                                    labelNode = formField;
-                                }
-                            }
-                        }
-                        if (!labelText) {
-                            let formGroup = el.closest('.form-group, .form-control-container, .field, .mb-3, .form-row, .form-field');
-                            if (formGroup) {
-                                let label = formGroup.querySelector('label, .label');
-                                if (label) {
-                                    labelText = label.innerText || label.textContent || "";
-                                    selectorType = "form-group";
-                                    labelNode = formGroup;
-                                }
-                            }
-                        }
-
-                        labelText = labelText.trim();
-                        if (labelText && labelText.length < 45) {
-                            let cleanLabel = labelText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
-                            let tag = el.tagName.toLowerCase();
-                            if (selectorType === "mat-form-field") {
-                                baseSelector = `mat-form-field:has-text('${cleanLabel}') ${tag}`;
-                            } else if (selectorType === "implicit-label") {
-                                baseSelector = `label:has-text('${cleanLabel}') ${tag}`;
-                            } else if (selectorType === "explicit-label" || selectorType === "sibling-label") {
-                                baseSelector = `label:has-text('${cleanLabel}') ~ ${tag}`;
-                            } else if (selectorType === "form-group") {
-                                let classList = Array.from(labelNode.classList);
-                                let semClass = classList.find(cls => cls.includes('form-group') || cls.includes('field') || cls.includes('mb-3'));
-                                if (semClass) {
-                                    baseSelector = `.${semClass}:has-text('${cleanLabel}') ${tag}`;
-                                } else {
-                                    baseSelector = `div:has-text('${cleanLabel}') ${tag}`;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let genericTags = ['img', 'span', 'div', 'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'i', 'b', 'strong', 'em', 'small', 'a', 'svg', 'mat-icon'];
-            let isGeneric = genericTags.includes(el.tagName.toLowerCase());
-            let isButtonOrMenu = el.tagName.toLowerCase() === 'button' || el.classList.contains('mat-option') || el.classList.contains('mat-menu-item');
-            let isSemanticRole = ['button', 'menuitem', 'tab', 'option', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'treeitem', 'gridcell', 'link'].includes(el.getAttribute('role') || '');
-            let isFormFieldWithLabel = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') && 
-                (baseSelector.startsWith('mat-form-field:has-text') || baseSelector.startsWith('label:has-text') || baseSelector.startsWith('div:has-text') || baseSelector.includes(':has-text'));
-
-            if ((isGeneric || isButtonOrMenu || isSemanticRole || isFormFieldWithLabel) && (!el.id || /\\d{8,}/.test(el.id))) {
-                let parent = el.parentElement;
-                let depth = 0;
-                let root = el.getRootNode();
-                let isUnique = queryLength(baseSelector, root) === 1;
-
-                while (parent && depth < 5 && !isUnique) {
-                    let parentTag = parent.tagName.toLowerCase();
-                    let parentTestId = null;
-                    for (let attr of testIdAttrs) {
-                        if (parent.getAttribute(attr)) {
-                            parentTestId = `[${attr}='${parent.getAttribute(attr)}']`;
-                            break;
-                        }
-                    }
-                    
-                    let prefix = null;
-                    if (parentTestId) {
-                        prefix = parentTestId;
-                    } else if (parent.id && !/\\d{8,}/.test(parent.id) && !parent.id.startsWith('mat-input-')) {
-                        prefix = `#${parent.id}`;
-                    } else if (['article', 'section', 'nav', 'aside', 'header', 'footer', 'form', 'table', 'tr', 'fieldset', 'details', 'summary'].includes(parentTag)) {
-                        prefix = parentTag;
-                    } else {
-                        let classList = Array.from(parent.classList);
-                        let semanticClass = classList.find(cls => 
-                            cls.includes('post') || cls.includes('card') || cls.includes('item') || 
-                            cls.includes('thumbnail') || cls.includes('menu') || cls.includes('wrapper') || 
-                            cls.includes('container') || cls.includes('block') || cls.includes('grid')
-                        );
-                        if (semanticClass) {
-                            prefix = `.${semanticClass}`;
-                        }
-                    }
-
-                    if (prefix) {
-                        let candidateSelector = `${prefix} ${baseSelector}`;
-                        let matchesCount = queryLength(candidateSelector, root);
-                        baseSelector = candidateSelector; // Mantém o mais restritivo obtido
-                        if (matchesCount === 1) {
-                            isUnique = true;
-                            break;
-                        }
-                    }
-                    parent = parent.parentElement;
-                    depth++;
-                }
-
-                if (!isUnique) {
-                    console.warn(`[Aegis Recorder] Seletor gerado pode ser ambíguo na página: "${baseSelector}"`);
-                }
-            }
-        }
-        return shadowPath + baseSelector;
+    // Wrapper: comportamento byte-idêntico ao getAegisSelector original —
+    // retorna sempre o candidato primário (mesma cascata de antes), ou ""
+    // se o elemento não resolver (ex.: elemento raiz/coordenada pura).
+    function getAegisSelector(element, isNested) {
+        let candidates = getAegisSelectorCandidates(element, isNested);
+        return candidates.length > 0 ? candidates[0] : "";
     }
     window.getAegisSelector = getAegisSelector;
 
@@ -583,7 +726,8 @@ JS_MINIMAL_LISTENERS = """
         if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') return;
         if (target.tagName === 'INPUT' && EXCLUDED_INPUT_TYPES.includes(target.type)) return;
         
-        let selector = getAegisSelector(target);
+        let selectorCandidates = getAegisSelectorCandidates(target);
+        let selector = selectorCandidates.length > 0 ? selectorCandidates[0] : "";
         // <select multiple>: .value só retorna a 1a opção selecionada (spec
         // do HTMLSelectElement) — descartaria silenciosamente as demais.
         // Lê todas via .selectedOptions quando for multi-select.
@@ -597,7 +741,7 @@ JS_MINIMAL_LISTENERS = """
             return;
         }
         window.__aegis_last_recorded_values__[selector] = valKey;
-        
+
         let parentData = getAegisParentData(target);
         let name = getSemanticFieldName(target);
         let fillEvent = {
@@ -611,6 +755,14 @@ JS_MINIMAL_LISTENERS = """
         };
         if (parentData !== null) {
             fillEvent.parent = parentData;
+        }
+        // Seletor primário é coordenada pura ou vazio — sem base confiável
+        // para propor fallbacks.
+        if (selector && selectorCandidates.length > 1) {
+            fillEvent.fallback_selectors = selectorCandidates.slice(1);
+        }
+        if (selectorCandidates.primaryAmbiguous) {
+            fillEvent.selector_ambiguous = true;
         }
         window.pythonRecordAction(JSON.stringify(fillEvent));
     }
@@ -659,18 +811,19 @@ JS_MINIMAL_LISTENERS = """
         if (!e.isTrusted) return;
         
         let now = Date.now();
-        let selector = getAegisSelector(e.target);
-        
+        let clickCandidates = getAegisSelectorCandidates(e.target);
+        let selector = clickCandidates.length > 0 ? clickCandidates[0] : "";
+
         // Evita gravação de cliques duplicados consecutivos (double-clicks rápidos) no mesmo seletor ou sub-seletor dentro de 250ms
         if (now - lastClickTime < 250 && (selector === lastClickSelector || selector.includes(lastClickSelector) || lastClickSelector.includes(selector))) {
             return;
         }
         lastClickTime = now;
         lastClickSelector = selector;
-        
+
         // Garante a gravação de todos os inputs pendentes antes do clique
         flushAllInputs();
-        
+
         let parentData = getAegisParentData(e.target);
 
         let x_percent = e.clientX / window.innerWidth;
@@ -687,6 +840,14 @@ JS_MINIMAL_LISTENERS = """
 
         if (parentData !== null) {
             clickEvent.parent = parentData;
+        }
+        // Seletor primário é coordenada pura ou vazio — sem base confiável
+        // para propor fallbacks.
+        if (selector && clickCandidates.length > 1) {
+            clickEvent.fallback_selectors = clickCandidates.slice(1);
+        }
+        if (clickCandidates.primaryAmbiguous) {
+            clickEvent.selector_ambiguous = true;
         }
 
         window.pythonRecordAction(JSON.stringify(clickEvent));
@@ -1113,6 +1274,36 @@ class AegisRecorder:
             else:
                 anti_bot_detected = self.anti_bot_fields_cache
 
+            # Auto-preservação de tradução semântica prévia (por seletor): se
+            # este projeto já foi sanitizado antes (dicionario.json tem chaves
+            # de negócio como "usuario_login" em vez de "username"), regravar
+            # o fluxo NÃO deve perder essa tradução. Antes de montar os
+            # dicionários novos, carrega o dicionario.json existente e monta
+            # um mapa selector -> chave_semantica_antiga; abaixo, cada campo
+            # novo que casar pelo MESMO seletor físico herda a chave antiga em
+            # vez da chave crua recém-capturada — bot já gerado continua
+            # lendo os mesmos nomes de campo do dataset sem precisar re-rodar
+            # Sanitizer manualmente só por causa da regravação. Casamento por
+            # seletor (não por nome) porque é o único identificador estável
+            # entre uma gravação e outra do mesmo elemento.
+            old_input_key_by_selector = {}
+            old_output_key_by_selector = {}
+            existing_dict_path = os.path.join(self.output_dir, "dicionario.json")
+            if os.path.exists(existing_dict_path):
+                try:
+                    with open(existing_dict_path, "r", encoding="utf-8") as f:
+                        existing_dict = json.load(f) or {}
+                    for old_key, old_info in (existing_dict.get("fields") or {}).items():
+                        old_sel = old_info.get("selector")
+                        if old_sel:
+                            old_input_key_by_selector[old_sel] = old_key
+                    for old_key, old_info in (existing_dict.get("outputs") or {}).items():
+                        old_sel = old_info.get("selector")
+                        if old_sel:
+                            old_output_key_by_selector[old_sel] = old_key
+                except Exception:
+                    pass
+
             # Compila o dicionário estruturado e a primeira linha do dataset
             fields_schema = {}
             dataset_row = {
@@ -1125,7 +1316,7 @@ class AegisRecorder:
             csv_first_row = ["1", "default", "SUCCESS", ""]
 
             for (scenario, selector), info in self.schema_inputs.items():
-                sem_key = info["semantic_key"]
+                sem_key = old_input_key_by_selector.get(selector, info["semantic_key"])
                 val = info["observed_value"]
                 field_type = info["type"]
 
@@ -1155,6 +1346,7 @@ class AegisRecorder:
             # Compila dicionario de saídas
             outputs_schema = {}
             for (scenario, selector), sem_key in self.schema_outputs.items():
+                sem_key = old_output_key_by_selector.get(selector, sem_key)
                 score, sel_type = evaluate_selector_reliability(selector)
                 outputs_schema[sem_key] = {
                     "selector": selector,
@@ -1177,8 +1369,35 @@ class AegisRecorder:
                     "anti_bot_fields": anti_bot_detected
                 }, f, indent=4, ensure_ascii=False)
 
-            # 2. Salva dicionário de dados estruturado
+            # Aviso residual: a auto-preservação acima (old_input_key_by_selector/
+            # old_output_key_by_selector) já reaplica a tradução semântica prévia
+            # para todo campo cujo SELETOR físico bateu com o dicionario.json
+            # anterior — cobre o caso comum de regravar o mesmo fluxo sem
+            # dessincronizar o bot já gerado. Este aviso só dispara pro que
+            # sobrou sem casar: campo genuinamente novo, ou o seletor do campo
+            # mudou de verdade na página (mudança estrutural real do site) — aí
+            # sim a tradução antiga não tem como ser recuperada automaticamente
+            # e Sanitizer + Code Generator precisam rodar de novo.
             dict_file = os.path.join(self.output_dir, "dicionario.json")
+            if os.path.exists(dict_file):
+                try:
+                    with open(dict_file, "r", encoding="utf-8") as f:
+                        existing_dict = json.load(f)
+                    existing_fields = set((existing_dict or {}).get("fields", {}).keys())
+                    new_fields = set(fields_schema.keys())
+                    unresolved = existing_fields - new_fields
+                    if unresolved:
+                        print(
+                            "[AEGIS] [WARNING] Alguns campos do dicionario.json anterior não foram "
+                            f"encontrados pelo mesmo seletor nesta nova gravação: {sorted(unresolved)}. "
+                            "A tradução semântica desses campos específicos NÃO pôde ser preservada "
+                            "automaticamente (seletor mudou ou campo saiu da tela) — se o bot já "
+                            "gerado depende deles, rode Sanitizer + Code Generator novamente."
+                        )
+                except Exception:
+                    pass
+
+            # 2. Salva dicionário de dados estruturado
             with open(dict_file, "w", encoding="utf-8") as f:
                 json.dump({
                     "initial_url": self.url,
@@ -1288,6 +1507,22 @@ class AegisRecorder:
                         "type": "date" if is_date else ("select" if is_select else "string")
                     }
                 return
+
+            if selector:
+                score = evaluate_selector_reliability(selector)[0]
+                # O JS já detecta ambiguidade real durante o climbing de
+                # ancestrais (isUnique nunca vira true) e emitia só um
+                # console.warn descartado -- achado real do piloto de site
+                # novo (.specs/relatorio-piloto-site-novo.md): seletores
+                # `:has-text(...)` pontuam 70 fixo (nunca < 70, nunca vira
+                # weak_selector) mesmo quando o próprio recorder já sabe que
+                # são ambíguos. Rebaixa o score abaixo do limiar de
+                # weak_selector (70) quando `selector_ambiguous` vem true no
+                # evento, herdando o sinal de unicidade real em vez de só a
+                # estratégia usada.
+                if ev.get("selector_ambiguous") and score >= 70:
+                    score = 60
+                ev["confidence"] = score
 
             self.events_log.append(ev)
             print(f"[AEGIS CAPTURE] Ação: {ev_type.upper()} | Seletor: {selector} | Valor/Texto: {val or ev.get('text', '')}")

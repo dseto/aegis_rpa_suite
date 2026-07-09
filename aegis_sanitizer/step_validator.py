@@ -928,6 +928,52 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
                               f"original_coords=({coords[0]}, {coords[1]}) como fallback de self-healing."
                 })
 
+        if step.get("weak_selector"):
+            # Seletor de baixa confiança (confidence < 70 no sanitizer) — exige
+            # ancoragem determinística (has_text/chained) em vez de confiar
+            # cegamente no seletor cru. original_coords NÃO conta como reforço
+            # aqui: os checks MISSING_*_COORDS acima já forçam coords sempre
+            # que gravadas — aceitá-las como "ancora" tornaria este check
+            # inócuo (toda call já teria coords de qualquer forma).
+            weak_anchor_ok = False
+            for call in calls_by_step.get(step_id, []):
+                if call["method"] not in ("click_resilient", "fill_resilient", "click_chained", "fill_chained"):
+                    continue
+                if call["method"] in ("click_chained", "fill_chained") and "parent" in call["kwargs"]:
+                    weak_anchor_ok = True
+                    break
+                # has_text embutido no seletor (literal) ou no parent (literal ou dinâmico)
+                for key in ("selector", "parent"):
+                    if key in call.get("dict_contents", {}):
+                        parent_dict = call["dict_contents"][key]
+                        if ":has-text(" in str(parent_dict.get("selector", "")) or "has_text" in parent_dict:
+                            weak_anchor_ok = True
+                            break
+                        if "has_text" in call.get("dict_dynamic_keys", {}).get(key, set()):
+                            weak_anchor_ok = True
+                            break
+                if weak_anchor_ok:
+                    break
+                selector_val = call["kwargs"].get("selector")
+                if isinstance(selector_val, str) and ":has-text(" in selector_val:
+                    weak_anchor_ok = True
+                    break
+                parent_val = call["kwargs"].get("parent")
+                if isinstance(parent_val, str) and ":has-text(" in parent_val:
+                    weak_anchor_ok = True
+                    break
+            if not weak_anchor_ok:
+                errors.append({
+                    "type": "WEAK_SELECTOR_WITHOUT_ANCHOR",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' foi marcado como 'weak_selector' (baixa confiança na "
+                              f"gravação) e precisa de ancoragem determinística — use "
+                              f"runner.click_chained/fill_chained(parent={{'selector': '...', 'has_text': "
+                              f"'...'}}) ou embuta um filtro ':has-text(\"...\")' diretamente no seletor. "
+                              f"Passar apenas original_coords NÃO conta como ancoragem: coordenadas são "
+                              f"fallback de self-healing, não desambiguação de elemento."
+                })
+
         if step_type == "fill" and step.get("selector") in human_like_selectors:
             human_like_ok = (
                 kwarg_equals(step_id, ("fill_resilient", "fill_chained"), "strategy", "HUMAN_LIKE") or
@@ -1416,11 +1462,19 @@ def dry_run_bot(bot_code: str, project_root: str, timeout: int = 30, dataset_dir
     import subprocess
     import sys as _sys
 
-    # Usa a primeira linha real do dataset em vez de {{}} — row.get(...) com
+    # Usa as linhas reais do dataset em vez de {{}} — row.get(...) com
     # dict vazio sempre retorna "" e nunca exercita datetime.strptime/regex/
     # conversoes que so quebram com um valor de verdade (bug real ja visto
     # em producao: strptime("03/07/2026", "%Y-%m-%d") so falha com dado real).
-    real_row = {}
+    # Todas as linhas (ate o teto AEGIS_DRYRUN_MAX_ROWS) sao exercitadas num
+    # UNICO subprocess — o harness itera internamente e para na primeira
+    # excecao, reportando o id da linha do dataset que falhou.
+    try:
+        max_rows = int(os.getenv("AEGIS_DRYRUN_MAX_ROWS", "20"))
+    except ValueError:
+        max_rows = 20
+
+    real_rows = []
     if dataset_dir:
         for fname in ("dataset_inicial.json",):
             fpath = os.path.join(dataset_dir, fname)
@@ -1429,10 +1483,13 @@ def dry_run_bot(bot_code: str, project_root: str, timeout: int = 30, dataset_dir
                     with open(fpath, "r", encoding="utf-8") as f:
                         rows = json.load(f)
                     if isinstance(rows, list) and rows:
-                        real_row = rows[0]
+                        real_rows = rows[:max_rows]
                 except (OSError, json.JSONDecodeError):
                     pass
                 break
+
+    if not real_rows:
+        real_rows = [{}]
 
     harness = f'''
 import sys
@@ -1504,14 +1561,16 @@ fake_locator.inner_text.return_value = ""
 fake_locator.get_attribute.return_value = ""
 fake_locator.locator.return_value = fake_locator
 fake_page.locator.return_value = fake_locator
-fake_row = {real_row!r}
+fake_rows = {real_rows!r}
 fake_runner = _FakeRunner()
 
-try:
-    fn(fake_page, fake_row, fake_runner)
-except Exception as e:
-    print("DRYRUN_RUNTIME_ERROR::" + type(e).__name__ + "::" + str(e))
-    sys.exit(1)
+for _idx, _row in enumerate(fake_rows):
+    try:
+        fn(fake_page, _row, fake_runner)
+    except Exception as e:
+        _row_id = _row.get("id", _idx + 1) if isinstance(_row, dict) else _idx + 1
+        print("DRYRUN_RUNTIME_ERROR::" + type(e).__name__ + "::" + str(e) + f" (linha do dataset id={{_row_id}})")
+        sys.exit(1)
 
 # Executa tambem o bloco de entry point (if __name__ == "__main__") para
 # pegar kwargs alucinados em register_scenario()/TransactionRunner()/run()
