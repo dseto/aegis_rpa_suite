@@ -97,3 +97,40 @@ O gate de regressão **não encontrou piora** em nenhuma das métricas comparada
 - O sensor M2 (`CLICK_NO_EFFECT`) funcionou como esperado (log-only, sem alterar o resultado do passo) e, na execução 3, produziu evidência direta e correta do ponto real de falha (`st_032`), validando seu valor diagnóstico mesmo sem ação corretiva automática.
 
 **Ressalva formal:** M3 (fallback_selectors) e M5 (weak_selector) não puderam ser exercitados neste gate porque o plano de execução do `001_teste` é anterior à implementação dessas melhorias e não contém os campos necessários (`fallback_selectors`, `weak_selector`). Uma validação completa de M3/M5 exigiria re-gravar o teste (Fase 1) e regenerar o bot (Fase 4) para produzir um `plano_execucao.json` com os novos campos. M1 (error_message_selector) também não teve efeito prático, pois `project.json` do projeto `portal_segura` não define esse campo — não é uma falha do gate, apenas ausência de configuração opt-in.
+
+---
+
+# Gate pós-teste da skill `aegis-regression-gate`
+
+**Data:** 2026-07-09
+**Commit no momento do gate:** `bfea045`
+**Motivo:** teste funcional da skill `aegis-regression-gate` (recém-criada), disparada por linguagem natural ("acabei de mudar código do runner (sensor CLICK_NO_EFFECT), preciso confirmar que não quebrou nada").
+**Bot regenerado?** **NÃO** — mesmo `code/bot_producao.py` e `plano_execucao.json` das rodadas anteriores.
+
+## Métricas por execução
+
+| # | Taxa de sucesso (transação) | SUCCESS/FAILED/HEALED (passos) | Novas `correcoes_acumuladas.json` | Ponto de falha |
+|---|---|---|---|---|
+| 1 | 0/1 (0%) | 23 / 2 / 0 | 0 (17→17) | `st_024` — timeout autocomplete de modelo (mesma classe já documentada) |
+| 2 | 0/1 (0%) | 35 / 2 / 2 | 0 (17→17) | `st_038` — CEP de Pernoite / validação Passo 2 (mesma classe já documentada) |
+| 3 | 0/1 (0%) | 35 / 2 / 2 | 0 (17→17) | `st_038` — mesmo ponto da execução 2 |
+
+**Observação nova:** sensor `CLICK_NO_EFFECT` disparou exatamente 1x por execução, sempre no mesmo passo (`st_004`, `#btn-login`), nas 3 rodadas — determinístico, não intermitente. O passo continuou retornando `SUCCESS` e a transação avançou normalmente além dele (35 passos SUCCESS nas execuções 2/3), indicando que o clique teve efeito real (login funcionou) mas o sensor não capturou a mudança dentro da janela de polling (~800ms) — possível falso positivo por timing, não investigado a fundo aqui (fora do escopo deste teste de skill).
+
+## Comparação com baseline / gate anterior
+
+- Taxa de sucesso: 0% → 0%, sem regressão (mesmo piso do baseline original e do gate pós-M1-M5).
+- Nenhum tipo novo de falha sistêmica: `st_024` e `st_038` são pontos já documentados nas rodadas de baseline e no gate pós-M1-M5 — variância conhecida, não regressão.
+- `correcoes_acumuladas.json`: estável em 17 entradas nas 3 execuções — nenhum crescimento (dedup do Sensor F1 funcionando como esperado, sem gerar ruído).
+
+## Veredito
+
+### ✅ APROVADO
+
+Sem regressão nas métricas comparadas. Achado novo (sensor `CLICK_NO_EFFECT` em `st_004`) registrado para investigação futura, não bloqueia o gate — comportamento é log-only por design (`AEGIS_CLICK_EFFECT_REGISTER=false`), sem impacto no resultado do passo.
+
+## Avaliação da skill `aegis-regression-gate` (meta, não faz parte do gate em si)
+
+- Disparou corretamente por linguagem natural, sem citar o nome da skill.
+- Seguiu o processo documentado: pré-condições → 3 execuções sem regenerar → extração de métricas → comparação → append ao baseline existente (não sobrescreveu histórico).
+- Achou um ponto real (`CLICK_NO_EFFECT` determinístico em `st_004`) que nenhuma execução manual anterior deste projeto havia isolado tão claramente (3/3, mesmo passo).

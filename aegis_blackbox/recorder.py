@@ -1932,16 +1932,12 @@ class AegisRecorder:
                     import aegis_blackbox.recorder as ab_rec
                     ab_rec.run_auto_simulation(self.page, self.update_scenario, self.record_annotation)
                 except Exception as sim_err:
-                    # Se não puder importar localmente, tenta do escopo global usando globals() para evitar UnboundLocalError
-                    try:
-                        fn_sim = globals().get('run_auto_simulation')
-                        if fn_sim:
-                            fn_sim(self.page, self.update_scenario, self.record_annotation)
-                        else:
-                            raise NameError("run_auto_simulation não foi encontrado no escopo global.")
-                    except Exception as sim_err2:
-                        print(f"[AEGIS AUTO-SIMULATOR ERROR] Erro na simulação: {sim_err2}")
-                        sys.stdout.flush()
+                    # Nao reexecuta run_auto_simulation aqui: a pagina ja avancou do
+                    # estado inicial, entao rodar de novo do zero so produz um erro
+                    # secundario (ex.: timeout em campo de login) que mascara sim_err,
+                    # a causa real. Ver .specs/relatorio-piloto-portal_segura_pilot_unhappy.md.
+                    print(f"[AEGIS AUTO-SIMULATOR ERROR] Erro na simulação: {sim_err}")
+                    sys.stdout.flush()
                 self.session_finished = True
             else:
                 last_scan_time = time.time()
