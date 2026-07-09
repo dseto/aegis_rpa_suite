@@ -147,12 +147,32 @@ Bots instantiate `TransactionRunner`, register scenario callbacks with `register
 The code generator's playbook (`aegis_mentor/skills/rpa-copilot-coder.md`) defines ~12 resilience patterns including Shadow DOM piercing (`>>`), network API interception for dynamic dropdowns, deadlock avoidance ordering, viewport evaluation for CDK overlays, async loader synchronization, date picker bypass, and file upload handling.
 
 ### Self-Healing Fallback Chain
-When `click_resilient` fails: (1) retry with Escape key to clear overlays → (2) multi-element heuristic (avoid `href="#"` anchors) → (3) `self_healing_click` via LLM vision → (4) recorded coordinate fallback. For `fill_resilient`: (1) direct fill → (2) multi-element first match → (3) Escape clear + retry → (4) LLM visual location + keyboard type.
+When `click_resilient` fails: (1) retry with Escape key to clear overlays → (2) multi-element heuristic (avoid `href="#"` anchors) → (2.9) `fallback_selectors` recorded at capture time (deterministic alternate selectors validated unique in the DOM when recorded — runs even under `strict=True` since it's not a guess) → (3) `self_healing_click` via LLM vision (blocked under `strict=True`) → (4) recorded coordinate fallback. `fill_resilient` follows the same shape: direct fill → multi-element first match → Escape clear + retry → `fallback_selectors` → LLM visual location + keyboard type.
+
+Every tier that resolves a step via healing (LLM vision, coordinate, or `fallback_selectors`) auto-registers a `needs_review` entry in `correcoes_acumuladas.json` (Sensor F1, `_register_healing_for_review` in `runner.py`) — dedup by `(action, failed_selector)` only suppresses while the pair is `needs_review`/`pending`; a pair already `resolved`/`applied` that regresses again always creates a fresh entry (regressions after a fix are never silently swallowed).
+
+### Passo Fantasma Detection (`CLICK_NO_EFFECT`)
+`click_resilient` uses `force=True`, which skips Playwright's actionability check — a click on an element covered by an overlay can report `SUCCESS` with no real effect. The runner snapshots page state (URL, DOM node count ±2, overlay count, and className fingerprint of the clicked element + its direct siblings) before/after every click and logs `[AEGIS RUNNER] ⚠️ CLICK_NO_EFFECT` when nothing changed — detection-only, never blocks or retries. Controlled by `AEGIS_CLICK_EFFECT_SENSOR` (default `true`) and `AEGIS_CLICK_EFFECT_REGISTER` (default `false` — log-only until a project has been piloted).
 
 ## Testing
 
-Tests live in `aegis_runner/test_*.py`:
-- `test_runner_integration.py` — integration tests for the TransactionRunner
-- `test_cognitive_fallback.py` — tests for the CognitiveGateway
+Tests live in `aegis_runner/test_*.py` and `aegis_sanitizer/test_*.py`:
+- `aegis_runner/test_runner_integration.py` — integration tests for the TransactionRunner (mocked Playwright `page`/`locator`)
+- `aegis_runner/test_cognitive_fallback.py` — tests for the CognitiveGateway
+- `aegis_sanitizer/test_sanitizer_execution_plan.py` — plan generation, `weak_selector`, `fallback_selectors` propagation
+- `aegis_sanitizer/test_error_selector_config.py` — `error_message_selector` boilerplate parametrization
+- `aegis_sanitizer/test_weak_selector_enforcement.py` — `WEAK_SELECTOR_WITHOUT_ANCHOR` structural check
+- `aegis_sanitizer/test_dryrun_multirow.py` — multi-row dry-run harness
 
 Run with plain `python <test_file>.py`. The project Python version requirement is `>=3.8`.
+
+**Known gap:** `aegis_cockpit/cockpit.py` has no test suite in the repo. It's a large HTTP handler (correction lifecycle, step marking, project CRUD) that has caused real regressions when edited without a live re-check — see "Working Agreements" below.
+
+## Working Agreements (lessons from the M1-M5 precision cycle, 2026-07)
+
+Full writeup: `.specs/licoes-aprendidas-melhorias-precisao.md`. The short version, as rules:
+
+1. **A change to selector/DOM/timing logic is not done until it's run against a real (even headless) browser.** Twice in this cycle, a fix passed the mocked unit suite and an inspection of the diff, and was still functionally broken — `document.querySelector()` choking on Playwright-only selector syntax (`:has-text()`), and a "found bug" that was actually a misread of which selector a `console.warn` referred to. Mocked tests prove the code path executes; they don't prove the selector/DOM assumption holds.
+2. **If a symptom reappears after you already "fixed" it, suspect your own subsequent action first.** The `dataset_inicial.json`/`dicionario.json` key-mismatch bug looked like a sanitizer persistence bug on first read (trusted the success log without re-checking the file after a *later* action — a second recording — silently reverted it). Reproducing the pipeline from scratch in a clean folder settled it in minutes; trusting the log almost shipped a fix for the wrong module.
+3. **A regressing unit test isn't automatically a bug to revert.** When `_capture_click_effect_snapshot` started calling `page.locator()` more than once (new 4th signal), an `assert_called_once_with` test broke — correctly, because the assertion encoded an implementation detail, not the actual contract. Fix the assertion (`assert_any_call`), don't roll back the feature to satisfy an overspecified test.
+4. **Recorder overwrites `dicionario.json`/`dataset_inicial.json` unconditionally on every recording finish.** If a project has already been through Sanitizer's semantic-key translation (`usuario_login` instead of `username`), re-recording silently reverts to raw keys unless the field's selector still matches — the recorder now auto-preserves the semantic key by selector match and warns only for fields it couldn't match. Always re-run Sanitizer + Code Generator after any re-recording of an already-sanitized project, even when no warning fires.
