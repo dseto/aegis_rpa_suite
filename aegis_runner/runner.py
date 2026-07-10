@@ -4,6 +4,7 @@ import time
 import csv
 import re
 import json
+import collections
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
@@ -27,6 +28,21 @@ class FlakyStepFailure(Exception):
         super().__init__(
             f"Passo flaky '{step_id}' ({selector}) falhou: {original_exception}"
         )
+
+
+class _ClickTerminalFailure(Exception):
+    """Marcador interno (não faz parte do contrato público de click_resilient):
+    envolve uma exceção que _handle_unrecoverable_click já tratou como decisão
+    FINAL (strict/flaky, self-healing cognitivo e fallback de coordenadas já
+    esgotados, ou FlakyStepFailure já levantada) para o sensor ENABLE_TIMEOUT.
+    click_resilient captura esse marcador especificamente no loop de attempts
+    e relança `original` imediatamente, em vez de deixar o `except Exception`
+    genérico do loop tratá-la como uma falha comum de clique físico e
+    retentar o passo inteiro do zero (o que duplicaria self-healing/coordenada
+    já executados dentro de _handle_unrecoverable_click)."""
+
+    def __init__(self, original):
+        self.original = original
 
 
 class TransactionRunner:
@@ -95,6 +111,7 @@ class TransactionRunner:
         self.step_counter = 0
         self.current_row_id = "1"
         self.steps_history = []
+        self._recent_fills = collections.deque(maxlen=30)
 
     def register_scenario(self, scenario_name, callback):
         """Registra a rotina de preenchimento de formulário para um cenário lógico."""
@@ -328,18 +345,12 @@ class TransactionRunner:
         except Exception as sensor_err:
             print(f"[AEGIS RUNNER] [WARNING] Sensor de healing falhou ao registrar correcoes_acumuladas.json: {sensor_err}")
 
-    _CLICK_EFFECT_EXCLUDED_SELECTORS = {"#btn-confirm-payment-progress", "#btn-next-step"}
+    _CLICK_EFFECT_EXCLUDED_SELECTORS = {"#btn-confirm-payment-progress"}
 
     def _click_effect_sensor_enabled(self) -> bool:
         """Flag mestre M2: AEGIS_CLICK_EFFECT_SENSOR (default true). false desativa
         completamente o sensor CLICK_NO_EFFECT, sem nenhum page.evaluate() extra."""
         return os.environ.get("AEGIS_CLICK_EFFECT_SENSOR", "true").lower() in ("true", "1", "yes")
-
-    def _click_effect_register_enabled(self) -> bool:
-        """Fase piloto log-only do plano M2: AEGIS_CLICK_EFFECT_REGISTER (default
-        false). Só quando true a detecção grava needs_review em
-        correcoes_acumuladas.json; caso contrário apenas loga CLICK_NO_EFFECT."""
-        return os.environ.get("AEGIS_CLICK_EFFECT_REGISTER", "false").lower() in ("true", "1", "yes")
 
     def _capture_click_effect_snapshot(self, page, selector=None):
         """Snapshot barato do estado da página em uma única chamada page.evaluate(),
@@ -397,7 +408,8 @@ class TransactionRunner:
                     "  const parent = el.parentElement;"
                     "  const scope = parent ? Array.from(parent.children) : [el];"
                     "  return scope.map(c => (c.className || '') + '|' + (c.getAttribute('aria-selected')||'') + (c.getAttribute('aria-current')||'') + (c.getAttribute('aria-pressed')||'')).join(';;');"
-                    "}"
+                    "}",
+                    timeout=1000
                 )
             except Exception:
                 fingerprint = ""
@@ -423,27 +435,29 @@ class TransactionRunner:
         except Exception:
             return True
 
-    def _detect_click_no_effect(self, page, before_snapshot, selector, step_id):
+    def _detect_click_no_effect(self, page, before_snapshot, selector, step_id) -> bool:
         """Polling early-exit pós-clique (M2): recaptura o snapshot em ~100/300/800ms
         (o tempo entre checagens, não o total acumulado - sai assim que algum sinal
-        mudar). Se ao final nenhum sinal mudou, loga CLICK_NO_EFFECT e, apenas com
-        AEGIS_CLICK_EFFECT_REGISTER=true (fase log-only por default), registra
-        needs_review via _register_healing_for_review. Nunca muda o resultado do
-        passo - é chamado só depois do log SUCCESS ser decidido pelo chamador."""
+        mudar). Retorna True se o clique teve efeito real confirmado (inclusive
+        quando o próprio sensor falha internamente - nunca bloqueia o passo por
+        erro do próprio sensor) ou False se, ao final do polling, nenhum sinal
+        mudou (CLICK_NO_EFFECT). Chamado ANTES do log definitivo do passo, de
+        dentro de _finalize_click_success - quem decide o que fazer com um
+        resultado False (acionar a cadeia de recuperação determinística antes de
+        fechar o passo) é o chamador, não este método."""
         if before_snapshot is None:
-            return
+            return True
         try:
             for wait_ms in (100, 300, 800):
                 page.wait_for_timeout(wait_ms)
                 after_snapshot = self._capture_click_effect_snapshot(page, selector)
                 if self._click_effect_signals_changed(before_snapshot, after_snapshot):
-                    return
+                    return True
             print(f"[AEGIS RUNNER] ⚠️ CLICK_NO_EFFECT | {step_id} | {selector}")
-            if self._click_effect_register_enabled():
-                self._register_healing_for_review(step_id, selector, "click", healing_method="click_no_effect")
+            return False
         except Exception:
             # Falha no próprio sensor nunca deve impactar a execução do passo.
-            pass
+            return True
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
@@ -480,21 +494,27 @@ class TransactionRunner:
             except Exception:
                 pass
 
-        # Botões conhecidos que começam disabled e só habilitam depois de um
-        # timer/fetch assíncrono real do app (ex.: '#btn-confirm-payment-progress'
-        # fica "Aguardando Pagamento..." por ~6s) — o clique físico mais abaixo
-        # usa force=True (necessário para outros seletores instáveis), que
-        # ignora a checagem de enabled do Playwright. Sem esperar aqui, o robô
-        # clica cedo demais e a ação não tem efeito. Ver
+        # Espera genérica pré-clique para qualquer alvo que comece disabled e
+        # só habilite depois de um timer/fetch assíncrono real do app (caso
+        # motivador: '#btn-confirm-payment-progress' fica "Aguardando
+        # Pagamento..." por ~6s) — o clique físico mais abaixo usa force=True
+        # (necessário para outros seletores instáveis), que ignora a checagem
+        # de enabled do Playwright. Sem esperar aqui, o robô clica cedo demais
+        # e a ação não tem efeito. Ver
         # .specs/handoff-autocomplete-select-nao-verificavel.md ("st_054 em
-        # diante"). Escopo restrito a selectors literais conhecidos.
+        # diante"). Generalizada para qualquer selector desde o sensor
+        # ENABLE_TIMEOUT (ver _wait_for_known_disabled_button).
         self._wait_for_known_disabled_button(page, selector)
 
         # Sensor M2 (CLICK_NO_EFFECT): snapshot pré-clique, só quando aplicável.
         # Exclusões: validate_navigation=True (já tem verificação própria de
-        # navegação) e seletores das famílias conhecidas de
-        # wizard/disabled-button (_wait_for_known_disabled_button /
-        # _wait_if_wizard_transition_button), que já têm tratamento dedicado.
+        # navegação) e '#btn-confirm-payment-progress', que já tem tratamento
+        # dedicado via _wait_for_known_disabled_button (espera PRÉ-clique).
+        # '#btn-next-step' deixou de ser excluído: agora tem cobertura própria
+        # via sensor ENABLE_TIMEOUT (_wait_if_wizard_transition_button +
+        # _recover_via_recent_fills), que trata o caso de falso-sucesso
+        # específico de botão que nunca habilita — não faz sentido também
+        # ficar de fora do sensor geral.
         click_effect_before_snapshot = None
         if (
             self._click_effect_sensor_enabled()
@@ -522,12 +542,47 @@ class TransactionRunner:
                 locators = page.locator(selector).all()
                 if not locators:
                     print(f"[AEGIS RUNNER] Tentando clique físico em '{selector}'...")
-                    page.locator(selector).click(timeout=timeout)
-                    self._wait_if_wizard_transition_button(page, selector)
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                    if click_effect_before_snapshot is not None:
-                        self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
-                    return True
+                    # force=True alinhado ao restante do método (loop de candidatos,
+                    # linha ~557): sem isso, este ramo fica vulnerável ao mesmo
+                    # "intercepts pointer events" que o resto do clique resiliente
+                    # já contorna (ver .specs/plans/correcao-causa-raiz-overlay-click-e-timeout-recorder.design.md).
+                    # Item B: tenta o clique nativo (sem force) primeiro, com
+                    # timeout curto — só cai pro force=True (necessário para o
+                    # "intercepts pointer events" que o resto do clique
+                    # resiliente já contorna) se o nativo falhar.
+                    try:
+                        page.locator(selector).click(timeout=500, force=False)
+                    except Exception:
+                        page.locator(selector).click(timeout=timeout, force=True)
+                    target_enabled = self._wait_if_wizard_transition_button(page, selector, before_snapshot=click_effect_before_snapshot)
+                    enable_timeout_recovered = False
+                    if not target_enabled:
+                        target_enabled = self._recover_via_recent_fills(page, selector, step_id)
+                        enable_timeout_recovered = target_enabled
+                    if target_enabled:
+                        finalize_result = self._finalize_click_success(
+                            page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot
+                        )
+                        if enable_timeout_recovered:
+                            self._register_healing_for_review(step_id, selector, "click", "enable_timeout_recovered")
+                        return finalize_result
+                    enable_timeout_exc = RuntimeError(
+                        f"ENABLE_TIMEOUT: elemento-alvo do clique em '{selector}' permaneceu desabilitado "
+                        f"mesmo após recuperação via re-preenchimento dos campos recentes."
+                    )
+                    # _handle_unrecoverable_click já é a decisão FINAL (strict/
+                    # flaky/cognitivo/coordenadas esgotados) — qualquer exceção
+                    # que ela levante precisa propagar direto pra fora de
+                    # click_resilient, não ser recapturada pelo except genérico
+                    # do loop de attempts logo abaixo (que trataria como uma
+                    # falha comum de clique físico e retentaria o passo do
+                    # zero, duplicando self-healing/coordenada já executados).
+                    try:
+                        return self._handle_unrecoverable_click(
+                            page, selector, target_description, enable_timeout_exc, original_coords, step_id, strict
+                        )
+                    except Exception as terminal_exc:
+                        raise _ClickTerminalFailure(terminal_exc) from terminal_exc
 
                 # Heurística Estática (Separar âncoras locais de links externos reais)
                 prioritized_locators = []
@@ -554,7 +609,12 @@ class TransactionRunner:
                         print(f"[AEGIS RUNNER] Tentando clique físico no elemento {idx+1}/{len(candidate_locators)} de '{selector}'...")
                         loc.scroll_into_view_if_needed(timeout=1000)
                         time.sleep(0.2)
-                        loc.click(timeout=3000, force=True)
+                        # Item B: mesma ideia do branch acima — tenta sem
+                        # force primeiro (timeout curto), só força se falhar.
+                        try:
+                            loc.click(timeout=500, force=False)
+                        except Exception:
+                            loc.click(timeout=3000, force=True)
                         clicked = True
                         
                         if validate_navigation:
@@ -593,68 +653,423 @@ class TransactionRunner:
                         continue
 
                 if clicked:
-                    self._wait_if_wizard_transition_button(page, selector)
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                    if click_effect_before_snapshot is not None:
-                        self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
-                    return True
+                    target_enabled = self._wait_if_wizard_transition_button(page, selector, before_snapshot=click_effect_before_snapshot)
+                    enable_timeout_recovered = False
+                    if not target_enabled:
+                        target_enabled = self._recover_via_recent_fills(page, selector, step_id)
+                        enable_timeout_recovered = target_enabled
+                    if target_enabled:
+                        finalize_result = self._finalize_click_success(
+                            page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot
+                        )
+                        if enable_timeout_recovered:
+                            self._register_healing_for_review(step_id, selector, "click", "enable_timeout_recovered")
+                        return finalize_result
+                    enable_timeout_exc = RuntimeError(
+                        f"ENABLE_TIMEOUT: elemento-alvo do clique em '{selector}' permaneceu desabilitado "
+                        f"mesmo após recuperação via re-preenchimento dos campos recentes."
+                    )
+                    # _handle_unrecoverable_click já é a decisão FINAL (strict/
+                    # flaky/cognitivo/coordenadas esgotados) — qualquer exceção
+                    # que ela levante precisa propagar direto pra fora de
+                    # click_resilient, não ser recapturada pelo except genérico
+                    # do loop de attempts logo abaixo (que trataria como uma
+                    # falha comum de clique físico e retentaria o passo do
+                    # zero, duplicando self-healing/coordenada já executados).
+                    try:
+                        return self._handle_unrecoverable_click(
+                            page, selector, target_description, enable_timeout_exc, original_coords, step_id, strict
+                        )
+                    except Exception as terminal_exc:
+                        raise _ClickTerminalFailure(terminal_exc) from terminal_exc
                 else:
                     raise RuntimeError("Nenhum candidato correspondente ao seletor estava visível ou clicável no DOM.")
 
+            except _ClickTerminalFailure as terminal:
+                # Decisão já finalizada (ver comentário no ponto de disparo) -
+                # propaga a exceção original sem retentar o passo.
+                raise terminal.original
             except Exception as e:
                 last_exception = e
                 print(f"[AEGIS RUNNER] Tentativa {attempt} de clique falhou para '{selector}': {e}")
                 if attempt == 2:
                     return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id, strict=strict)
 
-    def _wait_for_known_disabled_button(self, page, selector, timeout_ms=15000):
+    def _finalize_click_success(self, page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot) -> bool:
         """
-        Espera PRÉ-clique para botões conhecidos que iniciam 'disabled' e só
-        habilitam depois de um timer/fetch assíncrono real do app (ex.:
-        '#btn-confirm-payment-progress'). Simétrico a
-        _wait_if_wizard_transition_button (que espera DEPOIS do clique, para
-        botões que se desabilitam ao serem clicados) — aqui a espera é
-        ANTES, porque o botão já nasce desabilitado. Escopo restrito a
-        selectors literais conhecidos, não afeta outros cliques.
+        Fecha um clique físico que executou sem lançar exceção. Quando o sensor
+        CLICK_NO_EFFECT não está aplicável a este passo (click_effect_before_snapshot
+        é None - sensor desativado, validate_navigation=True, ou seletor
+        excluído), fecha direto como SUCCESS, igual ao comportamento anterior a
+        esta mudança.
+
+        Quando o sensor está aplicável, só fecha como SUCCESS se
+        _detect_click_no_effect confirmar efeito real na página. Se o sensor
+        detectar CLICK_NO_EFFECT (falso-sucesso silencioso), aciona a mesma
+        cadeia de recuperação determinística que _handle_click_failure já usa
+        para falhas por exceção (Escape+retry, reposicionar `.cdk-overlay-pane`
+        + clique via JS, fallback_selectors gravados) ANTES de considerar o
+        passo fechado. Se alguma camada produzir efeito real confirmado, fecha
+        como HEALED (healing_method="click_no_effect_recovered"). Se nenhuma
+        camada produzir efeito real, trata como falha genuína e delega a
+        _handle_unrecoverable_click (mesma decisão de strict/cognitivo/
+        coordenadas que _handle_click_failure já usa hoje para falhas por
+        exceção).
         """
-        known_disabled_at_start = {"#btn-confirm-payment-progress"}
-        if selector not in known_disabled_at_start:
-            return
-        waited_ms = 0
-        while waited_ms < timeout_ms:
+        if click_effect_before_snapshot is None:
+            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+            return True
+
+        effect_confirmed = self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
+        if effect_confirmed:
+            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+            return True
+
+        recovered, _method, resolved_selector = self._attempt_deterministic_click_recovery(
+            page, selector, step_id, identity_scoped=False, before_snapshot=click_effect_before_snapshot
+        )
+        if recovered:
+            print(f"[AEGIS RUNNER] Clique sem efeito real recuperado via camada determinística ({_method}) em '{resolved_selector}'.")
+            self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method="click_no_effect_recovered")
+            return True
+
+        synthetic_exc = RuntimeError(
+            f"CLICK_NO_EFFECT: clique em '{selector}' não produziu nenhum efeito detectável na página, "
+            f"mesmo após as camadas de recuperação determinística (Escape+retry, reposição de overlay CDK, fallback_selectors)."
+        )
+        return self._handle_unrecoverable_click(page, selector, target_description, synthetic_exc, original_coords, step_id, strict)
+
+    def _attempt_deterministic_click_recovery(self, page, selector, step_id, identity_scoped=False, before_snapshot=None):
+        """
+        Tenta, em sequência, as camadas determinísticas de recuperação de
+        clique: Nível 2.5 (Escape + retry no próprio seletor), Nível 2.75
+        (reposicionar `.cdk-overlay-pane` no viewport + clique sintético via
+        JS) e Nível 2.9 (`fallback_selectors` gravados na captura, um a um).
+
+        Compartilhado entre _handle_click_failure (recuperação de falha por
+        EXCEÇÃO do Playwright) e _finalize_click_success (recuperação de
+        CLICK_NO_EFFECT - falso-sucesso SEM exceção, mas sem efeito real
+        confirmado na página) para não duplicar a lógica JS/Python destas
+        camadas nos dois pontos de chamada.
+
+        - before_snapshot=None (uso de _handle_click_failure): a primeira
+          camada que conseguir clicar sem lançar exceção já é considerada
+          resolução - mesmo contrato de antes desta extração.
+        - before_snapshot=<snapshot> (uso de _finalize_click_success): depois
+          de CADA clique bem-sucedido (sem exceção), recaptura o snapshot e só
+          aceita a camada como resolução se o efeito real for confirmado
+          (_click_effect_signals_changed); caso contrário, segue tentando a
+          próxima camada (inclusive o próximo fallback_selector da lista) em
+          vez de parar no primeiro clique mecânico "sem erro".
+
+        Retorna (True, method_label, resolved_selector) na primeira camada que
+        resolver segundo o critério acima, ou (False, None, None) se todas
+        esgotarem sem resolver.
+
+        Níveis 2.5/2.75 são pulados quando identity_scoped=True (mesma regra
+        já existente em _handle_click_failure: um seletor plano reconsultado
+        via page.locator()/document.querySelector() pode casar a linha errada
+        quando o pai tinha filtro de identidade has_text). Nível 2.9 sempre
+        roda, mesma decisão de design M5 já existente.
+        """
+        def _effect_confirmed(used_selector):
+            if before_snapshot is None:
+                return True
+            after_snapshot = self._capture_click_effect_snapshot(page, used_selector)
+            return self._click_effect_signals_changed(before_snapshot, after_snapshot)
+
+        if not identity_scoped:
+            # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
+            print(f"[AEGIS RUNNER] Falha de clique físico em '{selector}'. Tentando limpar overlays via Escape...")
             try:
-                if page.locator(selector).first.is_enabled():
-                    break
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.locator(selector).first.click(timeout=3000)
+                if _effect_confirmed(selector):
+                    print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
+                    return True, "escape_retry", selector
             except Exception:
                 pass
+
+            # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
+            try:
+                print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
+                clicked = page.evaluate(r"""(sel) => {
+                    const pane = document.querySelector('.cdk-overlay-pane');
+                    if (pane) {
+                        pane.style.position = 'fixed';
+                        pane.style.top = '80px';
+                        pane.style.left = '50px';
+                        pane.style.maxHeight = '80vh';
+                        pane.style.overflow = 'auto';
+                    }
+                    let el = null;
+                    try { el = document.querySelector(sel); } catch(e) {}
+                    if (!el) {
+                        let searchText = null;
+                        const re = /:has-text\(['"]([^'"]*)['"]\)/g;
+                        let m, last;
+                        while ((m = re.exec(sel)) !== null) { last = m; }
+                        if (last) { searchText = last[1]; }
+                        if (searchText) {
+                            const opts = document.querySelectorAll('.mat-option, [role="option"]');
+                            for (const opt of opts) {
+                                if (opt.textContent.trim().includes(searchText)) {
+                                    el = opt; break;
+                                }
+                            }
+                        }
+                    }
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        el.dispatchEvent(new MouseEvent('click', {
+                            clientX: rect.left + rect.width / 2,
+                            clientY: rect.top + rect.height / 2,
+                            bubbles: true, cancelable: true, button: 0, view: window
+                        }));
+                        return true;
+                    }
+                    el.click(); return true;
+                }""", selector)
+                if clicked:
+                    time.sleep(0.3)
+                    if _effect_confirmed(selector):
+                        print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
+                        return True, "cdk_reposition", selector
+            except Exception:
+                pass
+
+        # Nível 2.9 (M5): Fallback de seletores determinísticos gravados na captura.
+        fallback_selectors = self.fallback_selectors_by_step.get(step_id, []) if hasattr(self, "fallback_selectors_by_step") else []
+        for fb_selector in fallback_selectors:
+            try:
+                print(f"[AEGIS RUNNER] [FALLBACK SELECTOR] Tentando seletor alternativo gravado: '{fb_selector}'...")
+                page.locator(fb_selector).first.click(timeout=2000)
+                if _effect_confirmed(fb_selector):
+                    return True, "fallback_selector", fb_selector
+            except Exception:
+                continue
+
+        return False, None, None
+
+    def _handle_unrecoverable_click(self, page, selector, target_description, e, original_coords=None, step_id=None, strict=False) -> bool:
+        """
+        Decide o desfecho final de um clique que NENHUMA camada determinística
+        conseguiu resolver: aplica a mesma regra de strict/flaky, tenta o
+        Self-Healing Cognitivo por IA (Nível 3) e o Fallback Físico de
+        Coordenadas de Gravação (Nível 4) quando permitido, e por fim loga
+        FAILED e relança a exceção `e`.
+
+        Compartilhado entre _handle_click_failure (falha por exceção do
+        Playwright, depois de _attempt_deterministic_click_recovery esgotar)
+        e _finalize_click_success (CLICK_NO_EFFECT confirmado mesmo após a
+        recuperação determinística) para não duplicar a decisão de
+        strict/cognitivo/coordenadas nos dois pontos de chamada.
+        """
+        is_flaky_step = self.flaky_step_ids.get(step_id, False)
+        flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
+        if (strict or is_flaky_step) and not flaky_healing_unlocked:
+            if is_flaky_step and self.current_row_flaky_attempt <= 3:
+                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+                raise FlakyStepFailure(step_id, selector, e)
+            print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao clicar em '{selector}' (self-healing e fallback por coordenadas desativados para este passo).")
+            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+            raise e
+
+        # Nível 3: Self-Healing Cognitivo por IA
+        healed_by_ia = False
+        cognitive_attempt_failed = False
+        if self.cognitive.is_active():
+            print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
+            try:
+                healed_by_ia = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
+                if healed_by_ia:
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                    return True
+            except Exception as ia_err:
+                print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
+                cognitive_attempt_failed = True
+        else:
+            cognitive_attempt_failed = True
+
+        # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
+        if not healed_by_ia and cognitive_attempt_failed and original_coords and len(original_coords) == 2:
+            try:
+                viewport = page.viewport_size or {"width": 1280, "height": 720}
+                x = int(viewport["width"] * original_coords[0])
+                y = int(viewport["height"] * original_coords[1])
+                print(f"[AEGIS RUNNER] [FALLBACK ÚLTIMO RECURSO] Clicando em coordenadas históricas da gravação: ({x}, {y})")
+                page.mouse.click(x, y)
+                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
+                return True
+            except Exception as coords_err:
+                print(f"[AEGIS RUNNER] Falha crítica no clique por coordenadas de fallback: {coords_err}")
+
+        print(f"[AEGIS RUNNER] Falha definitiva ao clicar em '{selector}'.")
+        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
+        raise e
+
+    def _wait_for_known_disabled_button(self, page, selector, timeout_ms=15000) -> bool:
+        """
+        Espera PRÉ-clique para qualquer botão que comece 'disabled' e só
+        habilite depois de um timer/fetch assíncrono real do app (caso
+        motivador original: '#btn-confirm-payment-progress'). Simétrico a
+        _wait_if_wizard_transition_button (que espera DEPOIS do clique, para
+        botões que se desabilitam ao serem clicados) — aqui a espera é
+        ANTES, porque o botão já nasce desabilitado. Generalizado para
+        QUALQUER selector (não mais restrito a uma lista literal conhecida) —
+        mesmo padrão de polling de 300ms e teto de 15s.
+
+        Retorna True se o elemento ficou habilitado dentro do prazo, False se
+        o prazo esgotou com o elemento ainda desabilitado/inacessível.
+        """
+        waited_ms = 0
+        while True:
+            try:
+                if page.locator(selector).first.is_enabled(timeout=300):
+                    return True
+            except Exception:
+                pass
+            if waited_ms >= timeout_ms:
+                return False
             page.wait_for_timeout(300)
             waited_ms += 300
 
-    def _wait_if_wizard_transition_button(self, page, selector, timeout_ms=15000):
+    def _wait_if_wizard_transition_button(self, page, selector, timeout_ms=15000, before_snapshot=None) -> bool:
         """
-        '#btn-next-step' neste tipo de wizard pode disparar uma transição
-        assíncrona (fetch simulando cálculo/submissão) que desabilita o
-        próprio botão de forma síncrona no clique e só o libera (ou troca de
-        tela) quando a resposta chega — bug real confirmado (ver
+        Espera PÓS-clique genérica para qualquer botão que dispare uma
+        transição assíncrona (fetch simulando cálculo/submissão) e se
+        desabilite de forma síncrona no clique, só se liberando (ou trocando
+        de tela) quando a resposta chega — caso motivador original:
+        '#btn-next-step' num wizard (ver
         .specs/handoff-autocomplete-select-nao-verificavel.md, seção 'st_054
-        em diante'): sem esperar isso, o passo seguinte do bot tenta
-        interagir com uma tela que ainda não foi renderizada. Escopo
-        restrito a este selector literal — não afeta outros cliques.
+        em diante'). Sem esperar isso, o passo seguinte do bot tenta
+        interagir com uma tela que ainda não foi renderizada. Generalizado
+        para QUALQUER selector (não mais restrito a um literal único) —
+        mesmo padrão de polling de 300ms e teto de 15s.
+
+        `before_snapshot` (opcional, mesmo snapshot pré-clique do sensor
+        CLICK_NO_EFFECT): a cada iteração do polling, além de checar se o
+        MESMO seletor reabilitou, checa se a página já mudou de verdade
+        (url, tamanho do DOM, overlays, fingerprint de classe dos irmãos) —
+        se mudou, sai IMEDIATAMENTE, mesmo que o seletor continue
+        desabilitado. Achado real, reproduzido ao vivo: '#btn-next-step' é o
+        MESMO id em toda tela de um wizard multi-etapa (Cliente, Veículo,
+        Condutor...) — depois de uma navegação bem-sucedida, reconsultar
+        '#btn-next-step' resolve pro botão da TELA NOVA, que nasce
+        desabilitado até os campos DAQUELA tela serem preenchidos (o que só
+        acontece vários passos depois no plano) — nada a ver com o clique que
+        acabou de rodar. Sem essa checagem, o sensor confundia "tela mudou,
+        botão novo da tela seguinte ainda não habilitou" com "clique não fez
+        efeito", disparando recuperação via re-fill + self-healing cognitivo
+        à toa (~35s de custo por transição de tela, sempre, mesmo quando o
+        clique já tinha funcionado perfeitamente). Uma checagem avulsa
+        IMEDIATAMENTE após o clique (sem esperar nada) quase nunca pega essa
+        mudança a tempo — a navegação real leva um instante pra renderizar;
+        por isso a checagem entra DENTRO do mesmo loop de polling de 300ms,
+        não como um passo isolado antes dele.
+
+        Retorna True se o elemento deixou de estar desabilitado dentro do
+        prazo (ou sumiu/mudou de identidade, sinal de que a tela já trocou,
+        ou a página mudou de verdade segundo o snapshot), False se o prazo
+        esgotou com o elemento ainda desabilitado e a página aparentemente
+        igual.
         """
-        if selector != "#btn-next-step":
-            return
         waited_ms = 0
-        while waited_ms < timeout_ms:
+        while True:
             try:
-                if not page.locator(selector).first.is_disabled():
-                    break
+                if not page.locator(selector).first.is_disabled(timeout=300):
+                    return True
             except Exception:
                 # Elemento sumiu/mudou de identidade no meio da checagem —
                 # sinal de que a tela já trocou (re-render destruiu o botão
                 # antigo). Seguro assumir que a transição terminou.
-                break
+                return True
+            if before_snapshot is not None:
+                try:
+                    after_snapshot = self._capture_click_effect_snapshot(page, selector)
+                    if self._click_effect_signals_changed(before_snapshot, after_snapshot):
+                        return True
+                except Exception:
+                    pass
+            if waited_ms >= timeout_ms:
+                return False
             page.wait_for_timeout(300)
             waited_ms += 300
+
+    def _recover_via_recent_fills(self, page, selector, step_id) -> bool:
+        """
+        Sensor ENABLE_TIMEOUT: acionado quando um clique físico teve sucesso
+        mecânico mas o alvo do qual ele depende (checado via
+        _wait_if_wizard_transition_button, agora generalizado para qualquer
+        selector) nunca habilitou dentro do prazo. Caso motivador real (piloto
+        Portal Segura): o campo Nome é preenchido antes de a busca assíncrona
+        de CPF terminar, e o botão '#btn-next-step' nunca habilita — o clique
+        seguinte reporta falso-sucesso.
+
+        Reexecuta, na ordem em que foram preenchidos, os fills mais recentes
+        registrados em self._recent_fills (buffer populado exclusivamente por
+        fill_resilient — fill_chained não é coberto aqui) usando a mesma
+        strategy gravada, aguarda um settle curto entre cada um (mesma faixa
+        de tolerância 300-800ms usada pelo sensor CLICK_NO_EFFECT) e, ao
+        final, refaz a espera de habilitação generalizada UMA única vez.
+
+        Retorna o resultado dessa espera final: True se o elemento habilitou
+        após a recuperação, False se a falha é genuína (o chamador delega
+        para _handle_unrecoverable_click, mesma decisão de
+        strict/cognitivo/coordenadas usada em qualquer outra falha de
+        clique).
+        """
+        if not self._recent_fills:
+            return self._wait_if_wizard_transition_button(page, selector)
+
+        print(
+            f"[AEGIS RUNNER] ⚠️ ENABLE_TIMEOUT | {step_id} | {selector} | "
+            f"Alvo não habilitou; reexecutando {len(self._recent_fills)} preenchimento(s) "
+            f"recente(s) antes de desistir..."
+        )
+        # Feature 2 (diagnóstico, não decide nada): a intenção original era
+        # anexar aqui as entradas mais recentes de self.captured_network para
+        # ajudar o QA a correlacionar o timeout de habilitação com uma chamada
+        # de rede pendente. captured_network é uma estrutura do RECORDER
+        # (aegis_blackbox), não existe no runner em tempo de execução — não há
+        # fonte de dados real para anexar, então este sub-item é pulado (ver
+        # nota no relatório da tarefa) em vez de inventar uma fonte que não
+        # existe.
+
+        for entry in list(self._recent_fills):
+            entry_selector = entry.get("selector")
+            # Checagem rápida de presença ANTES de chamar fill_resilient — sem
+            # isso, uma entrada stale (campo de uma tela já navegada) paga o
+            # timeout interno cheio de fill_resilient (default 5s) e pode
+            # escalar até o fallback visual/cognitivo (chamada de LLM), custo
+            # de minutos por entrada stale em vez de milissegundos. Achado ao
+            # vivo no gate de regressão (bot de referência): cascata de
+            # timeouts de 30s+ quando o buffer continha campos de uma tela
+            # anterior à transição real.
+            try:
+                if not page.locator(entry_selector).first.is_visible(timeout=500):
+                    print(f"[AEGIS RUNNER] Recuperação: '{entry_selector}' não está mais visível na tela — pulando (não é mais parte do passo atual).")
+                    continue
+            except Exception:
+                print(f"[AEGIS RUNNER] Recuperação: '{entry_selector}' não resolvido na tela atual — pulando.")
+                continue
+
+            try:
+                self.fill_resilient(
+                    page,
+                    entry_selector,
+                    entry.get("text_val"),
+                    entry.get("target_description"),
+                    strategy=entry.get("strategy", "DIRECT"),
+                    step_id=entry.get("step_id"),
+                )
+            except Exception as refill_err:
+                print(f"[AEGIS RUNNER] Falha ao reexecutar fill de recuperação em '{entry_selector}': {refill_err}")
+            page.wait_for_timeout(500)
+
+        return self._wait_if_wizard_transition_button(page, selector)
 
     def click_by_coordinates(self, page, original_coords, target_description, step_id=None) -> bool:
         """
@@ -705,88 +1120,21 @@ class TransactionRunner:
                 except Exception as inner_e:
                     e = inner_e
 
-            # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
-            print(f"[AEGIS RUNNER] Falha de clique físico em '{selector}'. Tentando limpar overlays via Escape...")
-            try:
-                page.keyboard.press("Escape")
-                time.sleep(0.3)
-                page.locator(selector).first.click(timeout=3000)
+        # Níveis 2.5/2.75/2.9: camadas determinísticas compartilhadas com
+        # _finalize_click_success (recuperação de CLICK_NO_EFFECT). Ver
+        # docstring de _attempt_deterministic_click_recovery para o
+        # detalhamento de cada nível.
+        recovered, method, resolved_selector = self._attempt_deterministic_click_recovery(
+            page, selector, step_id, identity_scoped=identity_scoped
+        )
+        if recovered:
+            if method == "fallback_selector":
+                # _log_step já registra needs_review via _register_healing_for_review
+                # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
+                self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method="fallback_selector")
+            else:
                 self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
-                return True
-            except Exception:
-                pass
-
-            # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
-            try:
-                print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
-                clicked = page.evaluate(r"""(sel) => {
-                    const pane = document.querySelector('.cdk-overlay-pane');
-                    if (pane) {
-                        pane.style.position = 'fixed';
-                        pane.style.top = '80px';
-                        pane.style.left = '50px';
-                        pane.style.maxHeight = '80vh';
-                        pane.style.overflow = 'auto';
-                    }
-                    let el = null;
-                    try { el = document.querySelector(sel); } catch(e) {}
-                    if (!el) {
-                        let searchText = null;
-                        const re = /:has-text\(['"]([^'"]*)['"]\)/g;
-                        let m, last;
-                        while ((m = re.exec(sel)) !== null) { last = m; }
-                        if (last) { searchText = last[1]; }
-                        if (searchText) {
-                            const opts = document.querySelectorAll('.mat-option, [role="option"]');
-                            for (const opt of opts) {
-                                if (opt.textContent.trim().includes(searchText)) {
-                                    el = opt; break;
-                                }
-                            }
-                        }
-                    }
-                    if (!el) return false;
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                        el.dispatchEvent(new MouseEvent('click', {
-                            clientX: rect.left + rect.width / 2,
-                            clientY: rect.top + rect.height / 2,
-                            bubbles: true, cancelable: true, button: 0, view: window
-                        }));
-                        return true;
-                    }
-                    el.click(); return true;
-                }""", selector)
-                if clicked:
-                    time.sleep(0.3)
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                    print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
-                    return True
-            except Exception:
-                pass
-
-        # Nível 2.9 (M5): Fallback de seletores determinísticos gravados na captura.
-        # Diferente do self-healing cognitivo (Nível 3) e do fallback por coordenadas
-        # (Nível 4), estes seletores são estratégias alternativas DISTINTAS para o
-        # MESMO elemento, validadas por unicidade no DOM no momento da gravação —
-        # determinístico, não "adivinhação". Por isso roda mesmo sob strict=True
-        # (decisão de design M5, ver .specs/plans/melhorias-precisao-bots-gerados.md
-        # seção M5): não interfere no Padrão R porque, se o elemento genuinamente não
-        # existe no DOM (flake de timing), os fallbacks para o mesmo elemento também
-        # falham e o restart de linha acontece normalmente.
-        fallback_selectors = self.fallback_selectors_by_step.get(step_id, []) if hasattr(self, "fallback_selectors_by_step") else []
-        if fallback_selectors:
-            for fb_selector in fallback_selectors:
-                try:
-                    print(f"[AEGIS RUNNER] [FALLBACK SELECTOR] Tentando seletor alternativo gravado: '{fb_selector}'...")
-                    page.locator(fb_selector).first.click(timeout=2000)
-                    # _log_step já registra needs_review via _register_healing_for_review
-                    # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
-                    self._log_step(step_id=step_id, action="click", selector=fb_selector, target_description=target_description, status="HEALED", healing_method="fallback_selector")
-                    return True
-                except Exception:
-                    continue
+            return True
 
         # Nível 3/4: Self-Healing Cognitivo e Fallback por Coordenadas — pulados em modo
         # strict, pois ambos "adivinham" um alvo (via visão de IA ou coordenada histórica
@@ -794,49 +1142,9 @@ class TransactionRunner:
         # Quando o elemento genuinamente não existe (ex.: fluxo quebrado por bug upstream
         # na app-alvo), essa adivinhação clica em algo errado, silenciosamente corrompendo
         # o estado da página e mascarando a causa raiz em passos subsequentes — pior do
-        # que uma falha limpa e rastreável neste passo.
-        is_flaky_step = self.flaky_step_ids.get(step_id, False)
-        flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
-        if (strict or is_flaky_step) and not flaky_healing_unlocked:
-            if is_flaky_step and self.current_row_flaky_attempt <= 3:
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
-                raise FlakyStepFailure(step_id, selector, e)
-            print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao clicar em '{selector}' (self-healing e fallback por coordenadas desativados para este passo).")
-            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
-            raise e
-
-        # Nível 3: Self-Healing Cognitivo por IA
-        healed_by_ia = False
-        cognitive_attempt_failed = False
-        if self.cognitive.is_active():
-            print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
-            try:
-                healed_by_ia = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
-                if healed_by_ia:
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
-                    return True
-            except Exception as ia_err:
-                print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
-                cognitive_attempt_failed = True
-        else:
-            cognitive_attempt_failed = True
-
-        # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
-        if not healed_by_ia and cognitive_attempt_failed and original_coords and len(original_coords) == 2:
-            try:
-                viewport = page.viewport_size or {"width": 1280, "height": 720}
-                x = int(viewport["width"] * original_coords[0])
-                y = int(viewport["height"] * original_coords[1])
-                print(f"[AEGIS RUNNER] [FALLBACK ÚLTIMO RECURSO] Clicando em coordenadas históricas da gravação: ({x}, {y})")
-                page.mouse.click(x, y)
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
-                return True
-            except Exception as coords_err:
-                print(f"[AEGIS RUNNER] Falha crítica no clique por coordenadas de fallback: {coords_err}")
-
-        print(f"[AEGIS RUNNER] Falha definitiva ao clicar em '{selector}'.")
-        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
-        raise e
+        # que uma falha limpa e rastreável neste passo. Decisão compartilhada com
+        # _finalize_click_success via _handle_unrecoverable_click.
+        return self._handle_unrecoverable_click(page, selector, target_description, e, original_coords, step_id, strict)
 
     def _slugify(self, text: str) -> str:
         import unicodedata
@@ -1513,12 +1821,14 @@ class TransactionRunner:
             res = self.fill_human_like(page, selector, text_val, target_description, delay_ms=delay_ms, timeout=timeout, step_id=step_id)
             if res:
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="SUCCESS")
+                self._recent_fills.append({'selector': selector, 'text_val': text_val, 'strategy': strategy, 'step_id': step_id, 'target_description': target_description})
             return res
 
         try:
             print(f"[AEGIS RUNNER] Tentando preenchimento físico em '{selector}'...")
             page.locator(selector).fill(text_val, timeout=timeout)
             self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="SUCCESS")
+            self._recent_fills.append({'selector': selector, 'text_val': text_val, 'strategy': strategy, 'step_id': step_id, 'target_description': target_description})
             return True
         except Exception as e:
             if "strict mode violation" in str(e) or "resolved to" in str(e):
@@ -1848,8 +2158,15 @@ class TransactionRunner:
         
         # Inicia o Playwright
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=slow_mo, channel=channel)
-            context = browser.new_context()
+            browser = p.chromium.launch(
+                headless=headless, slow_mo=slow_mo, channel=channel,
+                args=[
+                    "--disable-features=Translate,TranslateUI",
+                    "--disable-translate",
+                    "--lang=pt-BR",
+                ]
+            )
+            context = browser.new_context(locale="pt-BR")
             page = None
             
             for idx, row in enumerate(dataset):
