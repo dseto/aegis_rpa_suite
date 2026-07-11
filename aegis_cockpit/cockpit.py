@@ -23,19 +23,24 @@ from aegis_cockpit.process_manager import ProcessManager
 project_manager = ProjectManager(PROJECT_ROOT)
 process_manager = ProcessManager(get_project_dir_fn=project_manager.get_project_dir)
 
-# Cache do HTML estático para evitar leitura de disco desnecessária
+# Cache do HTML estático para evitar leitura de disco desnecessária.
+# Invalida por mtime (não apenas na primeira chamada) para que uma edição em
+# static/index.html valha sem precisar reiniciar o processo do cockpit.
 STATIC_DIR = os.path.join(MODULE_DIR, "static")
 HTML_FILE_PATH = os.path.join(STATIC_DIR, "index.html")
 _html_cache = None
+_html_cache_mtime = None
 
 def get_html_content() -> bytes:
-    global _html_cache
-    if _html_cache is None:
-        if os.path.exists(HTML_FILE_PATH):
-            with open(HTML_FILE_PATH, "r", encoding="utf-8") as f:
-                _html_cache = f.read().encode("utf-8")
-        else:
-            _html_cache = b"<h1>Erro: static/index.html nao encontrado.</h1>"
+    global _html_cache, _html_cache_mtime
+    if not os.path.exists(HTML_FILE_PATH):
+        return b"<h1>Erro: static/index.html nao encontrado.</h1>"
+
+    current_mtime = os.path.getmtime(HTML_FILE_PATH)
+    if _html_cache is None or current_mtime != _html_cache_mtime:
+        with open(HTML_FILE_PATH, "r", encoding="utf-8") as f:
+            _html_cache = f.read().encode("utf-8")
+        _html_cache_mtime = current_mtime
     return _html_cache
 
 
