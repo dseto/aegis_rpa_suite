@@ -888,6 +888,29 @@ JS_MINIMAL_LISTENERS = """
 
         const _original_addEventListenerFn = EventTarget.prototype.addEventListener;
         EventTarget.prototype.addEventListener = function(type, listener, options) {
+            // ── AEGIS_DEBUG_TIMING (instrumentação temporária, default OFF) ──
+            // Ativada via window.__aegis_debug_timing__ (injetado pelo lado
+            // Python quando AEGIS_RECORDER_DEBUG_TIMING=true). Loga TODA
+            // chamada interceptada pelo monkey-patch (não só keydown/keyup —
+            // a filtragem por tipo abaixo é análise de negócio, não captura
+            // de custo) para medir o overhead do próprio monkey-patch.
+            // Diagnóstico de timeout de fill() no campo Celular (Portal
+            // Segura). NUNCA ativa em execução normal (flag default false).
+            if (window.__aegis_debug_timing__) {
+                try {
+                    const __t0 = performance.now();
+                    let __elId = "";
+                    if (this instanceof Element) {
+                        __elId = this.id || this.getAttribute('name') ||
+                            (window.getAegisSelector ? window.getAegisSelector(this) : "") || "";
+                    }
+                    const __tag = (this && this.tagName) ? this.tagName : "";
+                    console.log("[AEGIS_TIMING] addEventListener type=" + type +
+                        " tag=" + __tag + " el=" + __elId + " t=" + __t0.toFixed(3));
+                } catch (e) {
+                    // Instrumentação de diagnóstico nunca deve quebrar o fluxo real
+                }
+            }
             try {
                 if ((type === 'keydown' || type === 'keyup') &&
                     this instanceof Element &&
@@ -1197,6 +1220,12 @@ class AegisRecorder:
         self.new_annotation_requested = None
 
         self.anti_bot_fields_cache = []
+
+        # Flag de diagnóstico temporária (default OFF): quando true, injeta
+        # window.__aegis_debug_timing__ = true na página, ligando o log
+        # [AEGIS_TIMING] no monkey-patch de addEventListener (bloco AEGIS
+        # ANTI-BOT DETECTOR). Nunca ativa em execução normal.
+        self.debug_timing_enabled = os.environ.get("AEGIS_RECORDER_DEBUG_TIMING", "false").lower() in ("true", "1", "yes")
 
         # Instâncias de infraestrutura Playwright e Servidor
         self.browser = None
@@ -1782,8 +1811,15 @@ class AegisRecorder:
             pass
 
         with sync_playwright() as p:
-            self.browser = p.chromium.launch(headless=False, channel="msedge")
-            self.context = self.browser.new_context()
+            self.browser = p.chromium.launch(
+                headless=False, channel="msedge",
+                args=[
+                    "--disable-features=Translate,TranslateUI",
+                    "--disable-translate",
+                    "--lang=pt-BR",
+                ]
+            )
+            self.context = self.browser.new_context(locale="pt-BR")
 
             # Inicia trace de auditoria
             self.context.tracing.start(screenshots=True, snapshots=True, sources=True)
@@ -1858,6 +1894,15 @@ class AegisRecorder:
 
             self.context.on("page", on_new_page)
 
+            # Injeta a flag de diagnóstico ANTES do JS_MINIMAL_LISTENERS, para que
+            # window.__aegis_debug_timing__ já exista quando o monkey-patch do
+            # bloco AEGIS ANTI-BOT DETECTOR é instalado. Default OFF (string
+            # vazia/ausente = falsy no JS) — não altera o comportamento normal.
+            if self.debug_timing_enabled:
+                self.context.add_init_script("window.__aegis_debug_timing__ = true;")
+                print("[AEGIS] Diagnóstico AEGIS_RECORDER_DEBUG_TIMING ativo — logs [AEGIS_TIMING] serão gravados em browser_console.log")
+                sys.stdout.flush()
+
             # Adiciona script de inicialização para injetar nas navegações futuras
             self.context.add_init_script(JS_MINIMAL_LISTENERS)
 
@@ -1866,9 +1911,11 @@ class AegisRecorder:
                 self.page.goto(self.url, timeout=60000, wait_until="domcontentloaded")
             except Exception as goto_err:
                 print(f"[AEGIS WARNING] Limite de tempo de carregamento da página excedido: {goto_err}. Prosseguindo com carregamento parcial...")
-            
+
             # Garante injeção na página inicial ativa
             try:
+                if self.debug_timing_enabled:
+                    self.page.evaluate("window.__aegis_debug_timing__ = true;")
                 self.page.evaluate(JS_MINIMAL_LISTENERS)
             except Exception:
                 pass

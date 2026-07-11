@@ -1,0 +1,26 @@
+{
+  "skill_name": "rpa-architecture-auditor",
+  "evals": [
+    {
+      "id": 0,
+      "name": "audit-aegis-suite",
+      "prompt": "Audit a plataforma Aegis RPA Suite. Ela funciona para gravação de sessões browser (BlackBox), sanitização de telemetria, validação de dataset, geração de código bot (via LLM), e execução determinística. Quero saber: a arquitetura consegue fazer replay confiável? Onde quebra? Riscos críticos ao design recorder/replay/seletores/IA? O código está em C:\\Projetos\\aegis_rpa_suite — analisa lá os módulos principais (aegis_blackbox, aegis_runner, aegis_sanitizer). Foca nos riscos que importam agora.",
+      "expected_output": "Relatório curto com resumo, o que funciona bem, máx 5 riscos com evidência de arquivo/classe, correções menores, e uma recomendação. Sem benchmark com concorrentes. Sem proposta de redesign.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "audit-determinism-failures",
+      "prompt": "Estou vendo que meu bot de RPA falha de forma não-determinística em certos passos. Às vezes funciona, às vezes não. Tenho um runner baseado em Playwright que iterates sobre um dataset. Cada linha é processada numa página isolada. Quero entender: onde o design pode estar causando flakiness? É timing? É ordem de execução? É o seletor que muda entre runs? Audita o design e me diz os riscos concretos, com evidência. Repositório: C:\\Projetos\\aegis_rpa_suite, foco em aegis_runner/runner.py.",
+      "expected_output": "Relatório com hipóteses para flakiness: timing issues, seletor instável, dataset order, async delays. Cada uma com evidência de código ou conceito. Máx 5 riscos. Recomendação final: a coisa mais importante a corrigir.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "audit-ai-self-healing-risk",
+      "prompt": "Meu bot tem um CognitiveGateway que usa LLM para self-healing quando click/fill falha. Quero auditar: a IA é confiável o suficiente pra usar em produção? Tem limites de retry ou pode ficar em loop? O pipeline valida código gerado por IA antes de rodar, ou confia? Analisando C:\\Projetos\\aegis_rpa_suite, especialmente aegis_runner/cognitive_fallback.py e aegis_sanitizer/code_generator.py. Me diz riscos críticos e a menor correção pra cada um.",
+      "expected_output": "Relatório focado em IA: onde IA é usada (design vs runtime), validação de código, limites de retry, trade-offs resilência vs fragilidade. Máx 5 riscos com evidência. Recomendação de próximo passo.",
+      "files": []
+    }
+  ]
+}

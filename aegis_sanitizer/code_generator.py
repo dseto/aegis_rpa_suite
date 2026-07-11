@@ -833,8 +833,9 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
    `runner.fill_resilient(page, selector="<seletor>", text_val=row.get("<chave_semantica>", ""), target_description="<descrição>", strategy="HUMAN_LIKE")`
 5. **Utilização do Dataset (`row`) - PROIBIÇÃO ABSOLUTA DE HARDCODES:**
    Todos os campos do formulário preenchidos dinamicamente devem obter seus valores do dicionário `row` usando as chaves semânticas exatas do dicionário de dados (ex: `row.get("cpf_cliente", "")` ou `row["modelo"]`).
-   Você é **TERMINANTEMENTE PROIBIDO** de usar strings literais ou valores hardcoded como entrada no código gerado, seja para preenchimento de input (`fill_resilient`, `fill_human_like`) ou seleção de dropdown (`select_option_resilient`). Mesmo que a telemetria ou o relatório de passos exiba valores observados literais nos passos (ex: "Preencheu com: 'admin@portalsegura.com'"), você é **OBRIGADO** a mapear essa ação para obter o valor dinamicamente da coluna correspondente no dataset (`row.get("email_login", "")`).
+   Você é **TERMINANTEMENTE PROIBIDO** de usar strings literais ou valores hardcoded como entrada no código gerado, seja para preenchimento de input (`fill_resilient`, `fill_human_like`) ou seleção de dropdown (`select_option_resilient`). Mesmo que a telemetria ou o relatório de passos exiba valores observados literais nos passos (ex: "Preencheu com: 'valor observado qualquer'"), você é **OBRIGADO** a mapear essa ação para obter o valor dinamicamente da coluna correspondente no dataset (ex: `row.get("<chave_semantica_do_passo>", "")`).
    Também é **ESTRITAMENTE PROIBIDO** utilizar valores de dados do negócio observados como o valor padrão/fallback em chamadas `.get()` (ex: usar `row.get("sexo_cliente", "Masculino")` ou `row.get("estado_civil_cliente", "Solteiro(a)")` é uma quebra dessa regra pois contém a string hardcoded `'Masculino'` ou `'Solteiro(a)'`). Se for utilizar `.get()`, utilize string vazia como fallback (ex: `row.get("sexo_cliente", "")`) ou use acesso direto por chave (ex: `row["sexo_cliente"]`).
+   **PROIBIÇÃO ABSOLUTA — NÃO INVENTE PASSOS PARA CAMPOS SEM STEP NO PLANO:** o `dicionario.json`/`dataset_inicial.json` pode conter chaves (ex: campos de login) para as quais NÃO existe nenhum step correspondente na seção 12 (plano de execução) abaixo — isso significa que a gravação real NÃO precisou interagir com esse campo (ex: navegador já estava autenticado no momento da gravação, então não houve preenchimento de usuário/senha para capturar). Você é **TERMINANTEMENTE PROIBIDO** de "ajudar" adicionando um passo de preenchimento para esses campos por conta própria. O robô deve reproduzir EXATAMENTE os passos que o plano de execução lista — nem mais, nem menos — mesmo que isso pareça funcionalmente incompleto. Se a automação realmente precisar desse passo, a correção certa é regravar a telemetria, não inventar o passo na geração de código.
 6. **Padrão K (Campos de Data):**
    Para preenchimento de datas, utilize seleção completa com `Control+A` e digitação, ou injeção DOM de propriedades removendo a flag `readonly` e despachando os eventos `input` e `change` se necessário.
    **PROIBIÇÃO ABSOLUTA DE CONVERSÃO DE FORMATO DE DATA INVENTADA:** você é **PROIBIDO** de usar `datetime.strptime(...)`/`datetime.strftime(...)` para reformatar valores de data de `row` a menos que exista evidência explícita e verificável de que o formato do dataset difere do formato exigido pelo campo. O campo `observed_value` de cada entrada em `dicionario.json` mostra o formato que **funcionou de verdade** durante a gravação — se o valor do dataset já está nesse mesmo padrão (ex: ambos `dd/mm/aaaa`), passe o valor de `row` **diretamente**, sem nenhuma conversão. Inventar uma conversão para um formato ISO (`%Y-%m-%d`) ou qualquer outro que não seja o `observed_value` documentado é uma alucinação e quebra o robô em runtime (`ValueError: time data ... does not match format`) — isso já causou falha real em produção.
@@ -1291,6 +1292,14 @@ Você DEVE seguir rigorosamente os princípios de simplicidade e alteração cir
    NUNCA reordene, mova ou intercale blocos de passos existentes ao corrigir um erro pontual —
    isso quebra outros passos que já estavam corretos. Se um step_id está errado em uma posição,
    corrija APENAS o valor do step_id naquele bloco específico, sem mover o bloco de lugar.
+
+   **PROIBIÇÃO ABSOLUTA — NÃO ADICIONE STEP_ID QUE NÃO ESTEJA NO PLANO ACIMA (causa raiz de EXTRA_STEPS):**
+   Se o erro reportado for `EXTRA_STEPS` ou `COUNT_MISMATCH` com mais passos no código do que no plano,
+   a correção certa é **REMOVER** o(s) bloco(s) de passo com step_id que não existe na lista do plano
+   (seção acima) — nunca adicionar um step_id novo pra tentar "completar" um campo do dataset que pareça
+   sem preenchimento. Campos do dataset sem step correspondente no plano são intencionais (a gravação
+   real não interagiu com esse campo) — não invente uma interação para eles. Delete o bloco inteiro
+   (comentário `# [PASSO X]` + chamada `runner.*`) referente a qualquer step_id ausente do plano.
 
 
 ---
