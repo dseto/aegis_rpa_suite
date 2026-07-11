@@ -4,6 +4,7 @@ import json
 import re
 import ast
 import argparse
+import difflib
 from datetime import datetime
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -18,7 +19,7 @@ from aegis_runner.cognitive_fallback import CognitiveGateway
 from aegis_sanitizer.step_validator import (
     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
     validate_dataset_field_names, validate_resilience_patterns, validate_required_wait_patterns,
-    validate_required_reopen_patterns, validate_required_method_patterns
+    validate_required_reopen_patterns, validate_required_method_patterns, RUNNER_METHODS
 )
 
 
@@ -111,6 +112,63 @@ class CodeGeneratorService:
             + "\n".join(canonical_main) + "\n"
         )
         return normalized
+
+    def _strip_stray_transaction_runner_calls(self, bot_code: str) -> str:
+        """
+        Remove statements que instanciam TransactionRunner(...) fora do bloco
+        canônico 'if __name__' já reconstruído por _normalize_boilerplate.
+        Como esse bloco canônico sempre tem project_dir= correto, qualquer
+        instanciação sobrevivente (dentro de uma FunctionDef, preservada
+        verbatim pela normalização) é necessariamente uma duplicata
+        alucinada — o robô só instancia o runner uma vez. Não é algo pra
+        "corrigir" adicionando project_dir= (a variável nem existe nesse
+        escopo); é lixo pra remover.
+        """
+        try:
+            tree = ast.parse(bot_code)
+        except SyntaxError:
+            return bot_code
+
+        def is_ctor_call(node):
+            return (
+                isinstance(node, ast.Call) and (
+                    (isinstance(node.func, ast.Name) and node.func.id == "TransactionRunner") or
+                    (isinstance(node.func, ast.Attribute) and node.func.attr == "TransactionRunner")
+                )
+            )
+
+        def is_main_block(node):
+            return (
+                isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__"
+            )
+
+        ranges_to_strip = []
+
+        def scan_body(body, inside_main):
+            for stmt in body:
+                if is_main_block(stmt):
+                    scan_body(stmt.body, True)
+                    continue
+                if (not inside_main and isinstance(stmt, (ast.Assign, ast.Expr))
+                        and is_ctor_call(stmt.value)):
+                    has_project_dir = any(kw.arg == "project_dir" for kw in stmt.value.keywords)
+                    if not has_project_dir:
+                        ranges_to_strip.append((stmt.lineno - 1, stmt.end_lineno))
+                    continue
+                for field in ("body", "orelse", "finalbody"):
+                    inner = getattr(stmt, field, None)
+                    if isinstance(inner, list):
+                        scan_body(inner, inside_main)
+
+        scan_body(tree.body, False)
+        if not ranges_to_strip:
+            return bot_code
+
+        lines = bot_code.split("\n")
+        for start, end in sorted(ranges_to_strip, reverse=True):
+            del lines[start:end]
+        return "\n".join(lines)
 
     @staticmethod
     def _strip_internal_step_fields(steps: list) -> list:
@@ -448,10 +506,76 @@ Exemplo de chamada de Skill:
                     f"Corrija o step_validator.py antes de tentar gerar código novamente."
                 ) from validator_err
 
+            # Correção determinística de método alucinado: se o nome inválido
+            # tem candidato único e próximo entre os métodos reais do SDK
+            # (RUNNER_METHODS), renomeia via texto em vez de gastar uma
+            # tentativa de LLM. Observado em produção: a IA repete a mesma
+            # alucinação (ex.: 'select_native_resilient' em vez de
+            # 'select_option_native_resilient') mesmo com o nome correto
+            # presente no JSON de reflexão — o token errado continua no
+            # bloco que ela vê e ela reancora nele. Remover o token do
+            # input é mais forte que só pedir a correção em prosa.
+            if struct_result["status"] == "FAIL":
+                hallucinated = [e for e in struct_result["errors"] if e["type"] == "HALLUCINATED_RUNNER_METHOD"]
+                if hallucinated:
+                    renamed_code = bot_code
+                    any_renamed = False
+                    for err in hallucinated:
+                        bad_method = err.get("method", "")
+                        candidates = difflib.get_close_matches(bad_method, sorted(RUNNER_METHODS), n=1, cutoff=0.75)
+                        if len(candidates) == 1:
+                            new_code = renamed_code.replace(f"runner.{bad_method}(", f"runner.{candidates[0]}(")
+                            if new_code != renamed_code:
+                                renamed_code = new_code
+                                any_renamed = True
+                    if any_renamed:
+                        try:
+                            retry_struct = validate_bot_structure(renamed_code)
+                        except Exception as validator_err:
+                            raise RuntimeError(
+                                f"Bug interno no validador (validate_bot_structure): {validator_err}. "
+                                f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                            ) from validator_err
+                        print("[AEGIS CODEGEN] 🔧 Método alucinado corrigido automaticamente por proximidade textual (sem gastar tentativa de LLM).")
+                        bot_code = renamed_code
+                        struct_result = retry_struct
+
+            # Correção determinística de instanciação espúria de TransactionRunner:
+            # _normalize_boilerplate (acima) já reconstrói o bloco 'if __name__'
+            # canônico com project_dir= correto sempre — logo, qualquer
+            # MISSING_PROJECT_DIR_ARG/RUNNER_INSTANTIATED_AT_MODULE_SCOPE que
+            # sobreviva à normalização só pode vir de uma instanciação ESPÚRIA
+            # duplicada dentro do corpo de uma função (normalize preserva
+            # FunctionDef verbatim). Não é um construtor pra "consertar" — é
+            # lixo que não deveria existir (o robô só instancia o runner uma
+            # vez, no bloco __main__). Pedir pra IA "corrigir" isso em prosa
+            # trava em loop (ela tenta adicionar project_dir=, que nem existe
+            # como variável no escopo da função) — remover a linha
+            # deterministicamente resolve na raiz.
+            if struct_result["status"] == "FAIL":
+                stray_types = {"MISSING_PROJECT_DIR_ARG", "RUNNER_INSTANTIATED_AT_MODULE_SCOPE"}
+                stray_errors = [e for e in struct_result["errors"] if e["type"] in stray_types]
+                if stray_errors:
+                    stripped_code = self._strip_stray_transaction_runner_calls(bot_code)
+                    if stripped_code != bot_code:
+                        try:
+                            retry_struct = validate_bot_structure(stripped_code)
+                        except Exception as validator_err:
+                            raise RuntimeError(
+                                f"Bug interno no validador (validate_bot_structure): {validator_err}. "
+                                f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                            ) from validator_err
+                        print("[AEGIS CODEGEN] 🔧 Instanciação espúria de TransactionRunner removida automaticamente (sem gastar tentativa de LLM).")
+                        bot_code = stripped_code
+                        struct_result = retry_struct
+
             if struct_result["status"] == "FAIL":
                 print(f"[AEGIS CODEGEN] ❌ Validação estrutural falhou: {len(struct_result['errors'])} erro(s)")
                 for err in struct_result["errors"]:
                     print(f"  • {err['detail']}")
+                if os.getenv("AEGIS_DEBUG_DUMP_BOT"):
+                    with open(os.getenv("AEGIS_DEBUG_DUMP_BOT"), "w", encoding="utf-8") as _dbgf:
+                        _dbgf.write(bot_code)
                 diff = struct_result
                 attempts_history.append({
                     "attempt": attempt,
@@ -1061,6 +1185,10 @@ Princípios obrigatórios (Karpathy style):
 2. Mantenha o comentário '# [PASSO X] Descrição' e o step_id exato de cada bloco.
 3. Proibição absoluta de hardcode: use row.get("campo", "") para dados de negócio, nunca valores literais de teste.
 4. Cada chamada ao runner mantém 'page' como primeiro argumento posicional e step_id como keyword argument.
+5. Os ÚNICOS métodos válidos do SDK TransactionRunner são: {sorted(RUNNER_METHODS)} (+ register_scenario/run,
+   que não se aplicam dentro de um bloco de passo). NUNCA invente ou aproxime um nome de método — se não está
+   nesta lista exata, não existe. Exemplo CORRETO: runner.fill_resilient(page, selector="#email",
+   text_val=row.get("email", ""), target_description="...", step_id="st_001").
 
 Fatia do plano de execução relevante a estes blocos:
 ```json
@@ -1098,6 +1226,22 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         if missing:
             print(f"[WARNING] Resposta escopada não contém bloco(s) esperado(s): {missing}")
             return None
+
+        # Guarda contra corrupção estrutural via splice: um bloco de passo é
+        # sempre código indentado dentro de execute_scenario_default — uma
+        # 'def'/'class' em nível de módulo (coluna 0) na resposta indica que
+        # a IA vazou/duplicou uma definição pro meio do bloco. Isso corrompe
+        # o arquivo de um jeito que passa despercebido pela validação AST
+        # (a def duplicada "sombra" a original só em runtime — Python usa a
+        # última) e sem nenhum step_id/lineno pro modo escopado corrigir,
+        # virando oscilação infinita entre o erro que a duplicata mascara e o
+        # erro que ela introduz. Rejeita e cai pro fluxo de arquivo inteiro,
+        # que reescreve o arquivo de forma consistente.
+        module_level_def_re = re.compile(r'^(def|class)\s+\w+', re.MULTILINE)
+        for sid, block_text in found.items():
+            if module_level_def_re.search(block_text):
+                print(f"[WARNING] Resposta escopada do bloco {sid} contém definição em nível de módulo (def/class) — rejeitada para evitar corrupção estrutural.")
+                return None
 
         new_lines = list(lines)
         for b in sorted(target_blocks, key=lambda b: b["start"], reverse=True):
@@ -1216,8 +1360,21 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         # realmente ausente/deslocado, repetindo os mesmos 47 erros em todas
         # as 15 tentativas até esgotar o loop (bug real reproduzido: st_021
         # ausente do plano nunca entrava em target_step_ids).
+        # Erros AST-level (HALLUCINATED_RUNNER_METHOD, MISSING_PAGE_ARG,
+        # FORBIDDEN_VALUE_KWARG, HARDCODED_TEXT_VAL, MISSING_PROJECT_DIR_ARG,
+        # RUNNER_INSTANTIATED_AT_MODULE_SCOPE — step_validator.py) não carregam
+        # nenhuma das chaves acima, só "lineno" do node AST que falhou. Sem
+        # resolver esse lineno pro bloco que o contém, esses erros ficam
+        # estruturalmente invisíveis pro modo escopado: ele só teria a chance
+        # de tocá-los se o step_id certo já estivesse (por coincidência) em
+        # pending_corrections — e nunca, se o erro estiver fora de qualquer
+        # bloco "# [PASSO X]" (ex.: chamada perdida dentro do próprio bloco
+        # errado, ou em código não coberto por nenhum step). Resolve via
+        # _parse_step_blocks: acha o bloco cujo range de linhas contém o
+        # lineno do erro e adiciona o step_id dele ao escopo.
         live_error_step_ids = set()
         if current_diff:
+            blocks_for_lineno = self._parse_step_blocks(existing_code)
             for e in current_diff.get("errors", []):
                 for key in ("step_id", "expected_id", "found_id"):
                     v = e.get(key)
@@ -1225,6 +1382,16 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
                         live_error_step_ids.add(v)
                 for v in e.get("step_ids") or []:
                     live_error_step_ids.add(v)
+                linenos = list(e.get("linenos") or [])
+                if e.get("lineno"):
+                    linenos.append(e["lineno"])
+                if linenos and blocks_for_lineno:
+                    for lineno in linenos:
+                        line_idx = lineno - 1
+                        for b in blocks_for_lineno:
+                            if b["start"] <= line_idx < b["end"] and b["step_id"]:
+                                live_error_step_ids.add(b["step_id"])
+                                break
         target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")} | live_error_step_ids)
         if target_step_ids:
             scoped_plan = self._build_scoped_edit_plan(existing_code, target_step_ids)

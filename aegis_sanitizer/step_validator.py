@@ -298,6 +298,7 @@ def _validate_runner_call_contract(bot_code: str) -> List[Dict[str, Any]]:
             errors.append({
                 "type": "HALLUCINATED_RUNNER_METHOD",
                 "method": node.func.attr,
+                "lineno": node.lineno,
                 "detail": f"'runner.{node.func.attr}(...)' nao existe no SDK TransactionRunner. "
                           f"Metodos validos: {sorted(RUNNER_METHODS)} + register_scenario/run. "
                           f"Este metodo foi provavelmente alucinado."
@@ -314,6 +315,7 @@ def _validate_runner_call_contract(bot_code: str) -> List[Dict[str, Any]]:
             errors.append({
                 "type": "MISSING_PAGE_ARG",
                 "method": method_name,
+                "lineno": node.lineno,
                 "detail": f"Chamada runner.{method_name}() nao passa 'page' como primeiro argumento. "
                           f"Ex: runner.{method_name}(page, selector=..., ...)."
             })
@@ -325,6 +327,7 @@ def _validate_runner_call_contract(bot_code: str) -> List[Dict[str, Any]]:
                 errors.append({
                     "type": "FORBIDDEN_VALUE_KWARG",
                     "method": method_name,
+                    "lineno": node.lineno,
                     "detail": f"Chamada runner.{method_name}() usa 'value='. Use 'text_val=' (nome correto do parametro)."
                 })
                 break
@@ -335,6 +338,7 @@ def _validate_runner_call_contract(bot_code: str) -> List[Dict[str, Any]]:
                     errors.append({
                         "type": "HARDCODED_TEXT_VAL",
                         "method": method_name,
+                        "lineno": node.lineno,
                         "detail": f"Chamada runner.{method_name}() usa text_val com string literal "
                                   f"'{kw.value.value[:50]}'. Use row.get('chave', '') para valores dinamicos."
                     })
@@ -478,6 +482,7 @@ def _validate_transaction_runner_constructor(bot_code: str) -> List[Dict[str, An
         if not has_project_dir:
             errors.append({
                 "type": "MISSING_PROJECT_DIR_ARG",
+                "lineno": node.lineno,
                 "detail": "TransactionRunner(...) instanciado sem 'project_dir='. "
                           "Ex: TransactionRunner(project_dir=project_dir, ...) dentro do bloco if __name__."
             })
@@ -493,6 +498,7 @@ def _validate_transaction_runner_constructor(bot_code: str) -> List[Dict[str, An
             if is_ctor:
                 errors.append({
                     "type": "RUNNER_INSTANTIATED_AT_MODULE_SCOPE",
+                    "lineno": node.lineno,
                     "detail": "TransactionRunner(...) instanciado no escopo global do modulo, fora do bloco "
                               "'if __name__ == \"__main__\":'. Isso executa na importacao e quebra sem project_dir resolvido."
                 })
@@ -562,6 +568,29 @@ def _validate_scenario_function_signature(bot_code: str) -> List[Dict[str, Any]]
         return []
 
     expected_order = ["page", "row", "runner"]
+
+    # CRITICO: definicao duplicada — Python usa a ULTIMA 'def' com esse nome,
+    # entao uma segunda definicao (ex.: vazada por um splice de edicao
+    # escopada que injetou uma linha 'def execute_scenario_default(...)' no
+    # meio do corpo de um passo) derruba silenciosamente a funcao real.
+    # Cada def isolada pode passar nos checks de assinatura abaixo (ex.: uma
+    # sombra com (page, row) apenas eh uma assinatura valida por si so), so
+    # a duplicidade em si e o defeito — e so essa checagem pega isso, com
+    # lineno na definicao extra para o modo escopado conseguir localizar.
+    scenario_defs = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "execute_scenario_default"
+    ]
+    if len(scenario_defs) > 1:
+        for dup in scenario_defs[1:]:
+            errors.append({
+                "type": "DUPLICATE_SCENARIO_FUNCTION",
+                "lineno": dup.lineno,
+                "detail": f"'execute_scenario_default' definida mais de uma vez (definicao duplicada na linha "
+                          f"{dup.lineno}). Python usa a ULTIMA definicao, derrubando silenciosamente a funcao "
+                          f"original. Remova esta definicao duplicada — deve haver exatamente UMA "
+                          f"'execute_scenario_default' no arquivo."
+            })
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
@@ -669,8 +698,7 @@ def validate_dataset_field_names(bot_code: str, dicionario_path: str) -> Dict[st
     except SyntaxError:
         return {"status": "PASS", "total_errors": 0, "errors": []}
 
-    errors = []
-    seen = set()
+    occurrences = {}  # field_name -> list of linenos, na ordem de aparicao
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get"):
             continue
@@ -679,15 +707,20 @@ def validate_dataset_field_names(bot_code: str, dicionario_path: str) -> Dict[st
         if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
             continue
         field_name = node.args[0].value
-        if field_name not in valid_fields and field_name not in seen:
-            seen.add(field_name)
-            errors.append({
-                "type": "HALLUCINATED_DATASET_FIELD",
-                "field": field_name,
-                "detail": f"'row.get(\"{field_name}\", ...)' usa campo inexistente no dicionario.json. "
-                          f"Campos validos: {sorted(valid_fields)}. Este nome foi provavelmente alucinado — "
-                          f"use exatamente a chave do dicionario."
-            })
+        if field_name not in valid_fields:
+            occurrences.setdefault(field_name, []).append(node.lineno)
+
+    errors = []
+    for field_name, linenos in occurrences.items():
+        errors.append({
+            "type": "HALLUCINATED_DATASET_FIELD",
+            "field": field_name,
+            "lineno": linenos[0],
+            "linenos": linenos,
+            "detail": f"'row.get(\"{field_name}\", ...)' usa campo inexistente no dicionario.json. "
+                      f"Campos validos: {sorted(valid_fields)}. Este nome foi provavelmente alucinado — "
+                      f"use exatamente a chave do dicionario."
+        })
 
     return {
         "status": "FAIL" if errors else "PASS",
@@ -1564,9 +1597,19 @@ fake_page.locator.return_value = fake_locator
 fake_rows = {real_rows!r}
 fake_runner = _FakeRunner()
 
+# Espelha a chamada adaptativa real do runner (runner.py: len(sig.parameters) >= 3
+# decide 2 ou 3 args posicionais) — sem isso, um bot legitimamente definido com
+# (page, row) apenas (suportado pelo SDK) sempre falha aqui com TypeError falso-positivo.
+import inspect as _inspect
+_scenario_sig = _inspect.signature(fn)
+_call_with_runner = len(_scenario_sig.parameters) >= 3
+
 for _idx, _row in enumerate(fake_rows):
     try:
-        fn(fake_page, _row, fake_runner)
+        if _call_with_runner:
+            fn(fake_page, _row, fake_runner)
+        else:
+            fn(fake_page, _row)
     except Exception as e:
         _row_id = _row.get("id", _idx + 1) if isinstance(_row, dict) else _idx + 1
         print("DRYRUN_RUNTIME_ERROR::" + type(e).__name__ + "::" + str(e) + f" (linha do dataset id={{_row_id}})")
