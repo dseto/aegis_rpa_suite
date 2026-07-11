@@ -2875,7 +2875,7 @@
                                     body: JSON.stringify({
                                         test_slug: activeTestSlug,
                                         execution_id: activeExecutionId,
-                                        steps: robotSteps
+                                        steps: robotSteps.map(s => ({ ...s, step_id: s.index }))
                                     })
                                 }).catch(e => console.error('Erro ao salvar historico:', e));
                             }
@@ -3945,7 +3945,7 @@
                         <input type="checkbox" ${step.flaky ? 'checked' : ''} onchange="toggleStepFlaky('${step.index}', this.checked)" title="Marcar passo ${step.index} como flaky">
                     </td>
                     <td style="text-align:center;">
-                        <button onclick="deleteStep(${step.index})" title="Excluir passo ${step.index}" style="background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;color:var(--text-muted);font-size:13px;transition:color .15s,background .15s;" onmouseover="this.style.color='#ef4444';this.style.background='rgba(239,68,68,0.1)'" onmouseout="this.style.color='var(--text-muted)';this.style.background='none'">🗑️</button>
+                        <button onclick="deleteStep('${step.index}')" title="Excluir passo ${step.index}" style="background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;color:var(--text-muted);font-size:13px;transition:color .15s,background .15s;" onmouseover="this.style.color='#ef4444';this.style.background='rgba(239,68,68,0.1)'" onmouseout="this.style.color='var(--text-muted)';this.style.background='none'">🗑️</button>
                     </td>
                 </tr>`;
             });
@@ -3982,26 +3982,34 @@
             
             // Filtra e remove o passo com index correspondente
             const beforeLen = robotSteps.length;
-            robotSteps = robotSteps.filter(s => s.index !== stepIdx);
+            robotSteps = robotSteps.filter(s => String(s.index) !== String(stepIdx));
             
             if (robotSteps.length === beforeLen) return; // nada a remover
             
-            // Re-indexa os passos restantes sequencialmente
-            robotSteps.forEach((s, i) => {
-                s.index = i + 1;
-                if (s.exec_order) {
-                    s.exec_order = i + 1;
-                }
-            });
-            
+            // Re-indexa os passos restantes sequencialmente — só quando os índices
+            // já eram números sintéticos de exibição (cenário "planned", nunca
+            // executado). Passos vindos do histórico real carregam o step_id
+            // semântico (ex.: "st_022") em .index — sobrescrever isso quebraria a
+            // correlação com plano_execucao.json/correcoes_acumuladas.json (ver
+            // cockpit.py:590-594, mesma classe de bug já documentada ali).
+            const isPlannedNumericSeries = robotSteps.every(s => typeof s.index === 'number');
+            if (isPlannedNumericSeries) {
+                robotSteps.forEach((s, i) => {
+                    s.index = i + 1;
+                    if (s.exec_order) {
+                        s.exec_order = i + 1;
+                    }
+                });
+            }
+
             // Mantém currentStepIndex dentro dos limites
             if (currentStepIndex >= robotSteps.length) {
                 currentStepIndex = Math.max(0, robotSteps.length - 1);
             }
-            
+
             // Atualiza UI localmente de imediato
             updateStepsUI();
-            
+
             // Salva no backend
             if (activeProjectSlug && activeTestSlug) {
                 fetch(`/api/projects/${encodeURIComponent(activeProjectSlug)}/steps-history`, {
@@ -4010,7 +4018,7 @@
                     body: JSON.stringify({
                         test_slug: activeTestSlug,
                         execution_id: activeExecutionId || '',
-                        steps: robotSteps
+                        steps: robotSteps.map(s => ({ ...s, step_id: s.index }))
                     })
                 })
                 .then(r => r.json())
