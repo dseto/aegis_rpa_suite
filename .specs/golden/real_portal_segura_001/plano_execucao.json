@@ -1,0 +1,782 @@
+{
+  "version": "1.0",
+  "test_dir": "golden_run_001",
+  "generated_at": "2026-07-11T21:38:55",
+  "total_steps": 63,
+  "steps": [
+    {
+      "step_id": "st_001",
+      "type": "fill",
+      "selector": "#username",
+      "description": "Preencher o campo de e-mail com 'admin@portalsegura.com'."
+    },
+    {
+      "step_id": "st_002",
+      "type": "fill",
+      "selector": "#password",
+      "description": "Preencher o campo de senha com 'Segura@2026'."
+    },
+    {
+      "step_id": "st_003",
+      "type": "click",
+      "selector": "#app div",
+      "description": "Clicar na área do aplicativo que contém 'S PortalSegura Acesse o painel do corretor para c'.",
+      "parent": {
+        "selector": "#app",
+        "has_text": null
+      },
+      "coords": [
+        0.1828125,
+        0.5547850208044383
+      ]
+    },
+    {
+      "step_id": "st_004",
+      "type": "click",
+      "selector": "#btn-login",
+      "description": "Clicar no botão 'Entrar no Portal'.",
+      "coords": [
+        0.4625,
+        0.7642163661581137
+      ]
+    },
+    {
+      "step_id": "st_005",
+      "type": "click",
+      "selector": "#btn-new-quote",
+      "description": "Clicar no botão 'Nova Cotação Auto'.",
+      "coords": [
+        0.90546875,
+        0.19694868238557559
+      ]
+    },
+    {
+      "step_id": "st_006",
+      "type": "fill",
+      "selector": "label:has-text('CPF do Cliente') ~ input",
+      "description": "Preencher o campo 'CPF do Cliente' com '22401666818'."
+    },
+    {
+      "step_id": "st_007",
+      "type": "click",
+      "selector": "#step-content-container .step-grid-2 #field-nome div",
+      "description": "Clicar no campo 'Nome Completo'.",
+      "parent": {
+        "selector": "#field-nome",
+        "has_text": null
+      },
+      "coords": [
+        0.57890625,
+        0.5450762829403606
+      ]
+    },
+    {
+      "step_id": "st_008",
+      "type": "fill",
+      "selector": "label:has-text('Nome Completo') ~ input",
+      "description": "Preencher o campo 'Nome Completo' com 'daniel setttt'."
+    },
+    {
+      "step_id": "st_009",
+      "type": "fill",
+      "selector": "label:has-text('Data de Nascimento') ~ input",
+      "description": "Preencher o campo 'Data de Nascimento' com '09/01/2001'."
+    },
+    {
+      "step_id": "st_010",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Feminino' para o campo 'Sexo'.' em 'Clicar na opção 'Selecione' para o campo 'Sexo'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Sexo Selecione"
+      },
+      "dropdown_label": "Sexo",
+      "option_text": "Feminino",
+      "trigger_selector": "label:has-text('Sexo') ~ div",
+      "option_selector": "[role='option']:has-text('Feminino')",
+      "coords_trigger": [
+        0.4890625,
+        0.6879334257975035
+      ],
+      "coords_option": [
+        0.475,
+        0.7891816920943134
+      ]
+    },
+    {
+      "step_id": "st_011",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Casado(a)' para o campo 'Estado Civil'.' em 'Clicar no campo de seleção de 'Estado Civil'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Estado Civil Selecione"
+      },
+      "dropdown_label": "Estado Civil",
+      "option_text": "Casado(a)",
+      "trigger_selector": ".step-grid-3 #field-estadoCivil .mat-form-field-wrapper #mat-select-estCivil-ng-tns-c1909216-44864-5 mat-form-field:has-text('Estado Civil') span",
+      "option_selector": "[role='option']:has-text('Casado(a)')",
+      "coords_trigger": [
+        0.71640625,
+        0.6768377253814147
+      ],
+      "coords_option": [
+        0.73515625,
+        0.79750346740638
+      ]
+    },
+    {
+      "step_id": "st_012",
+      "type": "click",
+      "selector": "#field-email div",
+      "description": "Clicar no campo 'E-mail de Contato'.",
+      "parent": {
+        "selector": "#field-email",
+        "has_text": null
+      },
+      "coords": [
+        0.184375,
+        0.8002773925104022
+      ]
+    },
+    {
+      "step_id": "st_013",
+      "type": "fill",
+      "selector": "label:has-text('E-mail de Contato') ~ input",
+      "description": "Preencher o campo 'E-mail de Contato' com 'teste@ggmail.com'."
+    },
+    {
+      "step_id": "st_014",
+      "type": "click",
+      "selector": "#field-celular div",
+      "description": "Clicar no campo 'Celular'.",
+      "parent": {
+        "selector": "#field-celular",
+        "has_text": null
+      },
+      "coords": [
+        0.56484375,
+        0.7642163661581137
+      ]
+    },
+    {
+      "step_id": "st_015",
+      "type": "fill",
+      "selector": "label:has-text('Celular') ~ input",
+      "description": "Preencher o campo 'Celular' com '119039333884'."
+    },
+    {
+      "step_id": "st_016",
+      "type": "click",
+      "selector": "label:has-text('Pessoa com Deficiência (PCD)')",
+      "description": "Clicar no input associado a 'Pessoa com Deficiência (PCD)'.",
+      "coords": [
+        0.04453125,
+        0.8945908460471568
+      ]
+    },
+    {
+      "step_id": "st_017",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Isenção de ICMS'.' em 'Clicar no campo de seleção 'Tipo de Isenção Aplicável'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Tipo de Isenção Aplicável Selecione"
+      },
+      "dropdown_label": "Tipo de Isenção Aplicável",
+      "option_text": "Isenção de ICMS",
+      "trigger_selector": "label:has-text('Tipo de Isenção Aplicável') ~ div",
+      "option_selector": "[role='option']:has-text('Isenção de ICMS')",
+      "coords_trigger": [
+        0.28515625,
+        0.7447988904299584
+      ],
+      "coords_option": [
+        0.1125,
+        0.7324074074074074
+      ]
+    },
+    {
+      "step_id": "st_018",
+      "type": "click",
+      "selector": "#btn-next-step",
+      "description": "Clicar no botão 'Avançar'.",
+      "coords": [
+        0.7822916666666667,
+        0.7546296296296297
+      ]
+    },
+    {
+      "step_id": "st_019",
+      "type": "click",
+      "selector": "#toggle-busca-fipe",
+      "description": "Clicar no botão 'Código FIPE'.",
+      "coords": [
+        0.2546875,
+        0.30185185185185187
+      ]
+    },
+    {
+      "step_id": "st_020",
+      "type": "fill",
+      "selector": "input[placeholder='Pesquisar Marca...']",
+      "description": "Preencher o campo de pesquisa de 'Marca' com 'Hyundai'."
+    },
+    {
+      "step_id": "st_021",
+      "type": "fill",
+      "selector": "input[placeholder='Pesquisar Modelo...']",
+      "description": "Preencher o campo de pesquisa de 'Modelo' com 'Creta'."
+    },
+    {
+      "step_id": "st_022",
+      "type": "fill",
+      "selector": "input[placeholder='Versões Disponíveis...']",
+      "description": "Preencher o campo de pesquisa de 'Versões Disponíveis' com 'Creta Limited 1.0 Turbo Flex'."
+    },
+    {
+      "step_id": "st_023",
+      "type": "click",
+      "selector": "#mat-autocomplete-panel-marca div:has-text('Hyundai')",
+      "description": "Selecionar 'Hyundai' na lista de autocompletar de marcas.",
+      "parent": {
+        "selector": "#mat-autocomplete-panel-marca",
+        "has_text": null
+      },
+      "coords": [
+        0.203125,
+        0.5351851851851852
+      ]
+    },
+    {
+      "step_id": "st_024",
+      "type": "click",
+      "selector": "#mat-autocomplete-panel-modelo div:has-text('Creta')",
+      "description": "Selecionar 'Creta' na lista de autocompletar de modelos.",
+      "parent": {
+        "selector": "#mat-autocomplete-panel-modelo",
+        "has_text": null
+      },
+      "coords": [
+        0.4510416666666667,
+        0.44074074074074077
+      ]
+    },
+    {
+      "step_id": "st_025",
+      "type": "click",
+      "selector": "#mat-autocomplete-panel-versao div:has-text('Creta Limited 1.0 Turbo Flex')",
+      "description": "Selecionar 'Creta Limited 1.0 Turbo Flex' na lista de autocompletar de versões.",
+      "parent": {
+        "selector": "#mat-autocomplete-panel-versao",
+        "has_text": null
+      },
+      "coords": [
+        0.6869791666666667,
+        0.4527777777777778
+      ]
+    },
+    {
+      "step_id": "st_026",
+      "type": "click",
+      "selector": "#field-anoFabricacao div",
+      "description": "Clicar no campo 'Ano Fabricação'.",
+      "parent": {
+        "selector": "#field-anoFabricacao",
+        "has_text": null
+      },
+      "coords": [
+        0.453125,
+        0.4305555555555556
+      ]
+    },
+    {
+      "step_id": "st_027",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Sim (Zero Km)'.' em 'Clicar na opção 'Não' para 'Veículo Zero Km?'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Veículo Zero Km? Não"
+      },
+      "dropdown_label": "Veículo Zero Km?",
+      "option_text": "Sim (Zero Km)",
+      "trigger_selector": "label:has-text('Veículo Zero Km?') ~ div",
+      "option_selector": "[role='option']:has-text('Sim (Zero Km)')",
+      "coords_trigger": [
+        0.6859375,
+        0.4444444444444444
+      ],
+      "coords_option": [
+        0.6859375,
+        0.48333333333333334
+      ]
+    },
+    {
+      "step_id": "st_028",
+      "type": "fill",
+      "selector": "input[placeholder='Ex: 2024']",
+      "description": "Preencher o campo 'Ano Modelo' com '2026'."
+    },
+    {
+      "step_id": "st_029",
+      "type": "fill",
+      "selector": "input[placeholder='Ex: 2023']",
+      "description": "Preencher o campo 'Ano Fabricação' com '2026'."
+    },
+    {
+      "step_id": "st_030",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Aplicativo de Transporte (Uber/99)'.' em 'Clicar na opção 'Particular (Lazer/Trabalho)' para 'Uso do Veículo'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Uso do Veículo Particular (Lazer/Trabalh"
+      },
+      "dropdown_label": "Uso do Veículo",
+      "option_text": "Aplicativo de Transporte (Uber/99)",
+      "trigger_selector": "label:has-text('Uso do Veículo') ~ div",
+      "option_selector": "[role='option']:has-text('Aplicativo de Transporte (Uber/99)')",
+      "coords_trigger": [
+        0.36666666666666664,
+        0.5101851851851852
+      ],
+      "coords_option": [
+        0.35572916666666665,
+        0.625
+      ]
+    },
+    {
+      "step_id": "st_031",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Diesel'.' em 'Clicar na opção 'Álcool' para o campo 'Combustível'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Combustível Álcool"
+      },
+      "dropdown_label": "Combustível",
+      "option_text": "Diesel",
+      "trigger_selector": ".step-grid-2 #field-combustivel .mat-form-field-wrapper #mat-select-comb-ng-tns-c1909216-85598-6 span",
+      "option_selector": "[role='option']:has-text('Diesel')",
+      "coords_trigger": [
+        0.5328125,
+        0.5138888888888888
+      ],
+      "coords_option": [
+        0.5578125,
+        0.6546296296296297
+      ]
+    },
+    {
+      "step_id": "st_032",
+      "type": "click",
+      "selector": "label:has-text('Possui Blindagem?')",
+      "description": "Clicar no input associado a 'Possui Blindagem?'.",
+      "coords": [
+        0.1640625,
+        0.5703703703703704
+      ]
+    },
+    {
+      "step_id": "st_033",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Nível III / IV' para o nível de blindagem.' em 'Clicar no campo de seleção 'Nível da Blindagem'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Nível da Blindagem Selecione"
+      },
+      "dropdown_label": "Nível da Blindagem",
+      "option_text": "Nível III / IV",
+      "trigger_selector": "label:has-text('Nível da Blindagem') ~ div",
+      "option_selector": "[role='option']:has-text('Nível III / IV')",
+      "coords_trigger": [
+        0.24270833333333333,
+        0.625
+      ],
+      "coords_option": [
+        0.2557291666666667,
+        0.7824074074074074
+      ]
+    },
+    {
+      "step_id": "st_034",
+      "type": "click",
+      "selector": "#field-blindagemEmpresa div",
+      "description": "Clicar no campo 'Empresa Blindadora'.",
+      "parent": {
+        "selector": "#field-blindagemEmpresa",
+        "has_text": null
+      },
+      "coords": [
+        0.5354166666666667,
+        0.6166666666666667
+      ]
+    },
+    {
+      "step_id": "st_035",
+      "type": "fill",
+      "selector": "label:has-text('Empresa Blindadora') ~ input",
+      "description": "Preencher o campo 'Empresa Blindadora' com 'boll dj'."
+    },
+    {
+      "step_id": "st_036",
+      "type": "fill",
+      "selector": "input[placeholder='Ex: 50000']",
+      "description": "Preencher o campo 'Valor da Blindagem' com '676779'."
+    },
+    {
+      "step_id": "st_037",
+      "type": "click",
+      "selector": "#btn-next-step",
+      "description": "Clicar no botão 'Avançar'.",
+      "coords": [
+        0.81875,
+        0.7518518518518519
+      ]
+    },
+    {
+      "step_id": "st_038",
+      "type": "fill",
+      "selector": "input[placeholder='Ex: 01001-000']",
+      "description": "Preencher o campo 'CEP de Pernoite' com '01409000'."
+    },
+    {
+      "step_id": "st_039",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Sim'.' em 'Clicar na opção 'Nao'.'",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Reside com condutores na faixa de 18 a 2"
+      },
+      "dropdown_label": "Reside com condutores na faixa de 18 a 2",
+      "option_text": "Sim",
+      "trigger_selector": "div",
+      "option_selector": "[role='option']:has-text('Sim')",
+      "coords_trigger": [
+        0.384375,
+        0.5277777777777778
+      ],
+      "coords_option": [
+        0.37916666666666665,
+        0.5648148148148148
+      ]
+    },
+    {
+      "step_id": "st_040",
+      "type": "click",
+      "selector": "#btn-next-step",
+      "description": "Clicar no botão 'Avançar'.",
+      "coords": [
+        0.7963541666666667,
+        0.625
+      ]
+    },
+    {
+      "step_id": "st_041",
+      "type": "fill",
+      "selector": "#slider-lmiDM",
+      "description": "Preencher o slider de 'Limite de Danos Materiais' com '50000'."
+    },
+    {
+      "step_id": "st_042",
+      "type": "fill",
+      "selector": "#slider-lmiDC",
+      "description": "Preencher o slider de 'Limite de Danos Corporais' com '50000'."
+    },
+    {
+      "step_id": "st_043",
+      "type": "click",
+      "selector": "#btn-modo-advanced",
+      "description": "Clicar no botão 'Interface Avançada (Grid)'.",
+      "coords": [
+        0.31666666666666665,
+        0.30185185185185187
+      ]
+    },
+    {
+      "step_id": "st_044",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção '100.000,00'.' em 'Clicar na opção '150.000,00'.'",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "RCV - Danos Corporais 150.000,00 Isenta "
+      },
+      "dropdown_label": "RCV - Danos Corporais 150.000,00 Isenta ",
+      "option_text": "100.000,00",
+      "trigger_selector": "div",
+      "option_selector": "[role='option']:has-text('100.000,00')",
+      "coords_trigger": [
+        0.3411458333333333,
+        0.5314814814814814
+      ],
+      "coords_option": [
+        0.3390625,
+        0.6953703703703704
+      ]
+    },
+    {
+      "step_id": "st_045",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção '50.000,00'.' em 'Clicar na opção '150.000,00'.'",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "RCV - Danos Materiais 150.000,00 Isenta "
+      },
+      "dropdown_label": "RCV - Danos Materiais 150.000,00 Isenta ",
+      "option_text": "50.000,00",
+      "trigger_selector": "div",
+      "option_selector": "#cdk-overlay-container #mat-select-panel-lmg_rcv_materiais [role='option']:has-text('50.000,00')",
+      "coords_trigger": [
+        0.34010416666666665,
+        0.6027777777777777
+      ],
+      "coords_option": [
+        0.3380208333333333,
+        0.7861111111111111
+      ]
+    },
+    {
+      "step_id": "st_046",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção '10.000,00'.' em 'Clicar na opção '4.000,00'.'",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "RCV - Danos Morais 4.000,00 Isenta 0% Cl"
+      },
+      "dropdown_label": "RCV - Danos Morais 4.000,00 Isenta 0% Cl",
+      "option_text": "10.000,00",
+      "trigger_selector": "div",
+      "option_selector": "[role='option']:has-text('10.000,00')",
+      "coords_trigger": [
+        0.340625,
+        0.6425925925925926
+      ],
+      "coords_option": [
+        0.3328125,
+        0.7962962962962963
+      ]
+    },
+    {
+      "step_id": "st_047",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção '15 Diárias (Intermediário)'.' em 'Clicar na opção 'Não Contratar'.'",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "Diarias de Carro Reserva Não Contratar I"
+      },
+      "dropdown_label": "Diarias de Carro Reserva Não Contratar I",
+      "option_text": "15 Diárias (Intermediário)",
+      "trigger_selector": "div",
+      "option_selector": "[role='option']:has-text('15 Diárias (Intermediário)')",
+      "coords_trigger": [
+        0.35625,
+        0.7759259259259259
+      ],
+      "coords_option": [
+        0.325,
+        0.9314814814814815
+      ]
+    },
+    {
+      "step_id": "st_048",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Básica (Somente para-brisa)' para cobertura de vidros.' em 'Clicar na opção 'Completa (Retrovisores/Lanternas)' para cobertura de vidros.'",
+      "parent": {
+        "selector": ".mat-select-grid-trigger",
+        "has_text": "Completa (Retrovisores/Lanternas)"
+      },
+      "dropdown_label": "Completa (Retrovisores/Lanternas)",
+      "option_text": "Básica (Somente para-brisa)",
+      "trigger_selector": "table #grid-tbody tr #mat-select-grid-lmg-vidros-ng-tns-c1909216-32141-8 span",
+      "option_selector": "[role='option']:has-text('Básica (Somente para-brisa)')",
+      "coords_trigger": [
+        0.3453125,
+        0.8379629629629629
+      ],
+      "coords_option": [
+        0.246484375,
+        0.7765440666204025
+      ]
+    },
+    {
+      "step_id": "st_049",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção '10%'.' em 'Clicar na opção '0%'.'",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "RCV - Danos Corporais 100.000,00 Isenta "
+      },
+      "dropdown_label": "RCV - Danos Corporais 100.000,00 Isenta ",
+      "option_text": "10%",
+      "trigger_selector": "div",
+      "option_selector": "[role='option']:has-text('10%')",
+      "coords_trigger": [
+        0.4765625,
+        0.5972222222222222
+      ],
+      "coords_option": [
+        0.47239583333333335,
+        0.7074074074074074
+      ]
+    },
+    {
+      "step_id": "st_050",
+      "type": "click",
+      "selector": "table #grid-tbody tr button:has-text('Cláusulas')",
+      "description": "Clicar no botão 'Cláusulas'.",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "RCV - Danos Morais 10.000,00 Isenta 0% C"
+      },
+      "coords": [
+        0.5291666666666667,
+        0.7148148148148148
+      ]
+    },
+    {
+      "step_id": "st_051",
+      "type": "click",
+      "selector": "label:has-text('Danos Morais Adicionais Familiar')",
+      "description": "Clicar no input associado a 'Danos Morais Adicionais Familiar'.",
+      "coords": [
+        0.4744791666666667,
+        0.48148148148148145
+      ]
+    },
+    {
+      "step_id": "st_052",
+      "type": "click",
+      "selector": "button:has-text('Salvar Cláusulas')",
+      "description": "Clicar no botão 'Salvar Cláusulas'.",
+      "coords": [
+        0.5552083333333333,
+        0.6324074074074074
+      ]
+    },
+    {
+      "step_id": "st_053",
+      "type": "click",
+      "selector": "#btn-next-step",
+      "description": "Clicar no botão 'Avançar'.",
+      "coords": [
+        0.7984375,
+        0.9333333333333333
+      ]
+    },
+    {
+      "step_id": "st_054",
+      "type": "click",
+      "selector": "label:has-text('Extensão de Perímetro (Países do Mercosul)')",
+      "description": "Clicar no input associado a 'Extensão de Perímetro (Países do Mercosul)'.",
+      "coords": [
+        0.16197916666666667,
+        0.3527777777777778
+      ]
+    },
+    {
+      "step_id": "st_055",
+      "type": "click",
+      "selector": "#btn-next-step",
+      "description": "Clicar no botão 'Finalizar & Emitir'.",
+      "coords": [
+        0.7822916666666667,
+        0.8518518518518519
+      ]
+    },
+    {
+      "step_id": "st_056",
+      "type": "click",
+      "selector": "#btn-go-to-payment",
+      "description": "Clicar no botão 'Prosseguir para Pagamento'.",
+      "coords": [
+        0.565625,
+        0.6564814814814814
+      ]
+    },
+    {
+      "step_id": "st_057",
+      "type": "fill",
+      "selector": "input",
+      "description": "Preencher o campo de input com o código PIX '00020101021226870014br.gov.bcb.pix2565pix.segura.com.br/cotacao/19201928019'.",
+      "parent": {
+        "selector": ".pix-copia-cola-container",
+        "has_text": "Copiar Código"
+      }
+    },
+    {
+      "step_id": "st_058",
+      "type": "click",
+      "selector": "#btn-copy-pix",
+      "description": "Clicar no botão 'Copiar Código'.",
+      "coords": [
+        0.45416666666666666,
+        0.5879629629629629
+      ]
+    },
+    {
+      "step_id": "st_059",
+      "type": "click",
+      "selector": "#btn-confirm-payment-progress",
+      "description": "Clicar no botão 'Formalizar & Emitir'.",
+      "coords": [
+        0.71875,
+        0.45925925925925926
+      ]
+    },
+    {
+      "step_id": "st_060",
+      "type": "click",
+      "selector": "#shadow-dom-host",
+      "description": "Clicar no elemento 'shadow-dom-host'.",
+      "coords": [
+        0.5578125,
+        0.3712962962962963
+      ]
+    },
+    {
+      "step_id": "st_061",
+      "type": "click",
+      "selector": "button:has-text('Voltar para o Painel')",
+      "description": "Clicar no botão 'Voltar para o Painel'.",
+      "coords": [
+        0.5864583333333333,
+        0.5787037037037037
+      ]
+    },
+    {
+      "step_id": "st_062",
+      "type": "click",
+      "selector": "#proposal-viewport #proposal-content table tr button:has-text('📄')",
+      "description": "Clicar no botão com ícone de documento.",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "daniel setttt 22401666818 FIPE"
+      },
+      "coords": [
+        0.7984375,
+        0.5453703703703704
+      ]
+    },
+    {
+      "step_id": "st_063",
+      "type": "click",
+      "selector": "button:has-text('Fechar')",
+      "description": "Clicar no botão 'Fechar'.",
+      "coords": [
+        0.5869791666666667,
+        0.5527777777777778
+      ]
+    }
+  ]
+}

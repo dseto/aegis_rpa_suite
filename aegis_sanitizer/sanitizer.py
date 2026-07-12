@@ -132,6 +132,16 @@ class SanitizerService:
         initial_url = raw_data.get("initial_url", "")
         events = raw_data.get("events", [])
 
+        # Estampagem de original_index ANTES do Padrão P (decisão D2 do
+        # .specs/plano-sanitizer-alta-fidelidade.md, Seção 8/T2): precisa
+        # refletir a ordem FÍSICA original da gravação, não a ordem
+        # pós-inversão de autocomplete que roda logo abaixo. Padrão P troca
+        # objetos de posição na lista (não recria os dicts), então o valor
+        # estampado aqui viaja junto com cada evento mesmo depois da troca.
+        # _classify_raw_events (mais abaixo) só LÊ esse campo — nunca o cria.
+        for i, ev in enumerate(events):
+            ev["original_index"] = i
+
         # Inversão de eventos de autocomplete gravados incorretamente (Padrão P)
         idx_ev = 0
         while idx_ev < len(events) - 1:
@@ -149,57 +159,22 @@ class SanitizerService:
             else:
                 idx_ev += 1
         
-        # Saneamento de eventos duplicados e ruídos de gravação
-        cleaned_events = []
-        seen_fills = {}
-        last_fill_selector = None
-        for ev in events:
-            ev_type = ev.get("type", "").lower()
-            selector = ev.get("selector", "")
-            scenario = ev.get("scenario", "default")
-            
-            # 1. Ignora cliques consecutivos no mesmo seletor
-            if cleaned_events:
-                last = cleaned_events[-1]
-                if ev_type == "click" and last.get("type") == "click" and selector == last.get("selector"):
-                    continue
-            
-            # 2. Ignora cliques em overlays genéricos de CDK ou placeholder "Nenhum resultado".
-            # Não pega clique em opção específica dentro do overlay (ex.:
-            # "#cdk-overlay-container #mat-select-panel-x [role='option']:has-text('...')")
-            # — isso é uma seleção real, não ruído de overlay/backdrop vazio.
-            is_generic_overlay_click = (
-                ("cdk-overlay-container" in selector and "[role='option']" not in selector and "has-text(" not in selector)
-                or "backdrop" in selector
-                or "Nenhum resultado" in selector
-                or "Nenhum resultado" in ev.get("text", "")
-            )
-            if ev_type == "click" and is_generic_overlay_click:
-                continue
-                
-            # 3. Ignora cliques em autocomplete de painel órfão (sem nenhum
-            # preenchimento prévio no fluxo) — sinal de painel stale/leftover.
-            # Não usa mais matching de idioma/nome de campo (ex.: "brand" em
-            # "marca") pois selectors gravados são no idioma do app-alvo e a
-            # ordem de fills nem sempre é 1-para-1 com a ordem dos cliques de
-            # seleção (ex.: preencher marca+modelo antes de selecionar ambos),
-            # o que derrubava cliques de seleção legítimos.
-            if ev_type == "click" and "mat-autocomplete-panel-" in selector and not last_fill_selector:
-                continue
-                
-            # 4. Trata preenchimentos duplicados (mesmo seletor e mesmo valor no mesmo cenário)
-            if ev_type in ["fill", "change"]:
-                key = (scenario, selector)
-                val = ev.get("value", "")
-                if key in seen_fills and seen_fills[key] == val:
-                    continue
-                seen_fills[key] = val
-                last_fill_selector = selector
-                
-            cleaned_events.append(ev)
-
-        events = cleaned_events
+        # Classificação (não mais deleção) de eventos duplicados/ruído de
+        # gravação — regras R1-R4. A lógica de detecção foi extraída byte a
+        # byte para _classify_raw_events, que agora TAGUEIA cada evento que
+        # antes seria descartado por `continue`, em vez de removê-lo da
+        # lista. Nenhum evento desaparece de `events`/`raw_data["events"]`.
+        events = self._classify_raw_events(events)
         raw_data["events"] = events
+
+        # TEMPORARIO (T1): filtro no call-site. gravacao.json (salvo mais
+        # abaixo a partir de raw_data["events"]) passa a ser o superset
+        # completo e tagueado. O restante do fluxo interno de sanitize()
+        # (refinamento semântico, plano de execução, relatorio.md) continua
+        # operando só sobre os eventos MANTIDOS — exatamente como antes desta
+        # tarefa — via esta view filtrada. T2 move essa filtragem para
+        # dentro de _write_execution_plan.
+        kept_events = [e for e in events if e.get("sanitizer_class", {}).get("keep", True)]
 
         # Carrega metadados do projeto para buscar descrição de negócio e resultado esperado
         project_json_path = os.path.join(self.telemetry_dir, "project.json")
@@ -214,10 +189,18 @@ class SanitizerService:
             except:
                 pass
 
-        # Realiza o refinamento semântico cognitivo
-        dict_data, raw_data = self.refine_semantics_with_llm(dict_data, raw_data, business_desc, expected_outcome)
-        events = raw_data.get("events", [])
-        raw_data["events"] = events
+        # Realiza o refinamento semântico cognitivo. TEMPORARIO (T1): filtro
+        # no call-site — refine_semantics_with_llm recebe só os eventos
+        # MANTIDOS (kept_events), igual ao comportamento de antes desta
+        # tarefa. raw_data["events"] continua apontando para o superset
+        # completo (tagueado, já setado acima) para a gravação de
+        # gravacao.json logo abaixo — os dicts de evento são compartilhados
+        # por referência entre `events` e `kept_events`, então um
+        # business_description atribuído aqui já fica visível no superset.
+        refine_input = dict(raw_data)
+        refine_input["events"] = kept_events
+        dict_data, refine_input = self.refine_semantics_with_llm(dict_data, refine_input, business_desc, expected_outcome)
+        kept_events = refine_input.get("events", [])
 
         # Salva o arquivo de gravação e dicionário devidamente sanitizados e traduzidos
         with open(self.telemetry_file, "w", encoding="utf-8") as f:
@@ -253,7 +236,15 @@ class SanitizerService:
             except Exception as e:
                 print(f"[WARNING] Falha ao normalizar dataset_inicial.json: {e}")
 
-        # Gera o plano de execução a partir dos eventos final já limpos e refinados
+        # Gera o plano de execução a partir do superset completo de eventos
+        # classificados por _classify_raw_events (T1). A partir de T2,
+        # _write_execution_plan filtra internamente por
+        # sanitizer_class.keep e produz os dois espaços de id do schema v2
+        # (st_NNN emitível / sup_NNN suprimido) — ver Seção 8/T2 de
+        # .specs/plano-sanitizer-alta-fidelidade.md. Os outros dois
+        # consumidores temporários (refine_semantics_with_llm, acima, e o
+        # loop do relatorio.md, abaixo) continuam recebendo kept_events —
+        # fora de escopo de T2, ver comentários "TEMPORARIO (T1)" ali.
         self._write_execution_plan(events, dataset_rows)
 
         # Normalização de arquivos CSV correspondentes se existirem
@@ -286,10 +277,51 @@ class SanitizerService:
         network = raw_data.get("network_payloads", {})
         anti_bot_fields = raw_data.get("anti_bot_fields", [])
 
+        # T5 (.specs/plano-sanitizer-alta-fidelidade.md, Seção 8): o
+        # relatorio.md deixa de operar sobre a view filtrada (kept_events) —
+        # `events` aqui permanece o superset completo classificado por
+        # _classify_raw_events (a mesma lista já apontada por `raw_data
+        # ["events"]`, com qualquer business_description de
+        # refine_semantics_with_llm já aplicado nos dicts, que são
+        # compartilhados por referência com kept_events). Eventos suprimidos
+        # (sanitizer_class.keep == False) passam a ser exibidos com badge em
+        # vez de omitidos — ver loop de "Fluxo de Passos e Bifurcações por
+        # Cenário" abaixo.
+
+        # T5 (extensão nível-step): além da camada de EVENTO bruto
+        # (sanitizer_class, regras R1-R4), o relatório também expõe as
+        # supressões de nível de STEP (sup_NNN com execution_hint: "skip",
+        # produzidas por _mark_superseded_selects/_mark_phantom_pretrigger_
+        # clicks dentro de _write_execution_plan — que NUNCA tagueiam o
+        # evento bruto). Lê o plano_execucao.json que _write_execution_plan
+        # acabou de gravar mais acima neste mesmo fluxo; tolerante a
+        # ausência/malformação — o relatório nunca quebra por causa do plano.
+        plan_suppressed_steps = None
+        try:
+            _plan_path = os.path.join(self.telemetry_dir, "plano_execucao.json")
+            with open(_plan_path, "r", encoding="utf-8") as _pf:
+                _plan_data = json.load(_pf)
+            plan_suppressed_steps = [
+                s for s in _plan_data.get("steps", [])
+                if isinstance(s, dict) and s.get("execution_hint") == "skip"
+            ]
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+            plan_suppressed_steps = None
+
         markdown = []
         markdown.append(f"# 🛡️ Relatório de Telemetria Aegis RPA Suite V2")
         markdown.append(f"\n* **URL Alvo:** {initial_url}")
-        markdown.append(f"* **Total de Ações Gravadas:** {len(events)}")
+        emittable_events_count = sum(1 for ev in events if ev.get("sanitizer_class", {}).get("keep", True))
+        suppressed_events_count = len(events) - emittable_events_count
+        # Duas camadas de contagem, cada uma lida da sua fonte real:
+        # captura bruta (eventos com sanitizer_class.keep == False) e plano
+        # (steps sup_/skip do plano_execucao.json em disco). Se o plano não
+        # pôde ser lido, a parte do plano é omitida — nunca inventa "0".
+        header_count = f"{len(events)} ({suppressed_events_count} suprimidas na captura bruta"
+        if plan_suppressed_steps is not None:
+            header_count += f"; {len(plan_suppressed_steps)} passos suprimidos no plano — ver seção 🔇"
+        header_count += ")"
+        markdown.append(f"* **Total de Ações Gravadas:** {header_count}")
         markdown.append(f"* **Respostas de Rede Interceptadas:** {len(network.keys())}")
         markdown.append("\n" + "-" * 60)
 
@@ -350,7 +382,9 @@ class SanitizerService:
 
         for scenario_name, scenario_events in scenarios_map.items():
             markdown.append(f"\n### 🎯 Cenário Lógico: `{scenario_name.upper()}`")
-            markdown.append(f"\nTotal de ações neste caminho: {len(scenario_events)}\n")
+            scenario_emittable_count = sum(1 for ev in scenario_events if ev.get("sanitizer_class", {}).get("keep", True))
+            scenario_suppressed_count = len(scenario_events) - scenario_emittable_count
+            markdown.append(f"\nTotal de ações neste caminho: {len(scenario_events)} ({scenario_emittable_count} emitíveis, {scenario_suppressed_count} suprimidas)\n")
             markdown.append("| Passo | Tipo | Elemento | Seletor Resiliente Sugerido | Valor / Ação |")
             markdown.append("| :---: | :---: | :---: | :--- | :--- |")
 
@@ -359,7 +393,62 @@ class SanitizerService:
 
             for ev in scenario_events:
                 ev_type = ev.get("type", "").upper()
-                
+
+                # T5: evento excluído por _classify_raw_events (R1-R4) — em vez
+                # de silenciar, renderiza uma linha informativa com o badge
+                # SUPRIMIDO no lugar da coluna Tipo, mantendo seletor e
+                # descrição/valor visíveis. Não incrementa passo_count nem
+                # atualiza previous_event (não é um passo emitível). Esta
+                # checagem PRECISA vir antes do dedup consecutivo abaixo: um
+                # clique R1 (raw_duplicate_click) tem, por definição, o MESMO
+                # seletor do clique anterior mantido — exatamente a condição
+                # que o dedup consecutivo usa para dar `continue` silencioso —
+                # então sem checar a supressão primeiro esse evento nunca
+                # chegaria a ser exibido, reintroduzindo a invisibilidade que
+                # esta tarefa existe para corrigir.
+                sanitizer_class = ev.get("sanitizer_class")
+                if sanitizer_class and sanitizer_class.get("keep") is False:
+                    supp_tag = ev.get("tag", "").lower()
+                    if ev.get("is_date"):
+                        supp_tag = "input (data)"
+                    supp_selector = ev.get("selector", "")
+                    supp_parent = ev.get("parent")
+                    if supp_parent:
+                        supp_p_sel = supp_parent.get("selector", "")
+                        supp_p_text = supp_parent.get("has_text")
+                        supp_parent_prefix = f"⬆ `{supp_p_sel}[{supp_p_text}]` ➜ " if supp_p_text else f"⬆ `{supp_p_sel}` ➜ "
+                    else:
+                        supp_parent_prefix = ""
+                    supp_val_text = ""
+
+                    if ev_type == "CLICK":
+                        supp_x = ev.get("x_percent")
+                        supp_y = ev.get("y_percent")
+                        supp_coords_str = f" [coords: ({supp_x:.4f}, {supp_y:.4f})]" if (supp_x is not None and supp_y is not None) else ""
+                        supp_val_text = f"Clique em: '{ev.get('text', '')}'{supp_coords_str}"
+                    elif ev_type == "FILL":
+                        if ev.get("is_date"):
+                            supp_val_text = f"Preencheu data: '{ev.get('value', '')}'"
+                        else:
+                            supp_val_text = f"Preencheu com: '{ev.get('value', '')}'"
+                    elif ev_type == "FILECHOOSER":
+                        supp_val_text = "Abriu o diálogo de seleção de arquivo"
+
+                    if supp_parent_prefix:
+                        supp_selector = f"{supp_parent_prefix}`{supp_selector}`"
+                    elif " >> " in supp_selector:
+                        supp_selector = f"🧬 **Shadow DOM:** `{supp_selector}`"
+                    else:
+                        supp_selector = f"`{supp_selector}`"
+
+                    supp_desc_negocio = ev.get("business_description") or ev.get("description")
+                    if supp_desc_negocio:
+                        supp_val_text = f"**{supp_desc_negocio}**<br><span style='font-size:10px; color:var(--text-muted);'>{supp_val_text}</span>"
+
+                    supp_badge = f"🔇 SUPRIMIDO ({sanitizer_class.get('reason', '')})"
+                    markdown.append(f"| `-` | {supp_badge} | `{supp_tag}` | {supp_selector} | {supp_val_text} |")
+                    continue
+
                 if previous_event:
                     if ev_type == "CLICK" and previous_event.get("type") == "click" and ev.get("selector") == previous_event.get("selector"):
                         continue
@@ -478,6 +567,31 @@ class SanitizerService:
                     passo_count += 1
                     previous_event = ev
 
+        # 2b. Passos suprimidos no PLANO (nível-step: sup_NNN / skip) — camada
+        # distinta da supressão nível-evento (badge 🔇 na tabela de fluxo
+        # acima). Dados lidos do plano_execucao.json em disco (ver leitura
+        # tolerante antes do cabeçalho). Seção omitida se o plano não pôde
+        # ser lido; presente (com aviso de vazio) se lido mas sem sup_.
+        if plan_suppressed_steps is not None:
+            markdown.append("\n" + "-" * 60)
+            markdown.append("\n## 🔇 Passos Suprimidos no Plano de Execução")
+            if plan_suppressed_steps:
+                markdown.append("\nSteps classificados como `skip` (`sup_NNN`) pelo Sanitizer ao gerar o `plano_execucao.json` — não são emitidos no bot por default, mas permanecem no plano como contexto de fidelidade (o Code Generator pode reintroduzi-los pelo `step_id` se uma correção exigir):\n")
+                markdown.append("| Step ID | Status (step_role) | Tipo | Seletor / Alvo | Motivo da Supressão |")
+                markdown.append("| :---: | :---: | :---: | :--- | :--- |")
+                for sup in plan_suppressed_steps:
+                    sup_id = sup.get("step_id", "?")
+                    sup_role = sup.get("step_role", "")
+                    sup_type = sup.get("type", "")
+                    if sup_type == "select":
+                        sup_target = f"`{sup.get('dropdown_label', '')}` → `{sup.get('option_text', '')}`"
+                    else:
+                        sup_target = f"`{sup.get('selector', '')}`"
+                    sup_reason = sup.get("suppression_reason", "")
+                    markdown.append(f"| `{sup_id}` | 🔇 SUPRIMIDO (`{sup_role}`) | `{sup_type}` | {sup_target} | {sup_reason} |")
+            else:
+                markdown.append("\nNenhum step suprimido no plano de execução desta gravação.")
+
         # 3. Payloads de Rede JSON Interceptados
         if network:
             markdown.append("\n" + "-" * 60)
@@ -591,6 +705,118 @@ class SanitizerService:
         print("=" * 60)
         return True
 
+    def _classify_raw_events(self, events: list) -> list:
+        """
+        Classifica eventos brutos segundo as regras R1-R4 (duplicação/ruído
+        de gravação) SEM remover nenhum evento da lista — extraído byte a
+        byte do bloco de deleção que existia em `sanitize()` antes desta
+        tarefa (T1 de .specs/plano-sanitizer-alta-fidelidade.md, Seção 2/D1
+        e 8). Cada evento que antes seria descartado por `continue` agora é
+        MANTIDO na lista e ganha a tag:
+
+            ev["sanitizer_class"] = {"role": <...>, "keep": False, "reason": <...>}
+
+        Catálogo de `role` (nomes exatos usados também como `step_role` dos
+        steps `sup_` numa tarefa seguinte, T2): "raw_duplicate_click" (R1),
+        "overlay_noise" (R2), "stale_panel_click" (R3), "redundant_refill"
+        (R4). Eventos que sobrevivem às 4 regras não são tocados (sem a
+        chave `sanitizer_class`) — quem quiser a view "limpa" filtra por
+        `e.get("sanitizer_class", {}).get("keep", True)`.
+
+        NÃO estampa nem recalcula `original_index`: esse campo é estampado
+        em `sanitize()` ANTES do Padrão P (ordem física original da
+        gravação); esta função roda DEPOIS do Padrão P (mesma posição do
+        bloco R1-R4 original) e só herda o que já estiver presente em cada
+        evento, preservando-o intocado.
+
+        Retorna uma lista NOVA com o mesmo comprimento e a mesma ordem física
+        de `events` (nunca reordena, nunca remove, nunca duplica).
+        """
+        classified_events = []
+        # Espelha o `cleaned_events`/`seen_fills`/`last_fill_selector` do
+        # bloco original: representam o estado dos eventos MANTIDOS até
+        # agora, na mesma ordem em que as regras R1-R4 os enxergavam quando
+        # descartavam fisicamente via `continue`. R1 (adjacência) e R4
+        # (recência por chave) precisam desse estado para decidir; R2 e R3
+        # dependem só do evento atual (e, para R3, de `last_fill_selector`).
+        cleaned_events = []
+        seen_fills = {}
+        last_fill_selector = None
+
+        for ev in events:
+            ev_type = ev.get("type", "").lower()
+            selector = ev.get("selector", "")
+            scenario = ev.get("scenario", "default")
+
+            sanitizer_class = None
+
+            # 1. Cliques consecutivos no mesmo seletor
+            if cleaned_events:
+                last = cleaned_events[-1]
+                if ev_type == "click" and last.get("type") == "click" and selector == last.get("selector"):
+                    sanitizer_class = {
+                        "role": "raw_duplicate_click",
+                        "keep": False,
+                        "reason": "clique consecutivo no mesmo seletor do clique anterior mantido",
+                    }
+
+            # 2. Cliques em overlays genéricos de CDK ou placeholder "Nenhum
+            # resultado". Não pega clique em opção específica dentro do
+            # overlay (ex.: "#cdk-overlay-container #mat-select-panel-x
+            # [role='option']:has-text('...')") — isso é uma seleção real,
+            # não ruído de overlay/backdrop vazio.
+            if sanitizer_class is None:
+                is_generic_overlay_click = (
+                    ("cdk-overlay-container" in selector and "[role='option']" not in selector and "has-text(" not in selector)
+                    or "backdrop" in selector
+                    or "Nenhum resultado" in selector
+                    or "Nenhum resultado" in ev.get("text", "")
+                )
+                if ev_type == "click" and is_generic_overlay_click:
+                    sanitizer_class = {
+                        "role": "overlay_noise",
+                        "keep": False,
+                        "reason": "clique em overlay genérico de CDK/backdrop ou placeholder 'Nenhum resultado'",
+                    }
+
+            # 3. Cliques em autocomplete de painel órfão (sem nenhum
+            # preenchimento prévio no fluxo) — sinal de painel stale/leftover.
+            # Não usa matching de idioma/nome de campo (selectors gravados
+            # são no idioma do app-alvo e a ordem de fills nem sempre é
+            # 1-para-1 com a ordem dos cliques de seleção).
+            if sanitizer_class is None:
+                if ev_type == "click" and "mat-autocomplete-panel-" in selector and not last_fill_selector:
+                    sanitizer_class = {
+                        "role": "stale_panel_click",
+                        "keep": False,
+                        "reason": "clique em painel autocomplete sem nenhum preenchimento prévio no fluxo (painel stale/leftover)",
+                    }
+
+            # 4. Preenchimentos duplicados (mesmo seletor e mesmo valor no
+            # mesmo cenário). Não é consecutivo: `seen_fills` cobre a
+            # gravação inteira (por cenário+seletor).
+            if sanitizer_class is None and ev_type in ["fill", "change"]:
+                key = (scenario, selector)
+                val = ev.get("value", "")
+                if key in seen_fills and seen_fills[key] == val:
+                    sanitizer_class = {
+                        "role": "redundant_refill",
+                        "keep": False,
+                        "reason": "preenchimento duplicado: mesmo seletor e mesmo valor já vistos neste cenário",
+                    }
+                else:
+                    seen_fills[key] = val
+                    last_fill_selector = selector
+
+            if sanitizer_class is not None:
+                ev["sanitizer_class"] = sanitizer_class
+            else:
+                cleaned_events.append(ev)
+
+            classified_events.append(ev)
+
+        return classified_events
+
     def _update_datasets_with_new_keys(self, mapping: dict):
         """Atualiza as chaves/colunas dos datasets com os novos nomes semânticos."""
         if not mapping:
@@ -682,7 +908,38 @@ class SanitizerService:
             return opener_parent_has_text
         return fallback_description
 
-    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
+    @staticmethod
+    def _source_indices(step: dict) -> list:
+        """
+        Retorna TODOS os índices de eventos brutos (`original_index`) que um
+        step "representa", nos 3 formatos possíveis conforme como o step foi
+        produzido (ver .specs/plano-sanitizer-alta-fidelidade.md, Seção 8/T2,
+        definição obrigatória de `_source_indices`):
+
+        - step simples (saído direto de `_classify_raw_events`/construção de
+          step): só `original_index` próprio.
+        - sobrevivente de `_merge_consecutive_clicks`: `original_index`
+          próprio + um `original_index` por evento absorvido em `merged_from`.
+        - `select` composto de `_reorder_dropdown_pairs`: só `source_events`
+          (lista), sem `original_index` no nível raiz.
+
+        `position_anchor(step) = min(_source_indices(step))`. NUNCA leia só
+        `step.get("original_index")` isolado para esse cálculo — um step que
+        absorveu um clique anterior via merge tem, tipicamente, o
+        `original_index` do evento MAIS TARDIO do grupo no campo raiz (porque
+        `choose()` normalmente elege o clique mais recente como conteúdo);
+        ignorar `merged_from` dá um anchor ATRASADO. Ver
+        `.specs/golden/synthetic_r1_merge_case/README.md` para o caso
+        concreto que este método existe para acertar.
+        """
+        idxs = []
+        if "original_index" in step:
+            idxs.append(step["original_index"])
+        idxs += [m["original_index"] for m in step.get("merged_from", [])]
+        idxs += step.get("source_events", [])
+        return idxs
+
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _merge_consecutive_clicks.
     def _reorder_dropdown_pairs(self, steps: list) -> list:
         """
         Corrige um padrão de gravação que quebra em produção: abrir um dropdown
@@ -698,6 +955,19 @@ class SanitizerService:
         (validate_bot_against_plan) entraria em conflito com o validador de
         padrão de resiliência. Passos intercalados entre abridor e opção são
         preservados e movidos para depois do step colapsado.
+
+        Schema v2 (.specs/plano-sanitizer-alta-fidelidade.md Seção 3/4): o
+        step colapsado ganha `step_role: "composite_select"` (default
+        `primary` de steps emitíveis simples fica implícito pela ausência
+        deste campo) e `source_events` (união de `_source_indices` do abridor
+        e da opção — necessário para `position_anchor` no merge-insert de
+        `_write_execution_plan`, já que um step "select" nunca tem
+        `original_index` no nível raiz). Nota deliberada: os steps "between"
+        preservados/movidos não ganham um campo `reordered_from` nesta tarefa
+        — a Seção 4 do plano menciona esse campo, mas ele não está na lista
+        "Implemente também" do backlog de T2 nem é coberto por nenhum DoD; ao
+        ficar de fora, nada quebra (é aditivo), mas fica registrado aqui para
+        não parecer descuido.
         """
         option_idx = [i for i, s in enumerate(steps) if s["type"] == "click" and "[role='option']" in s["selector"]]
         if not option_idx:
@@ -744,12 +1014,16 @@ class SanitizerService:
             )
             merged = {
                 "type": "select",
+                "step_role": "composite_select",
                 "dropdown_label": dropdown_label,
                 "option_text": option_text,
                 "trigger_selector": opener["selector"],
                 "option_selector": option["selector"],
                 "description": f"Selecionar '{option['description']}' em '{opener['description']}'",
+                "source_events": self._source_indices(opener) + self._source_indices(option),
             }
+            if "scenario" in opener:
+                merged["scenario"] = opener["scenario"]
             if "parent" in opener:
                 merged["parent"] = opener["parent"]
             if "coords" in opener:
@@ -762,8 +1036,8 @@ class SanitizerService:
 
         return result
 
-    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
-    def _drop_redundant_select_corrections(self, steps: list) -> list:
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _merge_consecutive_clicks.
+    def _mark_superseded_selects(self, steps: list) -> tuple:
         """
         `_reorder_dropdown_pairs` colapsa cada par abridor+opção num step
         "select", mas quando o usuário errou a opção durante a gravação e
@@ -783,6 +1057,21 @@ class SanitizerService:
         segundo select tem, no seu `parent.has_text`, o `option_text` que o
         PRIMEIRO acabou de escolher, é prova de que o clique seguinte caiu
         em cima do mesmo widget já alterado (não só um texto parecido).
+
+        Renomeada de `_drop_redundant_select_corrections` (schema v2): a
+        DETECÇÃO é idêntica byte a byte, só o EFEITO muda — o select
+        superado não desaparece mais, vira item retornado no 2º elemento da
+        tupla (`suppressed`), destinado a virar um step `sup_NNN` com
+        `step_role: "superseded_correction"` em `_write_execution_plan`.
+        Cadeias de 3+ correções no mesmo widget (A corrigido por B corrigido
+        por C) propagam a lista de superados via a chave interna
+        `_superseded_chain` no sobrevivente corrente, para que TODOS os elos
+        (A e B) acabem com `superseded_by` apontando pro vencedor FINAL (C),
+        nunca por um elo intermediário que também seria suprimido.
+
+        Retorna (steps_sobreviventes, suppressed_items) — `suppressed_items`
+        são os dicts de step ORIGINAIS dos selects superados (mesmo shape de
+        `_reorder_dropdown_pairs`), sem numeração/step_id ainda.
         """
         result = []
         for s in steps:
@@ -794,15 +1083,29 @@ class SanitizerService:
                 cur_text = cur_parent.get("has_text")
                 prev_option = prev.get("option_text")
                 if prev_text and cur_text and prev_option and prev_option in cur_text:
+                    s["_superseded_chain"] = prev.pop("_superseded_chain", []) + [prev]
                     result[-1] = s
                     continue
             result.append(s)
-        return result
 
-    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _dedup_consecutive_clicks.
-    def _drop_redundant_pretrigger_clicks(self, steps: list) -> list:
+        suppressed = []
+        for s in result:
+            chain = s.pop("_superseded_chain", None)
+            if chain:
+                for prev in chain:
+                    prev["step_role"] = "superseded_correction"
+                    prev["suppression_reason"] = (
+                        f"Selecionou '{prev.get('option_text')}' em '{prev.get('dropdown_label')}' "
+                        f"e corrigiu para '{s.get('option_text')}' no mesmo campo, ainda durante a gravação."
+                    )
+                    prev["_superseded_by_step"] = s
+                    suppressed.append(prev)
+        return result, suppressed
+
+    # Nota: não propagar o guard de texts_differ de same_widget() aqui — ver docstring de _merge_consecutive_clicks.
+    def _mark_phantom_pretrigger_clicks(self, steps: list) -> tuple:
         """
-        Mesmo após `_dedup_consecutive_clicks`, sobra um padrão de clique
+        Mesmo após `_merge_consecutive_clicks`, sobra um padrão de clique
         fantasma: o recorder às vezes gera 2 eventos de clique DIFERENTES
         (selector e parent distintos, geralmente porque o overlay ainda não
         tinha estabilizado no 1º clique) para o MESMO ponto físico da tela —
@@ -813,10 +1116,21 @@ class SanitizerService:
         aponta pra coordenadas bem distantes do trigger do dropdown, esse
         clique fantasma cai a poucos % de distância do `coords_trigger` do
         próprio select — sinal confiável de que é o mesmo clique físico
-        contado 2x. Descarta o step "click" nesse caso.
+        contado 2x.
+
+        Renomeada de `_drop_redundant_pretrigger_clicks` (schema v2): a
+        DETECÇÃO (distância < 0.05 do `coords_trigger`) é idêntica; o clique
+        fantasma não é mais descartado, é retornado no 2º elemento da tupla
+        (`suppressed`), destinado a virar um step `sup_NNN` com
+        `step_role: "phantom_click"` — sem `superseded_by` (é o mesmo gesto
+        físico do `coords_trigger` do select vizinho, não uma correção de
+        negócio; a rastreabilidade já está no próprio `coords_trigger`).
+
+        Retorna (steps_sobreviventes, suppressed_items).
         """
         THRESHOLD = 0.05
         result = []
+        suppressed = []
         for i, s in enumerate(steps):
             if (s["type"] == "select" and result and result[-1]["type"] == "click"):
                 prev_coords = result[-1].get("coords")
@@ -824,11 +1138,17 @@ class SanitizerService:
                 if prev_coords and trigger_coords:
                     dist = ((prev_coords[0] - trigger_coords[0]) ** 2 + (prev_coords[1] - trigger_coords[1]) ** 2) ** 0.5
                     if dist < THRESHOLD:
-                        result.pop()
+                        phantom = result.pop()
+                        phantom["step_role"] = "phantom_click"
+                        phantom["suppression_reason"] = (
+                            "Clique registrado a poucos % de distância do coords_trigger do select "
+                            "seguinte — mesmo clique físico capturado 2x pelo recorder antes do overlay estabilizar."
+                        )
+                        suppressed.append(phantom)
             result.append(s)
-        return result
+        return result, suppressed
 
-    def _dedup_consecutive_clicks(self, steps: list) -> list:
+    def _merge_consecutive_clicks(self, steps: list) -> list:
         """
         O recorder às vezes captura o mesmo elemento clicado 2x seguidas (ex.:
         overlay do CDK ainda fechado no primeiro clique, ou o usuário clicou de
@@ -844,19 +1164,29 @@ class SanitizerService:
         Risco teórico não resolvido: este guard só cobre cliques
         CONSECUTIVOS. Dois widgets físicos distintos com selector genérico
         idêntico e texto diferente que colidam NÃO-consecutivamente em
-        `_reorder_dropdown_pairs`, `_drop_redundant_select_corrections` ou
-        `_drop_redundant_pretrigger_clicks` não seriam pegos por esse guard.
+        `_reorder_dropdown_pairs`, `_mark_superseded_selects` ou
+        `_mark_phantom_pretrigger_clicks` não seriam pegos por esse guard.
         Avaliado e descartado propagar o mesmo guard pra essas 3 funções:
         `_reorder_dropdown_pairs` casa por regex no próprio selector, não
-        por colisão genérica; `_drop_redundant_select_corrections` opera
+        por colisão genérica; `_mark_superseded_selects` opera
         sobre steps "select" já mesclados, sem o campo `text` de clique
-        disponível; e `_drop_redundant_pretrigger_clicks` depende
+        disponível; e `_mark_phantom_pretrigger_clicks` depende
         justamente de bubbling (div -> span -> input) ter textos
         DIFERENTES entre si para reconhecer o mesmo clique físico — um
         guard de "texto diferente = widget diferente" ali quebraria a
         própria deduplicação que a função existe pra fazer. Sem caso real
         observado ainda; se aparecer, tratar cada função individualmente,
         não replicar este guard cegamente.
+
+        Renomeada de `_dedup_consecutive_clicks` (schema v2): a detecção
+        (`same_widget`/`choose`) é idêntica byte a byte. O que muda é o
+        destino do clique perdedor — em vez de simplesmente desaparecer ao
+        ser sobrescrito por `result[-1] = choose(...)`, ele vira uma entrada
+        em `merged_from` do step sobrevivente (`original_index`, `selector`,
+        `reason`), com a cadeia de absorções de rodadas anteriores (tanto do
+        vencedor quanto do perdedor, se algum já tiver histórico de
+        `merged_from` de uma fusão anterior nesta mesma chamada) preservada e
+        concatenada — nunca perdida, nunca duplicada.
         """
         def same_widget(a: dict, b: dict) -> bool:
             # Selector genérico (ex.: "label" nu, sem id/data-testid) casa
@@ -917,23 +1247,103 @@ class SanitizerService:
         for s in steps:
             if (result and s["type"] == "click" and result[-1]["type"] == "click"
                     and same_widget(s, result[-1])):
-                result[-1] = choose(result[-1], s)
+                kept, candidate = result[-1], s
+                winner = choose(kept, candidate)
+                loser = candidate if winner is kept else kept
+                # Concatena: histórico já acumulado pelo vencedor (rodadas
+                # anteriores desta mesma chamada, ex.: 3+ cliques
+                # consecutivos no mesmo widget) + o perdedor desta rodada +
+                # o histórico que o PERDEDOR já carregava (relevante quando
+                # o vencedor muda de lado entre rodadas, ex.: candidate
+                # vence a rodada 1, kept — já com merged_from — vence a
+                # rodada 2 por cair na exceção de GENERIC_TAG_SELECTORS).
+                merged_from = list(winner.get("merged_from", []))
+                merged_from.append({
+                    "original_index": loser.get("original_index"),
+                    "selector": loser.get("selector", ""),
+                    "reason": "clique consecutivo no mesmo widget",
+                })
+                merged_from.extend(loser.get("merged_from", []))
+                winner["merged_from"] = merged_from
+                result[-1] = winner
                 continue
             result.append(s)
         return result
 
+    @staticmethod
+    def _serialize_plan_step(step: dict) -> dict:
+        """
+        Serializa um step interno (sobrevivente da cadeia de merge/reorder,
+        ou candidato a `sup_`) para o formato final do plano v2, numa ordem
+        de campos estável. `selector` é sempre emitido (default `""`) mesmo
+        quando ausente do dict interno — mesmo comportamento do v1 para
+        steps "select" (o abridor/opção viram trigger_selector/
+        option_selector; `_reorder_dropdown_pairs` nunca seta uma chave
+        "selector" própria no step colapsado).
+        """
+        field_order = (
+            "step_id", "execution_hint", "step_role", "suppression_reason",
+            "superseded_by", "type", "selector", "selector_original",
+            "description", "scenario", "text", "flaky", "weak_selector",
+            "fallback_selectors", "parent", "coords", "dropdown_label",
+            "option_text", "trigger_selector", "option_selector",
+            "coords_trigger", "coords_option", "sanitization_notes",
+            "original_index", "merged_from", "source_events",
+        )
+        out = {}
+        for key in field_order:
+            if key == "selector":
+                out["selector"] = step.get("selector", "")
+                continue
+            if key in step:
+                out[key] = step[key]
+        return out
+
     def _write_execution_plan(self, events: list, dataset_rows: list = None):
-        """Gera plano_execucao.json com steps filtrados (click, fill, filechooser apenas)."""
+        """
+        Gera plano_execucao.json v2: TODOS os eventos classificados por
+        `_classify_raw_events` (T1) entram no array `steps`, com dois
+        espaços de id — `st_NNN` (emitível: `execution_hint` ausente/
+        "required", ou "optional") e `sup_NNN` (suprimido:
+        `execution_hint: "skip"`). Ver
+        `.specs/plano-sanitizer-alta-fidelidade.md` Seção 3 (schema) e
+        Seção 8/T2 (algoritmo de composição R1 × merge) para o contrato
+        completo — este método é a implementação literal desse algoritmo.
+
+        `events` é o SUPERSET completo (mantidos + excluídos por R1-R4, já
+        tagueados por `_classify_raw_events` com `sanitizer_class`) — a
+        filtragem por `sanitizer_class.keep` acontece DENTRO deste método
+        (antes de T2, o call-site em `sanitize()` filtrava antes de
+        chamar). `dataset_rows` mantém o mesmo papel de sempre (Padrão Q).
+        """
         plan_path = os.path.join(self.telemetry_dir, "plano_execucao.json")
-        steps = []
         allowed_types = {"click", "fill", "filechooser"}
 
-        # Preserva a marcação `flaky` de steps já existentes no plano anterior
-        # ao regenerar. O casamento é feito por (type, selector) — não por
-        # step_id, que é posicional (f"st_{i+1:03d}") e desloca a cada
-        # regeração (steps inseridos/removidos mudam o índice de todo mundo
-        # depois). Protegido contra plano antigo ausente ou malformado: nesse
-        # caso, nenhum flaky é herdado, mas a geração do plano novo segue normal.
+        # Estampagem defensiva de original_index: em uso normal (via
+        # sanitize()), todo evento já chega aqui com original_index
+        # estampado ANTES do Padrão P (Seção 8, passo 1). Chamadores que
+        # invocam _write_execution_plan diretamente com eventos "crus" (ex.:
+        # a suíte de testes existente, que nunca passou por sanitize()) não
+        # têm essa garantia — sem um fallback aqui, um evento sem
+        # original_index produziria um step com _source_indices() vazio, e
+        # min() de lista vazia quebraria o merge-insert mais abaixo.
+        # setdefault é no-op quando sanitize() já estampou (produção).
+        all_events = events
+        for _idx, _ev in enumerate(all_events):
+            _ev.setdefault("original_index", _idx)
+
+        kept_events = [e for e in all_events if e.get("sanitizer_class", {}).get("keep", True)]
+        excluded_events = [e for e in all_events if not e.get("sanitizer_class", {}).get("keep", True)]
+
+        # Preserva a marcação `flaky` de steps EMITÍVEIS já existentes no
+        # plano anterior ao regenerar. Casamento por (type, selector) — não
+        # por step_id, que é posicional (f"st_{i+1:03d}") e desloca a cada
+        # regeração. Restrito a emitíveis (Seção 3: "herança de flaky por
+        # (type, selector) passa a casar apenas contra steps emitíveis") —
+        # um `sup_` marcado flaky por QA (Seção 7) não deve vazar para um
+        # `st_` que só por coincidência compartilhe (type, selector).
+        # Protegido contra plano antigo ausente ou malformado: nesse caso,
+        # nenhum flaky é herdado, mas a geração do plano novo segue normal.
         old_flaky_keys = set()
         try:
             with open(plan_path, "r", encoding="utf-8") as f:
@@ -941,7 +1351,7 @@ class SanitizerService:
             old_flaky_keys = {
                 (s.get("type"), s.get("selector"))
                 for s in old_plan.get("steps", [])
-                if s.get("flaky")
+                if s.get("flaky") and s.get("execution_hint", "required") != "skip"
             }
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             old_flaky_keys = set()
@@ -957,26 +1367,43 @@ class SanitizerService:
         # complementar mais abaixo em `sanitize()`), remove o token
         # diretamente do has_text usado no plano, antes de chegar no
         # code_generator — corrige na origem, sem depender de correção
-        # manual pra cada projeto/campo que tiver esse padrão.
+        # manual pra cada projeto/campo que tiver esse padrão. Schema v2
+        # (D4): o valor operacional continua sanitizado (comportamento
+        # idêntico a sempre), mas agora também informa QUAIS tokens
+        # saíram, pra popular has_text_original/sanitization_notes.
         dynamic_token_re = re.compile(r"\b[A-Za-zÀ-ÿ]{2,8}-\d{3,}\b")
         dataset_values_str = " | ".join(
             str(v) for row in (dataset_rows or []) for v in row.values() if isinstance(v, (str, int, float))
         ).lower()
 
         def sanitize_has_text(ht):
+            """Retorna (cleaned, removed_tokens). `cleaned` é o mesmo valor
+            operacional de sempre; `removed_tokens` é a lista de tokens
+            dinâmicos removidos (vazia se nenhum)."""
             if not ht or not isinstance(ht, str):
-                return ht
+                return ht, []
             cleaned = ht
+            removed = []
             for token in dynamic_token_re.findall(ht):
                 if token.lower() not in dataset_values_str:
                     print(f"[AEGIS SANITIZER] [Padrão Q] Removendo token dinâmico '{token}' de has_text (não encontrado no dataset): \"{ht}\"")
                     cleaned = re.sub(r"\s{2,}", " ", cleaned.replace(token, "")).strip()
-            return cleaned
+                    removed.append(token)
+            return cleaned, removed
 
-        for ev in events:
+        def build_step_from_event(ev):
+            """
+            Constrói o dict de step comum a `st_` e `sup_` a partir de UM
+            evento classificado — MESMA lógica de sempre (achatamento
+            label>input, select_native, Padrão Q, fallback_selectors,
+            weak_selector, coords), aplicada uniformemente a eventos
+            mantidos OU excluídos por R1-R4: a supressão é só uma camada de
+            metadados (step_role/suppression_reason/execution_hint)
+            adicionada DEPOIS, nunca uma bifurcação da construção do step
+            em si — ver D3 do plano ("Gesto físico distinto julgado
+            redundante ... vira step sup_NNN").
+            """
             ev_type = ev.get("type", "").lower()
-            if ev_type not in allowed_types:
-                continue
             selector = ev.get("selector", "")
             # Deriva descrição: business_description > text (clicks) / value (fills) > fallback genérico
             desc = ev.get("business_description") or ""
@@ -990,8 +1417,11 @@ class SanitizerService:
             step = {
                 "type": ev_type,
                 "selector": selector,
-                "description": desc
+                "description": desc,
+                "scenario": ev.get("scenario", "default"),
             }
+            if "original_index" in ev:
+                step["original_index"] = ev["original_index"]
             # Flag weak_selector: só quando o evento de origem TEM o campo
             # `confidence` explicitamente E ele é < 70. Gravações antigas
             # (sem o campo, pré-evaluate_selector_reliability) não recebem
@@ -1014,7 +1444,11 @@ class SanitizerService:
                 for fb in raw_fallbacks:
                     if not fb or not isinstance(fb, str):
                         continue
-                    fb_clean = sanitize_has_text(fb)
+                    fb_clean, fb_removed = sanitize_has_text(fb)
+                    if fb_removed:
+                        notes = step.setdefault("sanitization_notes", [])
+                        for token in fb_removed:
+                            notes.append(f"padrao_q: removido token '{token}' de fallback_selectors")
                     if fb_clean in seen:
                         continue
                     seen.add(fb_clean)
@@ -1022,10 +1456,11 @@ class SanitizerService:
                 if clean_fallbacks:
                     step["fallback_selectors"] = clean_fallbacks
             if ev_type == "click":
-                # Só usado internamente por _dedup_consecutive_clicks (same_widget)
-                # pra distinguir 2 widgets físicos diferentes que colapsam no
-                # mesmo selector genérico (ex.: "label" nu); não é serializado
-                # no plano final (schema de step de click não tem esse campo).
+                # Usado internamente por _merge_consecutive_clicks
+                # (same_widget) pra distinguir 2 widgets físicos diferentes
+                # que colapsariam no mesmo selector genérico (ex.: "label"
+                # nu). Schema v2: agora também serializado no plano final
+                # (T2: "já computado hoje, só não estava sendo serializado").
                 step["text"] = ev.get("text", "")
             # <select> nativo dispara 'change' (recorder grava como evento
             # 'fill' igual um <input>), mas .fill() do Playwright não aceita
@@ -1052,54 +1487,138 @@ class SanitizerService:
             # usado como alvo de clique.
             label_input_match = re.fullmatch(r"(label:has-text\((['\"]).*?\2\))\s+input", selector)
             if ev_type == "click" and label_input_match:
+                # Schema v2 (D4): achatamento ganha selector_original com o
+                # seletor pré-achatamento; o `selector` operacional continua
+                # sendo o achatado, igual a sempre.
+                step["selector_original"] = selector
                 step["selector"] = label_input_match.group(1)
                 parent = None
             elif parent:
-                step["parent"] = {"selector": parent.get("selector", ""), "has_text": sanitize_has_text(parent.get("has_text"))}
+                ht_clean, ht_removed = sanitize_has_text(parent.get("has_text"))
+                step["parent"] = {"selector": parent.get("selector", ""), "has_text": ht_clean}
+                if ht_removed:
+                    step["parent"]["has_text_original"] = parent.get("has_text")
+                    notes = step.setdefault("sanitization_notes", [])
+                    for token in ht_removed:
+                        notes.append(f"padrao_q: removido token '{token}'")
             if ev_type == "click":
                 x = ev.get("x_percent")
                 y = ev.get("y_percent")
                 if x is not None and y is not None:
                     step["coords"] = [x, y]
-            steps.append(step)
+            return step
 
-        steps = self._dedup_consecutive_clicks(steps)
+        # 1. Constrói o step de cada evento classificado cujo tipo está em
+        #    allowed_types (idêntico ao filtro de hoje), separado em
+        #    mantidos/excluídos — a construção do step em si é IDÊNTICA nos
+        #    dois casos (build_step_from_event não sabe nem precisa saber
+        #    se o evento foi excluído por R1-R4).
+        kept_steps_raw = []
+        for ev in kept_events:
+            if ev.get("type", "").lower() not in allowed_types:
+                continue
+            kept_steps_raw.append(build_step_from_event(ev))
+
+        r1r4_suppressed = []
+        for ev in excluded_events:
+            if ev.get("type", "").lower() not in allowed_types:
+                continue
+            step = build_step_from_event(ev)
+            sc = ev.get("sanitizer_class") or {}
+            step["step_role"] = sc.get("role")
+            step["suppression_reason"] = sc.get("reason")
+            r1r4_suppressed.append(step)
+
+        # 2. Cadeia de merge/reorder/supersede/phantom — EXATAMENTE a lógica
+        #    de hoje (só renomeada em 3 pontos, Seção 4 do plano), rodando
+        #    SÓ sobre kept_steps_raw. R1-R4 (passo 1, acima) e esta cadeia
+        #    operam sobre conjuntos DISJUNTOS de eventos, idêntico ao
+        #    pipeline atual — a cadeia nunca vê o que R1-R4 já excluiu.
+        steps = self._merge_consecutive_clicks(kept_steps_raw)
         steps = self._reorder_dropdown_pairs(steps)
-        steps = self._drop_redundant_select_corrections(steps)
-        steps = self._drop_redundant_pretrigger_clicks(steps)
+        steps, superseded_items = self._mark_superseded_selects(steps)
+        steps, phantom_items = self._mark_phantom_pretrigger_clicks(steps)
+        # Numeração st_NNN sequencial sobre `steps`, NESTA ORDEM. A partir
+        # daqui a ordem relativa de `steps` entre si NUNCA é alterada de
+        # novo (Seção 8, passo 5) — só se decide ONDE intercalar cada sup_.
 
-        total = len(steps)
+        # 3. Numeração st_NNN + herança de flaky (restrita a emitíveis).
+        st_steps = []
+        for i, s in enumerate(steps):
+            s["step_id"] = f"st_{i + 1:03d}"
+            if (s["type"], s.get("selector", "")) in old_flaky_keys:
+                s["flaky"] = True
+            st_steps.append(s)
+
+        # 4. Resolve superseded_by (referência de objeto -> step_id), agora
+        #    que o vencedor já tem step_id (passo 3).
+        for item in superseded_items:
+            winner = item.pop("_superseded_by_step", None)
+            if winner is not None:
+                item["superseded_by"] = winner["step_id"]
+
+        # 5. sup_NNN: R1-R4 (passo 1) + cadeia (superseded/phantom, passo 2),
+        #    todos com a MESMA forma de step, ordenados por position_anchor
+        #    (_source_indices) — generalização do "sorted by original_index"
+        #    da Seção 8 que também cobre os itens da cadeia (um select
+        #    superado só tem source_events, nunca original_index no nível
+        #    raiz).
+        def _anchor(step):
+            idxs = self._source_indices(step)
+            return min(idxs) if idxs else 0
+
+        all_suppressed = r1r4_suppressed + superseded_items + phantom_items
+        all_suppressed.sort(key=_anchor)
+        for i, s in enumerate(all_suppressed):
+            s["step_id"] = f"sup_{i + 1:03d}"
+            s["execution_hint"] = "skip"
+
+        # 6. Merge-insert (Seção 8, passo 5) — NUNCA reordena st_steps entre
+        #    si; só decide onde intercalar cada sup_. position_anchor de um
+        #    st_step é o MÍNIMO de _source_indices (nunca só
+        #    step.get("original_index") isolado — ver docstring de
+        #    _source_indices e .specs/golden/synthetic_r1_merge_case/README.md).
+        final_steps = []
+        sup_iter = iter(all_suppressed)
+        next_sup = next(sup_iter, None)
+        for st_step in st_steps:
+            st_anchor = _anchor(st_step)
+            while next_sup is not None and _anchor(next_sup) < st_anchor:
+                final_steps.append(next_sup)
+                next_sup = next(sup_iter, None)
+            final_steps.append(st_step)
+        while next_sup is not None:
+            final_steps.append(next_sup)
+            next_sup = next(sup_iter, None)
+
+        merges = sum(1 for s in st_steps if s.get("merged_from"))
+        steps_required = sum(1 for s in st_steps if s.get("execution_hint", "required") == "required")
+        steps_optional = sum(1 for s in st_steps if s.get("execution_hint") == "optional")
+        total_recorded_steps = sum(1 for ev in all_events if ev.get("type", "").lower() in allowed_types)
+
         plan = {
-            "version": "1.0",
+            "version": "2.0",
             "test_dir": os.path.basename(self.telemetry_dir),
             "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "total_steps": total,
-            "steps": [
-                {
-                    "step_id": f"st_{i+1:03d}",
-                    "type": s["type"],
-                    "selector": s.get("selector", ""),
-                    "description": s["description"],
-                    **({"flaky": True} if (s["type"], s.get("selector", "")) in old_flaky_keys else {}),
-                    **({"weak_selector": True} if s.get("weak_selector") else {}),
-                    **({"fallback_selectors": s["fallback_selectors"]} if s.get("fallback_selectors") else {}),
-                    **({"parent": s["parent"]} if "parent" in s else {}),
-                    **({"coords": s["coords"]} if "coords" in s else {}),
-                    **({"dropdown_label": s["dropdown_label"]} if "dropdown_label" in s else {}),
-                    **({"option_text": s["option_text"]} if "option_text" in s else {}),
-                    **({"trigger_selector": s["trigger_selector"]} if "trigger_selector" in s else {}),
-                    **({"option_selector": s["option_selector"]} if "option_selector" in s else {}),
-                    **({"coords_trigger": s["coords_trigger"]} if "coords_trigger" in s else {}),
-                    **({"coords_option": s["coords_option"]} if "coords_option" in s else {}),
-                }
-                for i, s in enumerate(steps)
-            ]
+            "total_steps": len(st_steps),
+            "total_recorded_steps": total_recorded_steps,
+            "fidelity_summary": {
+                "raw_events": len(all_events),
+                "steps_required": steps_required,
+                "steps_optional": steps_optional,
+                "steps_suppressed": len(all_suppressed),
+                "merges": merges,
+            },
+            "steps": [self._serialize_plan_step(s) for s in final_steps],
         }
 
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, indent=2, ensure_ascii=False)
 
-        print(f"[AEGIS SANITIZER] Plano de execução gerado: {plan_path} ({total} steps)")
+        print(
+            f"[AEGIS SANITIZER] Plano de execução gerado: {plan_path} "
+            f"({len(st_steps)} steps emitíveis, {len(all_suppressed)} suprimidos)"
+        )
 
     def refine_semantics_with_llm(self, dict_data: dict, raw_data: dict, business_desc: str, expected_outcome: str) -> tuple:
         """

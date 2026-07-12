@@ -1,0 +1,54 @@
+{
+  "version": "2.0",
+  "test_dir": "synthetic_r1_merge_case",
+  "generated_at": "2026-07-11T09:15:01",
+  "total_steps": 1,
+  "total_recorded_steps": 3,
+  "fidelity_summary": {
+    "raw_events": 3,
+    "steps_required": 1,
+    "steps_optional": 0,
+    "steps_suppressed": 1,
+    "merges": 1
+  },
+  "steps": [
+    {
+      "step_id": "st_001",
+      "type": "click",
+      "selector": "span.mat-button-wrapper",
+      "description": "Clicar no botão 'Abrir Modal' (span interno do botão, mesmo widget físico).",
+      "scenario": "default",
+      "text": "",
+      "coords": [0.451, 0.3305],
+      "parent": {
+        "selector": "div.modal-trigger-wrapper",
+        "has_text": "Abrir Modal"
+      },
+      "original_index": 2,
+      "merged_from": [
+        {
+          "original_index": 0,
+          "selector": "#btn-abrir-modal",
+          "reason": "clique consecutivo no mesmo widget"
+        }
+      ]
+    },
+    {
+      "step_id": "sup_001",
+      "execution_hint": "skip",
+      "step_role": "raw_duplicate_click",
+      "suppression_reason": "Clique consecutivo idêntico ao selector do evento anterior ('#btn-abrir-modal') — mesmo gesto físico capturado 2x pelo recorder (Regra R1). Reintroduzir apenas se o fluxo exigir um duplo clique genuíno neste widget.",
+      "type": "click",
+      "selector": "#btn-abrir-modal",
+      "description": "Clicar no botão 'Abrir Modal'.",
+      "scenario": "default",
+      "text": "Abrir Modal",
+      "coords": [0.45, 0.33],
+      "parent": {
+        "selector": "div.modal-trigger-wrapper",
+        "has_text": "Abrir Modal"
+      },
+      "original_index": 1
+    }
+  ]
+}

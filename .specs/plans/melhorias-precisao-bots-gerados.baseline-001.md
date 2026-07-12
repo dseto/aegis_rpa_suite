@@ -134,3 +134,52 @@ Sem regressão nas métricas comparadas. Achado novo (sensor `CLICK_NO_EFFECT` e
 - Disparou corretamente por linguagem natural, sem citar o nome da skill.
 - Seguiu o processo documentado: pré-condições → 3 execuções sem regenerar → extração de métricas → comparação → append ao baseline existente (não sobrescreveu histórico).
 - Achou um ponto real (`CLICK_NO_EFFECT` determinístico em `st_004`) que nenhuma execução manual anterior deste projeto havia isolado tão claramente (3/3, mesmo passo).
+
+---
+
+# Gate pós-schema-v2 (validação de ponta a ponta do refactor Sanitizer — ids `st_`/`sup_`, `execution_hint`, classificação em vez de deleção)
+
+**Data da execução do gate:** 2026-07-12
+**Commit no momento do gate:** `dc32ab3` (`fix(cockpit): invalida cache de index.html por mtime, nao so no start`, topo de `main` — schema v2 do sanitizer/step_validator/code_generator ainda não commitado, mudanças em working tree)
+**Motivo:** validação final (T7) do backlog de refatoração do schema v2 do `plano_execucao.json` — confirmar que o Sanitizer/step_validator/code_generator novos não regridem o comportamento do bot compilado.
+**Bot regenerado?** **NÃO.** `code/bot_producao.py` permaneceu intocado (mesmo artefato compilado usado em todos os gates anteriores). Apenas `plano_execucao.json`/`gravacao.json`/`relatorio.md` foram re-sanitizados no Passo 1 desta validação (schema v2: `version: "2.0"`, 63 steps `st_` + 4 `sup_`, `golden_diff.py` confirmou 0 diferença nos steps `st_` vs. golden v1) — o runner usa o plano só para o mapa de flaky-steps; a execução real segue os `# [PASSO X]` hardcoded em `bot_producao.py`, então este gate prova retrocompatibilidade do runner com o novo schema.
+**Comando executado (3x, idêntico aos gates anteriores):**
+
+```
+python projects/portal_segura/tests/001_teste/code/bot_producao.py
+```
+
+**Ambiente:** `AEGIS_BROWSER_CHANNEL=msedge`, `AEGIS_BROWSER_HEADLESS=false` (conforme `.env` do projeto), `AEGIS_COGNITIVE_ENABLED=true`, provider `openrouter`, modelo `google/gemini-2.5-flash`. Site alvo `http://localhost:5173/` confirmado no ar (HTTP 200) antes de iniciar. Dataset (`dataset_inicial.json`, linha única id=1) tem `expected_result: "SUCCESS"` — **não é um cenário `BUSINESS_BLOCKED` intencional**; a taxa de 0% de sucesso observada em todas as 3 execuções (e em 100% das execuções já documentadas neste arquivo desde a captura original em 2026-07-06) é flakiness genuína do site/self-healing numa etapa tardia de um fluxo de 67 passos, não um bloqueio de negócio esperado pelo dataset.
+
+## Métricas por execução
+
+| # | Taxa de sucesso | SUCCESS/STOPPED/HEALED/FAILED (passos) | `correcoes_acumuladas.json` (antes→depois) | Tempo total (s) | Ponto de falha (`failed_field`) | Classe de falha |
+|---|---|---|---|---|---|---|
+| 1 | 0/1 (0%) | 56/5/5/2 | 23→23 | 171.91 | `.mat-row` — tabela de propostas não encontrada após tela de cobrança/PIX | **Idêntica** à execução 1 e 2 do baseline original (2026-07-06) e à execução 2 do gate pós-M1-M5 |
+| 2 | 0/1 (0%) | — | 23→23 | 140.90 | `#toggle-busca-fipe` — campo 'Nome Completo' vazio impede habilitação de 'Avançar' | Variante nova na string exata, mas mesma classe geral já documentada ("validação de formulário obrigatória bloqueia progressão", ex. caso "Nível da Blindagem" no gate pós-M1-M5). Rastreado até um `if not nome_atual...` pré-existente em `bot_producao.py` linhas 50-56 (guarda de AJAX-autofill), **não modificado nesta tarefa** — não é código gerado ou alterado pelo schema v2. |
+| 3 | 0/1 (0%) | 56/5/5/2 | 23→23 | 170.11 | `.mat-row` — idêntico à execução 1 (mesmo seletor, mesma tela, mesmo diagnóstico de IA) | **Idêntica** à execução 1 deste gate e à execução 1/2 do baseline original |
+
+### Média
+
+- **Taxa de sucesso média:** 0/1 (0%) — idêntica ao baseline e a todos os gates anteriores. Nenhum novo piso inferior (já não havia piso abaixo de 0%).
+- **`correcoes_acumuladas.json`:** estável em 23 entradas nas 3 execuções (23→23 em todas) — nenhuma correção nova persistida. `needs_review` estável em 9 nas 3 execuções.
+- **Tempo total médio:** 160.97s ((171.91+140.90+170.11)/3) — dentro da faixa das execuções 1/2 do baseline original (166–171s) e do gate pós-M1-M5 execução 2 (172s); não há explosão de tempo (critério de reprovação é dobrar o baseline — nem perto).
+- **Sensor `CLICK_NO_EFFECT`:** disparou em `st_051`, `st_054`, `st_058`, `st_060` (execução 3) e em `st_060` (execução 1) — todos resolvidos via self-healing cognitivo (`HEALED`), nenhum bloqueou o passo. Comportamento consistente com o já documentado nos gates anteriores.
+
+## Resposta à pergunta central: é regressão do schema v2 ou flakiness já conhecida?
+
+**Flakiness já conhecida — não é regressão.** Evidência:
+
+1. **2 das 3 execuções (1 e 3) falharam no seletor `.mat-row` byte-idêntico** ao ponto de falha já documentado desde a captura original do baseline em 2026-07-06 (execuções 1 e 2) e replicado na execução 2 do gate pós-M1-M5 (2026-07-06). Mesmo seletor, mesma tela ("Ambiente de Cobrança e Emissão" pós-PIX), mesmo diagnóstico de IA ("tabela de propostas não encontrada").
+2. **A execução 2 caiu numa variante da mesma classe geral** ("validação de campo obrigatório bloqueia progressão"), rastreada a uma guarda condicional pré-existente em `bot_producao.py` (linhas 50-56, `if not nome_atual...`) que **não foi tocada por nenhuma mudança desta tarefa** (nem pelo Sanitizer v2, nem pelo `code_generator.py` — o bot não foi regenerado). É o mesmo bot compilado que já rodou em todos os gates anteriores.
+3. **Nenhuma exceção Python não tratada, crash do runner, erro de import ou novo tipo de erro sistêmico em nenhuma das 3 execuções** — todas terminaram graciosamente como `SYSTEM_FAILED` com diagnóstico de IA completo e screenshot salvo, exatamente como o comportamento já estabelecido.
+4. **`correcoes_acumuladas.json` não cresceu** (23→23 em todas as 3 execuções, bem dentro da tolerância de +1 do critério do gate).
+5. **`expected_result` do dataset é `"SUCCESS"`**, não há campo `aegis_scenario` indicando bloqueio de negócio intencional — a taxa de 0% é a mesma flakiness de ambiente/self-healing tardio já documentada como piso desde a primeira captura de baseline, não uma mudança de comportamento esperado introduzida pelo schema v2.
+
+## Veredito
+
+### ✅ APROVADO
+
+Nenhuma regressão detectada. Taxa de sucesso, estabilidade de `correcoes_acumuladas.json` e tempo de execução permanecem dentro dos critérios do gate. As 3 falhas transacionais observadas pertencem a classes de falha já documentadas nesta mesma referência desde 2026-07-06, incluindo 2/3 execuções batendo no ponto de falha byte-idêntico ao baseline original. O runner (`aegis_runner/runner.py`) demonstrou retrocompatibilidade total com o `plano_execucao.json` no novo schema v2 (o bot compilado nem percebe a diferença — só consome o plano para o mapa de flaky-steps).
+
+**Ressalva formal (herdada dos gates anteriores):** M3 (fallback_selectors) e M5 (weak_selector) continuam não exercitados neste bot compilado (pré-existente às melhorias). Isso é inalterado por este gate — o schema v2 do Sanitizer não afeta essa ressalva.

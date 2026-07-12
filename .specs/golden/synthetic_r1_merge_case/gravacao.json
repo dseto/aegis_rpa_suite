@@ -1,0 +1,49 @@
+{
+    "initial_url": "https://sintetico.exemplo.aegis/widget-modal",
+    "events": [
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-abrir-modal",
+            "text": "Abrir Modal",
+            "x_percent": 0.45,
+            "y_percent": 0.33,
+            "parent": {
+                "selector": "div.modal-trigger-wrapper",
+                "has_text": "Abrir Modal"
+            },
+            "timestamp": "2026-07-11T09:15:00.000000",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Abrir Modal'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-abrir-modal",
+            "text": "Abrir Modal",
+            "x_percent": 0.45,
+            "y_percent": 0.33,
+            "parent": {
+                "selector": "div.modal-trigger-wrapper",
+                "has_text": "Abrir Modal"
+            },
+            "timestamp": "2026-07-11T09:15:00.180000",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Abrir Modal'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": "span.mat-button-wrapper",
+            "x_percent": 0.451,
+            "y_percent": 0.3305,
+            "parent": {
+                "selector": "div.modal-trigger-wrapper",
+                "has_text": "Abrir Modal"
+            },
+            "timestamp": "2026-07-11T09:15:00.340000",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Abrir Modal' (span interno do botão, mesmo widget físico)."
+        }
+    ]
+}

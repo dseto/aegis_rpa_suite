@@ -174,18 +174,84 @@ class CodeGeneratorService:
     def _strip_internal_step_fields(steps: list) -> list:
         """
         Remove campos internos de bookkeeping do sanitizer (trigger_selector,
-        option_selector, fallback_selectors) antes de expor os steps do plano
-        pra LLM — esses campos nao sao kwargs validos de select_option_resilient
-        (que so aceita original_coords_trigger/original_coords_option) e a LLM os
-        confunde com nomes de parametro, gerando TypeError em runtime.
+        option_selector, fallback_selectors, merged_from, source_events,
+        original_index, reordered_from, superseded_by) antes de expor os
+        steps do plano pra LLM — esses campos nao sao kwargs validos de
+        select_option_resilient (que so aceita
+        original_coords_trigger/original_coords_option) e a LLM os confunde
+        com nomes de parametro, gerando TypeError em runtime.
         fallback_selectors e bookkeeping interno do sanitizer para self-healing
-        e nao deve ser exposto/manipulado pela LLM.
+        e nao deve ser exposto/manipulado pela LLM. merged_from, source_events,
+        original_index, reordered_from e superseded_by sao bookkeeping puro de
+        proveniencia/fidelidade do plano v2 (Secao 6 de
+        .specs/plano-sanitizer-alta-fidelidade.md) — colidem com o proposito
+        de "so o que a LLM precisa manipular" e nao devem ser expostos como
+        se fossem kwargs.
+        Campos mantidos visiveis de proposito (contexto legitimo, nenhum
+        colide com nome de kwarg do runner): execution_hint, step_role,
+        suppression_reason, sanitization_notes, scenario, text,
+        selector_original, has_text_original.
         """
-        internal_fields = ("trigger_selector", "option_selector", "fallback_selectors")
+        internal_fields = (
+            "trigger_selector", "option_selector", "fallback_selectors",
+            "merged_from", "source_events", "original_index",
+            "reordered_from", "superseded_by",
+        )
         return [
             {k: v for k, v in step.items() if k not in internal_fields}
             for step in steps
         ]
+
+    def _render_plan_for_prompt(self, steps: list) -> str:
+        """
+        Serializa os steps do plano de execução (schema v2, Seção 6 de
+        .specs/plano-sanitizer-alta-fidelidade.md) para injeção no prompt da
+        LLM, separando por `execution_hint`:
+          - steps emitíveis (campo ausente, 'required' ou 'optional'): JSON
+            completo pós _strip_internal_step_fields, exatamente como antes
+            (nenhuma mudança de formato pra esses).
+          - steps suprimidos ('skip', ids 'sup_...'): NÃO viram JSON — viram
+            uma seção de texto compacta (1 linha por step: step_id, type,
+            seletor resumido, suppression_reason) sob o cabeçalho
+            '## PASSOS SUPRIMIDOS'. Isso dá à LLM contexto de fidelidade
+            (por que aquele gesto foi filtrado, pra não reintroduzir por
+            engano nem "ajudar" cobrindo algo que já foi julgado ruído) sem
+            inflar o prompt com o JSON completo de cada supressão nem
+            convidar emissão por padrão.
+        Usada nos três pontos de renderização do plano (_generate_new_code,
+        _surgical_correct full-file, _surgical_correct_scoped) — a lista
+        `steps` recebida já vem pré-filtrada pelo caller quando aplicável
+        (ex.: plan_slice no modo escopado já é restrito a target_step_ids +
+        contexto imediato; esta função não busca `sup_` adicionais fora do
+        que recebeu).
+        """
+        emit_steps = [
+            s for s in steps
+            if s.get("execution_hint") in (None, "required", "optional")
+        ]
+        skip_steps = [s for s in steps if s.get("execution_hint") == "skip"]
+
+        rendered = json.dumps(self._strip_internal_step_fields(emit_steps), indent=2, ensure_ascii=False)
+
+        if skip_steps:
+            lines = ["", "## PASSOS SUPRIMIDOS — contexto de fidelidade (não emitir por padrão)"]
+            for s in skip_steps:
+                selector = (
+                    s.get("selector")
+                    or s.get("trigger_selector")
+                    or (f"dropdown:{s['dropdown_label']}" if s.get("dropdown_label") else "")
+                    or ""
+                )
+                selector = selector.replace("\n", " ").strip()
+                if len(selector) > 70:
+                    selector = selector[:67] + "..."
+                reason = (s.get("suppression_reason") or "").replace("\n", " ").strip()
+                lines.append(
+                    f"- {s.get('step_id', '?')} | {s.get('type', '?')} | {selector} | {reason}"
+                )
+            rendered += "\n" + "\n".join(lines)
+
+        return rendered
 
     def generate(self) -> bool:
         print("\n" + "=" * 60)
@@ -828,7 +894,7 @@ Exemplo de chamada de Skill:
             with open(self.plan_path, "r", encoding="utf-8") as pf:
                 plan = json.load(pf)
             plan_steps = plan.get("steps", [])
-            plan_steps_json = json.dumps(self._strip_internal_step_fields(plan_steps), indent=2, ensure_ascii=False)
+            plan_steps_json = self._render_plan_for_prompt(plan_steps)
 
         # Constrói o Prompt de Compilação para a LLM
         print("[INFO] Montando prompt estruturado para o motor de IA...")
@@ -983,6 +1049,25 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
     O plano de execução determinístico é:
 
     """ + plan_steps_json + """
+
+    ⚠️ **CONTRATO DE FIDELIDADE — `execution_hint` (schema v2 do plano):**
+    O bloco acima contém apenas os passos emitíveis (sem `execution_hint`, ou com
+    `"execution_hint": "required"`/`"optional"`). Se houver uma seção adicional
+    "## PASSOS SUPRIMIDOS" logo em seguida, ela lista em texto compacto (1 linha por passo, ids
+    `sup_...`) os gestos que o Sanitizer já classificou como ruído/redundância/correção durante a
+    gravação (overlay fechado, clique fantasma, seleção corrigida em seguida, etc.).
+      - Passos da seção "PASSOS SUPRIMIDOS" (`sup_...`) **NÃO devem ser emitidos por padrão**. Emita
+        um passo suprimido **SOMENTE** se uma correção pendente ou o próprio contexto do fluxo exigir
+        de forma justificada (ex.: reabrir um overlay que um passo posterior precisa fechar,
+        re-disparar uma validação da qual outro passo depende). Ao emitir, use o `step_id` EXATO
+        listado na seção suprimida — nunca invente um novo id — e preserve sua ordem relativa entre
+        os demais passos.
+      - Passos `"execution_hint": "optional"` (presentes no JSON acima) ficam a **critério da sua
+        análise**: emita-os ou não, conforme a telemetria/relatório indicar que são necessários para
+        o fluxo funcionar. Se decidir emitir um passo `optional`, adicione um comentário curto no
+        código explicando o motivo.
+      - Passos sem `execution_hint` (ou com `"required"`) são obrigatórios e devem sempre ser
+        emitidos, como já era o comportamento padrão.
 
     Formato exigido em cada chamada (page é SEMPRE o primeiro argumento posicional):
       runner.{metodo}(page, selector="...", target_description="...", step_id="{step_id}")
@@ -1144,8 +1229,16 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             relevant_ids.add(context_before["step_id"])
         if context_after and context_after["step_id"]:
             relevant_ids.add(context_after["step_id"])
+        # sup_ NÃO entram automaticamente aqui: plan_slice já é restrito a
+        # target_step_ids + o(s) step_id(s) do(s) bloco(s) de contexto
+        # imediato (que só existem porque a LLM já os emitiu como bloco de
+        # código antes) — um sup_ só aparece nesta fatia se ele mesmo for um
+        # target_step_id ou já for um bloco de contexto real. Diferente dos
+        # outros dois pontos de renderização (que recebem o plano inteiro),
+        # aqui _render_plan_for_prompt nunca busca sup_ adicionais por conta
+        # própria — só categoriza o que já veio nesta fatia pré-filtrada.
         plan_slice = [s for s in plan_steps if s.get("step_id") in relevant_ids]
-        plan_slice_json = json.dumps(self._strip_internal_step_fields(plan_slice), indent=2, ensure_ascii=False)
+        plan_slice_json = self._render_plan_for_prompt(plan_slice)
 
         context_section = ""
         if context_before:
@@ -1331,7 +1424,7 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
             with open(self.plan_path, "r", encoding="utf-8") as pf:
                 plan = json.load(pf)
             plan_steps = plan.get("steps", [])
-            plan_steps_json = json.dumps(self._strip_internal_step_fields(plan_steps), indent=2, ensure_ascii=False)
+            plan_steps_json = self._render_plan_for_prompt(plan_steps)
 
         reflection_block = ""
         if reflection_section:
@@ -1437,6 +1530,24 @@ Você DEVE seguir rigorosamente os princípios de simplicidade e alteração cir
    O plano de execução determinístico é:
 
     """ + plan_steps_json + """
+
+   ⚠️ **CONTRATO DE FIDELIDADE — `execution_hint` (schema v2 do plano):**
+   O bloco acima contém apenas os passos emitíveis (sem `execution_hint`, ou com
+   `"execution_hint": "required"`/`"optional"`). Se houver uma seção adicional
+   "## PASSOS SUPRIMIDOS" logo em seguida, ela lista em texto compacto (1 linha por passo, ids
+   `sup_...`) os gestos que o Sanitizer já classificou como ruído/redundância/correção durante a
+   gravação (overlay fechado, clique fantasma, seleção corrigida em seguida, etc.).
+     - Passos da seção "PASSOS SUPRIMIDOS" (`sup_...`) **NÃO devem ser emitidos por padrão**. Emita
+       um passo suprimido **SOMENTE** se uma das correções da seção 2 abaixo ou o próprio contexto
+       da correção cirúrgica exigir de forma justificada (ex.: reabrir um overlay que um passo
+       posterior precisa fechar, re-disparar uma validação da qual outro passo depende). Ao emitir,
+       use o `step_id` EXATO listado na seção suprimida — nunca invente um novo id — e preserve sua
+       ordem relativa entre os demais passos.
+     - Passos `"execution_hint": "optional"` (presentes no JSON acima) ficam a **critério da sua
+       análise**: emita-os ou não, conforme a correção pedida indicar que são necessários. Se decidir
+       emitir um passo `optional`, adicione um comentário curto no código explicando o motivo.
+     - Passos sem `execution_hint` (ou com `"required"`) são obrigatórios e não devem ser removidos
+       por esta correção, salvo se a correção pedida for exatamente removê-los.
 
    Formato exigido em cada chamada (page é SEMPRE o primeiro argumento posicional):
      runner.{metodo}(page, selector="...", target_description="...", step_id="{step_id}")

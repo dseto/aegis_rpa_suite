@@ -122,6 +122,8 @@ Siga esta ordem **exata** — ela reproduz a cadeia real do pipeline:
 
 **Questão:** O plano contém o step_id que o bot vai referenciar depois?
 
+**Nota — schema v2 (`plano_execucao.json` de alta fidelidade):** planos gerados pelo Sanitizer atual usam dois espaços de id disjuntos — `st_NNN` (steps emitíveis, `execution_hint` ausente/`"required"`/`"optional"`) e `sup_NNN` (steps suprimidos, `execution_hint: "skip"`, sempre com `step_role` + `suppression_reason`). Um `bot_producao.py` que referencia só `st_` é normal e esperado, não um sintoma de dessincronia — `sup_` ausente do código é o caso comum. Campos úteis para forense: `original_index` (posição no `gravacao.json` bruto, antes de qualquer merge/reordenação — rastreia um step até o(s) evento(s) físico(s) de origem), `merged_from`/`source_events` (lista de `original_index` absorvidos quando o step é resultado de um merge, ex.: cliques duplicados ou par abridor+opção de dropdown), e `sanitizer_class` (também presente nos eventos de `gravacao.json` em si — `role`/`keep`/`reason` — mostra por que um evento bruto foi classificado como ruído mesmo que nunca tenha sido fisicamente removido). Se o bot referencia um `step_id` que não existe no plano (nem como `st_` nem como `sup_`), isso é sempre um id alucinado pela LLM — não confundir com um `sup_` legitimamente suprimido.
+
 #### E. Código Gerado (`code/bot_producao.py` — Saída do Code Generator, Fase 4)
 
 **O que verificar:**

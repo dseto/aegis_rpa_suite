@@ -1,0 +1,412 @@
+{
+    "initial_url": "http://localhost:5173/",
+    "fields": {
+        "email_login": {
+            "selector": "#username",
+            "type": "string",
+            "observed_value": "admin@portalsegura.com",
+            "required": true,
+            "confidence": 90,
+            "selector_type": "id",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada seuemail@exemplo.com mapeado na tela",
+            "validation_rules": {
+                "regex": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$",
+                "enum": []
+            }
+        },
+        "senha_login": {
+            "selector": "#password",
+            "type": "string",
+            "observed_value": "Segura@2026",
+            "required": true,
+            "confidence": 90,
+            "selector_type": "id",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada digite sua senha mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "cpf_cliente": {
+            "selector": "label:has-text('CPF do Cliente') ~ input",
+            "type": "string",
+            "observed_value": "22401666818",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "HUMAN_LIKE",
+            "description": "Campo de entrada cpf do cliente mapeado na tela",
+            "validation_rules": {
+                "regex": "^\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}$",
+                "enum": []
+            }
+        },
+        "nome_cliente": {
+            "selector": "label:has-text('Nome Completo') ~ input",
+            "type": "string",
+            "observed_value": "daniel setttt",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "HUMAN_LIKE",
+            "description": "Campo de entrada nome completo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "data_nascimento_cliente": {
+            "selector": "label:has-text('Data de Nascimento') ~ input",
+            "type": "date",
+            "observed_value": "09/01/2001",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "HUMAN_LIKE",
+            "description": "Campo de entrada data de nascimento mapeado na tela",
+            "validation_rules": {
+                "regex": "^\\d{2}/\\d{2}/\\d{4}$|^\\d{4}-\\d{2}-\\d{2}$",
+                "enum": []
+            }
+        },
+        "genero_cliente": {
+            "selector": "label:has-text('Sexo') ~ div",
+            "type": "string",
+            "observed_value": "Feminino",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada sexo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "estado_civil_cliente": {
+            "selector": "label:has-text('Estado Civil') ~ div",
+            "type": "string",
+            "observed_value": "Casado(a)",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada estado civil mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "email_contato": {
+            "selector": "label:has-text('E-mail de Contato') ~ input",
+            "type": "string",
+            "observed_value": "teste@ggmail.com",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "HUMAN_LIKE",
+            "description": "Campo de entrada e_mail de contato mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "celular_contato": {
+            "selector": "label:has-text('Celular') ~ input",
+            "type": "string",
+            "observed_value": "119039333884",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "HUMAN_LIKE",
+            "description": "Campo de entrada celular mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "uso_veiculo": {
+            "selector": "label:has-text('Uso do Veículo') ~ div",
+            "type": "string",
+            "observed_value": "Aplicativo de Transporte (Uber/99)",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada uso do veículo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "veiculo_zero_km": {
+            "selector": "label:has-text('Veículo Zero Km?') ~ div",
+            "type": "string",
+            "observed_value": "Sim (Zero Km)",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada veículo zero km? mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "marca_veiculo": {
+            "selector": "input[placeholder='Pesquisar Marca...']",
+            "type": "string",
+            "observed_value": "Hyundai",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada marca do veículo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "modelo_veiculo": {
+            "selector": "input[placeholder='Pesquisar Modelo...']",
+            "type": "string",
+            "observed_value": "Creta",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada modelo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "versao_fipe": {
+            "selector": "input[placeholder='Versões Disponíveis...']",
+            "type": "string",
+            "observed_value": "Creta Limited 1.0 Turbo Flex",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada versão (fipe) mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "ano_modelo": {
+            "selector": "input[placeholder='Ex: 2024']",
+            "type": "string",
+            "observed_value": "2026",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada ano modelo mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "ano_fabricacao": {
+            "selector": "input[placeholder='Ex: 2023']",
+            "type": "string",
+            "observed_value": "2026",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada ano fabricação mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "tipo_combustivel": {
+            "selector": "label:has-text('Combustível') ~ div",
+            "type": "string",
+            "observed_value": "Diesel",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada combustível mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "nivel_blindagem": {
+            "selector": "label:has-text('Nível da Blindagem') ~ div",
+            "type": "string",
+            "observed_value": "Nível III / IV",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada nível da blindagem mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "empresa_blindadora": {
+            "selector": "label:has-text('Empresa Blindadora') ~ input",
+            "type": "string",
+            "observed_value": "boll dj",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada empresa blindadora mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "valor_blindagem": {
+            "selector": "input[placeholder='Ex: 50000']",
+            "type": "string",
+            "observed_value": "676779",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada valor segurado blindagem (r$) mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "condutor_e_segurado": {
+            "selector": "label:has-text('O condutor principal é o próprio segurado?') ~ div",
+            "type": "string",
+            "observed_value": "Sim, o próprio segurado",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada o condutor principal é o próprio segurado? mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "tipo_residencia": {
+            "selector": "label:has-text('Tipo de Residência') ~ div",
+            "type": "string",
+            "observed_value": "Apartamento",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada tipo de residência mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "garagem_fechada": {
+            "selector": "label:has-text('Garagem Fechada na Residência?') ~ div",
+            "type": "string",
+            "observed_value": "Sim, com portão automático/manual",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada garagem fechada na residência? mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "quilometragem_diaria": {
+            "selector": "label:has-text('Quilometragem Média Diária') ~ div",
+            "type": "string",
+            "observed_value": "Até 20 KM / Dia",
+            "required": true,
+            "confidence": 70,
+            "selector_type": "has-text",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada quilometragem média diária mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "condutores_jovens": {
+            "selector": "div",
+            "type": "string",
+            "observed_value": "Sim",
+            "required": true,
+            "confidence": 40,
+            "selector_type": "tag",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada reside com condutores na faixa de 18 a 25 anos? mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "cep_pernoite": {
+            "selector": "input[placeholder='Ex: 01001-000']",
+            "type": "string",
+            "observed_value": "01409000",
+            "required": true,
+            "confidence": 80,
+            "selector_type": "name-or-placeholder",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada cep de pernoite do veículo mapeado na tela",
+            "validation_rules": {
+                "regex": "^\\d{5}-?\\d{3}$",
+                "enum": []
+            }
+        },
+        "limite_danos_materiais": {
+            "selector": "#slider-lmiDM",
+            "type": "string",
+            "observed_value": "50000",
+            "required": true,
+            "confidence": 90,
+            "selector_type": "id",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada slider_lmidm mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "limite_danos_corporais": {
+            "selector": "#slider-lmiDC",
+            "type": "string",
+            "observed_value": "50000",
+            "required": true,
+            "confidence": 90,
+            "selector_type": "id",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada slider_lmidc mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        },
+        "codigo_copia_cola_pix": {
+            "selector": "input",
+            "type": "string",
+            "observed_value": "00020101021226870014br.gov.bcb.pix2565pix.segura.com.br/cotacao/19201928019",
+            "required": true,
+            "confidence": 40,
+            "selector_type": "tag",
+            "fill_strategy": "DIRECT",
+            "description": "Campo de entrada input mapeado na tela",
+            "validation_rules": {
+                "regex": "",
+                "enum": []
+            }
+        }
+    },
+    "outputs": {}
+}

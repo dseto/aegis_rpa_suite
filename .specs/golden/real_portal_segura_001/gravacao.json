@@ -1,0 +1,1215 @@
+{
+    "initial_url": "http://localhost:5173/",
+    "events": [
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "#username",
+            "value": "admin@portalsegura.com",
+            "name": "seuemail@exemplo.com",
+            "placeholder": "seuemail@exemplo.com",
+            "id": "username",
+            "timestamp": "2026-07-03T06:49:23.176093",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de e-mail com 'admin@portalsegura.com'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "#password",
+            "value": "Segura@2026",
+            "name": "Digite sua senha",
+            "placeholder": "Digite sua senha",
+            "id": "password",
+            "timestamp": "2026-07-03T06:49:23.177518",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de senha com 'Segura@2026'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#app div",
+            "text": "S\nPortalSegura\n\nAcesse o painel do corretor para c",
+            "x_percent": 0.1828125,
+            "y_percent": 0.5547850208044383,
+            "parent": {
+                "selector": "#app",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:49:23.179232",
+            "scenario": "default",
+            "business_description": "Clicar na área do aplicativo que contém 'S PortalSegura Acesse o painel do corretor para c'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-login",
+            "text": "Entrar no Portal",
+            "x_percent": 0.4625,
+            "y_percent": 0.7642163661581137,
+            "timestamp": "2026-07-03T06:49:34.842958",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Entrar no Portal'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-new-quote",
+            "text": "➕ Nova Cotação Auto",
+            "x_percent": 0.90546875,
+            "y_percent": 0.19694868238557559,
+            "timestamp": "2026-07-03T06:49:38.503184",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Nova Cotação Auto'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('CPF do Cliente') ~ input",
+            "value": "22401666818",
+            "name": "CPF do Cliente",
+            "placeholder": "",
+            "id": "mat-input-doc-ng-tns-c1909216-46808-5",
+            "timestamp": "2026-07-03T06:49:46.349868",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'CPF do Cliente' com '22401666818'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#step-content-container .step-grid-2 #field-nome div",
+            "text": "Nome Completo",
+            "x_percent": 0.57890625,
+            "y_percent": 0.5450762829403606,
+            "parent": {
+                "selector": "#field-nome",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:49:46.455583",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'Nome Completo'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('Nome Completo') ~ input",
+            "value": "daniel setttt",
+            "name": "Nome Completo",
+            "placeholder": "",
+            "id": "mat-input-nome-ng-tns-c1909216-89583-9",
+            "timestamp": "2026-07-03T06:49:50.886883",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Nome Completo' com 'daniel setttt'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('Data de Nascimento') ~ input",
+            "value": "09/01/2001",
+            "name": "Data de Nascimento",
+            "placeholder": "",
+            "id": "mat-input-nasc-ng-tns-c1909216-17840-3",
+            "timestamp": "2026-07-03T06:49:54.577876",
+            "scenario": "default",
+            "is_date": true,
+            "business_description": "Preencher o campo 'Data de Nascimento' com '09/01/2001'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#step-content-container .step-grid-3 #field-sexo mat-form-field:has-text('Sexo') div",
+            "text": "Sexo\nSelecione",
+            "x_percent": 0.4921875,
+            "y_percent": 0.6643550624133149,
+            "parent": {
+                "selector": "#field-sexo",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:49:56.407271",
+            "scenario": "default",
+            "business_description": "Clicar no campo de seleção de 'Sexo'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Sexo') ~ div",
+            "text": "Selecione",
+            "x_percent": 0.4890625,
+            "y_percent": 0.6879334257975035,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Sexo Selecione"
+            },
+            "timestamp": "2026-07-03T06:49:57.583400",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Selecione' para o campo 'Sexo'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Feminino')",
+            "text": "Feminino",
+            "x_percent": 0.475,
+            "y_percent": 0.7891816920943134,
+            "timestamp": "2026-07-03T06:49:58.700860",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Feminino' para o campo 'Sexo'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".step-grid-3 #field-estadoCivil .mat-form-field-wrapper #mat-select-estCivil-ng-tns-c1909216-44864-5 mat-form-field:has-text('Estado Civil') span",
+            "text": "Selecione",
+            "x_percent": 0.71640625,
+            "y_percent": 0.6768377253814147,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Estado Civil Selecione"
+            },
+            "timestamp": "2026-07-03T06:49:59.324791",
+            "scenario": "default",
+            "business_description": "Clicar no campo de seleção de 'Estado Civil'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Casado(a)')",
+            "text": "Casado(a)",
+            "x_percent": 0.73515625,
+            "y_percent": 0.79750346740638,
+            "timestamp": "2026-07-03T06:50:00.185637",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Casado(a)' para o campo 'Estado Civil'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#field-email div",
+            "text": "E-mail de Contato",
+            "x_percent": 0.184375,
+            "y_percent": 0.8002773925104022,
+            "parent": {
+                "selector": "#field-email",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:00.785726",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'E-mail de Contato'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('E-mail de Contato') ~ input",
+            "value": "teste@ggmail.com",
+            "name": "E-mail de Contato",
+            "placeholder": "",
+            "id": "mat-input-email-ng-tns-c1909216-12595-1",
+            "timestamp": "2026-07-03T06:50:07.490813",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'E-mail de Contato' com 'teste@ggmail.com'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#field-celular div",
+            "text": "Celular",
+            "x_percent": 0.56484375,
+            "y_percent": 0.7642163661581137,
+            "parent": {
+                "selector": "#field-celular",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:07.545908",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'Celular'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('Celular') ~ input",
+            "value": "119039333884",
+            "name": "Celular",
+            "placeholder": "",
+            "id": "mat-input-cel-ng-tns-c1909216-52838-6",
+            "timestamp": "2026-07-03T06:50:12.497044",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Celular' com '119039333884'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#app #step-content-container div",
+            "text": "Pessoa com Deficiência (PCD)\nTipo de Isenção Aplic",
+            "x_percent": 0.05390625,
+            "y_percent": 0.8959778085991679,
+            "parent": {
+                "selector": "#step-content-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:12.616027",
+            "scenario": "default",
+            "business_description": "Clicar na área que contém 'Pessoa com Deficiência (PCD) Tipo de Isenção Aplic'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": "#step-content-container #checkbox-pcd span",
+            "text": "",
+            "x_percent": 0.04453125,
+            "y_percent": 0.8945908460471568,
+            "parent": {
+                "selector": "#checkbox-pcd",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:12.967257",
+            "scenario": "default",
+            "business_description": "Clicar na caixa de seleção de PCD."
+        },
+        {
+            "type": "click",
+            "tag": "INPUT",
+            "selector": "label:has-text('Pessoa com Deficiência (PCD)') input",
+            "text": "",
+            "x_percent": 0.04453125,
+            "y_percent": 0.8945908460471568,
+            "parent": {
+                "selector": "#checkbox-pcd",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:12.968447",
+            "scenario": "default",
+            "business_description": "Clicar no input associado a 'Pessoa com Deficiência (PCD)'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Tipo de Isenção Aplicável') ~ div",
+            "text": "Selecione",
+            "x_percent": 0.28515625,
+            "y_percent": 0.7447988904299584,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Tipo de Isenção Aplicável Selecione"
+            },
+            "timestamp": "2026-07-03T06:50:14.114062",
+            "scenario": "default",
+            "business_description": "Clicar no campo de seleção 'Tipo de Isenção Aplicável'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Isenção de ICMS')",
+            "text": "Isenção de ICMS",
+            "x_percent": 0.1125,
+            "y_percent": 0.7324074074074074,
+            "timestamp": "2026-07-03T06:50:18.929024",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Isenção de ICMS'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-next-step",
+            "text": "Avançar",
+            "x_percent": 0.7822916666666667,
+            "y_percent": 0.7546296296296297,
+            "timestamp": "2026-07-03T06:50:20.203373",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Avançar'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#toggle-busca-fipe",
+            "text": "Código FIPE",
+            "x_percent": 0.2546875,
+            "y_percent": 0.30185185185185187,
+            "timestamp": "2026-07-03T06:50:24.381365",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Código FIPE'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Pesquisar Marca...']",
+            "value": "Hyundai",
+            "name": "Marca do Veículo",
+            "placeholder": "Pesquisar Marca...",
+            "id": "mat-input-marca-ng-tns-c1909216-86405-6",
+            "timestamp": "2026-07-03T06:50:29.863236",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de pesquisa de 'Marca' com 'Hyundai'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Pesquisar Modelo...']",
+            "value": "Creta",
+            "name": "Modelo",
+            "placeholder": "Pesquisar Modelo...",
+            "id": "mat-input-modelo-ng-tns-c1909216-64092-4",
+            "timestamp": "2026-07-03T06:50:33.232060",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de pesquisa de 'Modelo' com 'Creta'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Versões Disponíveis...']",
+            "value": "Creta Limited 1.0 Turbo Flex",
+            "name": "Versão (FIPE)",
+            "placeholder": "Versões Disponíveis...",
+            "id": "mat-input-versao-ng-tns-c1909216-52482-6",
+            "timestamp": "2026-07-03T06:50:38.877553",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de pesquisa de 'Versões Disponíveis' com 'Creta Limited 1.0 Turbo Flex'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#mat-autocomplete-panel-marca div:has-text('Hyundai')",
+            "text": "Hyundai",
+            "x_percent": 0.203125,
+            "y_percent": 0.5351851851851852,
+            "parent": {
+                "selector": "#mat-autocomplete-panel-marca",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:28.963914",
+            "scenario": "default",
+            "business_description": "Selecionar 'Hyundai' na lista de autocompletar de marcas."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#mat-autocomplete-panel-modelo div:has-text('Creta')",
+            "text": "Creta",
+            "x_percent": 0.4510416666666667,
+            "y_percent": 0.44074074074074077,
+            "parent": {
+                "selector": "#mat-autocomplete-panel-modelo",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:31.423985",
+            "scenario": "default",
+            "business_description": "Selecionar 'Creta' na lista de autocompletar de modelos."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#mat-autocomplete-panel-versao div:has-text('Creta Limited 1.0 Turbo Flex')",
+            "text": "Creta Limited 1.0 Turbo Flex",
+            "x_percent": 0.6869791666666667,
+            "y_percent": 0.4527777777777778,
+            "parent": {
+                "selector": "#mat-autocomplete-panel-versao",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:37.932861",
+            "scenario": "default",
+            "business_description": "Selecionar 'Creta Limited 1.0 Turbo Flex' na lista de autocompletar de versões."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#field-anoFabricacao div",
+            "text": "Ano Fabricação",
+            "x_percent": 0.453125,
+            "y_percent": 0.4305555555555556,
+            "parent": {
+                "selector": "#field-anoFabricacao",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:43.849167",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'Ano Fabricação'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Veículo Zero Km?') ~ div",
+            "text": "Não",
+            "x_percent": 0.6859375,
+            "y_percent": 0.4444444444444444,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Veículo Zero Km? Não"
+            },
+            "timestamp": "2026-07-03T06:50:48.872068",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Não' para 'Veículo Zero Km?'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Ex: 2024']",
+            "value": "2026",
+            "name": "Ano Modelo",
+            "placeholder": "Ex: 2024",
+            "id": "mat-input-anomod-ng-tns-c1909216-98110-5",
+            "timestamp": "2026-07-03T06:50:51.178895",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Ano Modelo' com '2026'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Ex: 2023']",
+            "value": "2026",
+            "name": "Ano Fabricação",
+            "placeholder": "Ex: 2023",
+            "id": "mat-input-anofab-ng-tns-c1909216-93674-3",
+            "timestamp": "2026-07-03T06:50:51.179890",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Ano Fabricação' com '2026'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Sim (Zero Km)')",
+            "text": "Sim (Zero Km)",
+            "x_percent": 0.6859375,
+            "y_percent": 0.48333333333333334,
+            "timestamp": "2026-07-03T06:50:50.382852",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Sim (Zero Km)'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#step-content-container .step-grid-2 #field-usoVeiculo div",
+            "text": "Uso do Veículo\nParticular (Lazer/Trabalho)",
+            "x_percent": 0.365625,
+            "y_percent": 0.49722222222222223,
+            "parent": {
+                "selector": "#field-usoVeiculo",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:51.180947",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'Uso do Veículo'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Uso do Veículo') ~ div",
+            "text": "Particular (Lazer/Trabalho)",
+            "x_percent": 0.36666666666666664,
+            "y_percent": 0.5101851851851852,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Uso do Veículo Particular (Lazer/Trabalh"
+            },
+            "timestamp": "2026-07-03T06:50:51.725426",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Particular (Lazer/Trabalho)' para 'Uso do Veículo'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Aplicativo de Transporte (Uber/99)')",
+            "text": "Aplicativo de Transporte (Uber/99)",
+            "x_percent": 0.35572916666666665,
+            "y_percent": 0.625,
+            "timestamp": "2026-07-03T06:50:52.971609",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Aplicativo de Transporte (Uber/99)'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#step-content-container .step-grid-2 #field-combustivel mat-form-field:has-text('Combustível') div",
+            "text": "Combustível\nSelecione",
+            "x_percent": 0.5546875,
+            "y_percent": 0.5231481481481481,
+            "parent": {
+                "selector": "#field-combustivel",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:53.693993",
+            "scenario": "default",
+            "business_description": "Clicar no campo de seleção de 'Combustível'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Combustível') ~ div",
+            "text": "Selecione",
+            "x_percent": 0.5578125,
+            "y_percent": 0.5027777777777778,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Combustível Selecione"
+            },
+            "timestamp": "2026-07-03T06:50:54.095280",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Selecione' para o campo 'Combustível'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#cdk-overlay-container #mat-select-panel-combustivel [role='option']:has-text('Álcool')",
+            "text": "Álcool",
+            "x_percent": 0.5697916666666667,
+            "y_percent": 0.6240740740740741,
+            "parent": {
+                "selector": ".mat-select-panel",
+                "has_text": "Flex (Álcool/Gasolina) Gasolina Álcool D"
+            },
+            "timestamp": "2026-07-03T06:50:55.064552",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Álcool'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".step-grid-2 #field-combustivel .mat-form-field-wrapper #mat-select-comb-ng-tns-c1909216-85598-6 span",
+            "text": "Álcool",
+            "x_percent": 0.5328125,
+            "y_percent": 0.5138888888888888,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Combustível Álcool"
+            },
+            "timestamp": "2026-07-03T06:50:56.204538",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Álcool' para o campo 'Combustível'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Diesel')",
+            "text": "Diesel",
+            "x_percent": 0.5578125,
+            "y_percent": 0.6546296296296297,
+            "timestamp": "2026-07-03T06:50:57.252474",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Diesel'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#app #step-content-container div",
+            "text": "Possui Blindagem?\nNível da Blindagem\nSelecione\nEmp",
+            "x_percent": 0.17135416666666667,
+            "y_percent": 0.5842592592592593,
+            "parent": {
+                "selector": "#step-content-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:58.401175",
+            "scenario": "default",
+            "business_description": "Clicar na área que contém informações sobre blindagem."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".mat-checkbox-inner-container span",
+            "text": "",
+            "x_percent": 0.1640625,
+            "y_percent": 0.5703703703703704,
+            "parent": {
+                "selector": ".mat-checkbox-inner-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:59.060155",
+            "scenario": "default",
+            "business_description": "Clicar na caixa de seleção de blindagem."
+        },
+        {
+            "type": "click",
+            "tag": "INPUT",
+            "selector": "label:has-text('Possui Blindagem?') input",
+            "text": "",
+            "x_percent": 0.1640625,
+            "y_percent": 0.5703703703703704,
+            "parent": {
+                "selector": "#checkbox-blindagem",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:50:59.061325",
+            "scenario": "default",
+            "business_description": "Clicar no input associado a 'Possui Blindagem?'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "label:has-text('Nível da Blindagem') ~ div",
+            "text": "Selecione",
+            "x_percent": 0.24270833333333333,
+            "y_percent": 0.625,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Nível da Blindagem Selecione"
+            },
+            "timestamp": "2026-07-03T06:51:00.860296",
+            "scenario": "default",
+            "business_description": "Clicar no campo de seleção 'Nível da Blindagem'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Nível III / IV')",
+            "text": "Nível III / IV",
+            "x_percent": 0.2557291666666667,
+            "y_percent": 0.7824074074074074,
+            "timestamp": "2026-07-03T06:51:02.511082",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Nível III / IV' para o nível de blindagem."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#field-blindagemEmpresa div",
+            "text": "Empresa Blindadora",
+            "x_percent": 0.5354166666666667,
+            "y_percent": 0.6166666666666667,
+            "parent": {
+                "selector": "#field-blindagemEmpresa",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:51:03.560444",
+            "scenario": "default",
+            "business_description": "Clicar no campo 'Empresa Blindadora'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "label:has-text('Empresa Blindadora') ~ input",
+            "value": "boll dj",
+            "name": "Empresa Blindadora",
+            "placeholder": "",
+            "id": "mat-input-blindEmp-ng-tns-c1909216-81111-1",
+            "timestamp": "2026-07-03T06:51:07.864832",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Empresa Blindadora' com 'boll dj'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Ex: 50000']",
+            "value": "676779",
+            "name": "Valor Segurado Blindagem (R$)",
+            "placeholder": "Ex: 50000",
+            "id": "mat-input-blindVal-ng-tns-c1909216-21448-5",
+            "timestamp": "2026-07-03T06:51:12.801548",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'Valor da Blindagem' com '676779'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-next-step",
+            "text": "Avançar",
+            "x_percent": 0.81875,
+            "y_percent": 0.7518518518518519,
+            "timestamp": "2026-07-03T06:51:12.923212",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Avançar'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input[placeholder='Ex: 01001-000']",
+            "value": "01409000",
+            "name": "CEP de Pernoite do Veículo",
+            "placeholder": "Ex: 01001-000",
+            "id": "mat-input-cep-ng-tns-c1909216-27226-2",
+            "timestamp": "2026-07-03T06:51:32.097585",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo 'CEP de Pernoite' com '01409000'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "Nao",
+            "x_percent": 0.384375,
+            "y_percent": 0.5277777777777778,
+            "parent": {
+                "selector": ".mat-form-field-wrapper",
+                "has_text": "Reside com condutores na faixa de 18 a 2"
+            },
+            "timestamp": "2026-07-03T06:51:32.194993",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Nao'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Sim')",
+            "text": "Sim",
+            "x_percent": 0.37916666666666665,
+            "y_percent": 0.5648148148148148,
+            "timestamp": "2026-07-03T06:51:33.163039",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Sim'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-next-step",
+            "text": "Avançar",
+            "x_percent": 0.7963541666666667,
+            "y_percent": 0.625,
+            "timestamp": "2026-07-03T06:51:34.723252",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Avançar'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "#slider-lmiDM",
+            "value": "50000",
+            "name": "slider-lmiDM",
+            "placeholder": "",
+            "id": "slider-lmiDM",
+            "timestamp": "2026-07-03T06:51:38.314949",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o slider de 'Limite de Danos Materiais' com '50000'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "#slider-lmiDC",
+            "value": "50000",
+            "name": "slider-lmiDC",
+            "placeholder": "",
+            "id": "slider-lmiDC",
+            "timestamp": "2026-07-03T06:51:38.317072",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o slider de 'Limite de Danos Corporais' com '50000'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-modo-advanced",
+            "text": "Interface Avançada (Grid)",
+            "x_percent": 0.31666666666666665,
+            "y_percent": 0.30185185185185187,
+            "timestamp": "2026-07-03T06:51:38.319100",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Interface Avançada (Grid)'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "150.000,00",
+            "x_percent": 0.3411458333333333,
+            "y_percent": 0.5314814814814814,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "RCV - Danos Corporais 150.000,00 Isenta "
+            },
+            "timestamp": "2026-07-03T06:51:39.882897",
+            "scenario": "default",
+            "business_description": "Clicar na opção '150.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('100.000,00')",
+            "text": "100.000,00",
+            "x_percent": 0.3390625,
+            "y_percent": 0.6953703703703704,
+            "timestamp": "2026-07-03T06:51:41.007681",
+            "scenario": "default",
+            "business_description": "Selecionar a opção '100.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "150.000,00",
+            "x_percent": 0.34010416666666665,
+            "y_percent": 0.6027777777777777,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "RCV - Danos Materiais 150.000,00 Isenta "
+            },
+            "timestamp": "2026-07-03T06:51:41.840238",
+            "scenario": "default",
+            "business_description": "Clicar na opção '150.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#cdk-overlay-container #mat-select-panel-lmg_rcv_materiais [role='option']:has-text('50.000,00')",
+            "text": "50.000,00",
+            "x_percent": 0.3380208333333333,
+            "y_percent": 0.7861111111111111,
+            "parent": {
+                "selector": ".mat-select-panel",
+                "has_text": "150.000,00 100.000,00 50.000,00 Não Cont"
+            },
+            "timestamp": "2026-07-03T06:51:42.788764",
+            "scenario": "default",
+            "business_description": "Selecionar a opção '50.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "4.000,00",
+            "x_percent": 0.340625,
+            "y_percent": 0.6425925925925926,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "RCV - Danos Morais 4.000,00 Isenta 0% Cl"
+            },
+            "timestamp": "2026-07-03T06:51:43.661534",
+            "scenario": "default",
+            "business_description": "Clicar na opção '4.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('10.000,00')",
+            "text": "10.000,00",
+            "x_percent": 0.3328125,
+            "y_percent": 0.7962962962962963,
+            "timestamp": "2026-07-03T06:51:44.953813",
+            "scenario": "default",
+            "business_description": "Selecionar a opção '10.000,00'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "Não Contratar",
+            "x_percent": 0.35625,
+            "y_percent": 0.7759259259259259,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "Diarias de Carro Reserva Não Contratar I"
+            },
+            "timestamp": "2026-07-03T06:51:46.048627",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Não Contratar'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('15 Diárias (Intermediário)')",
+            "text": "15 Diárias (Intermediário)",
+            "x_percent": 0.325,
+            "y_percent": 0.9314814814814815,
+            "timestamp": "2026-07-03T06:51:47.091039",
+            "scenario": "default",
+            "business_description": "Selecionar a opção '15 Diárias (Intermediário)'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": "table #grid-tbody tr #mat-select-grid-lmg-vidros-ng-tns-c1909216-32141-8 span",
+            "text": "Completa (Retrovisores/Lanternas)",
+            "x_percent": 0.3453125,
+            "y_percent": 0.8379629629629629,
+            "parent": {
+                "selector": ".mat-select-grid-trigger",
+                "has_text": "Completa (Retrovisores/Lanternas)"
+            },
+            "timestamp": "2026-07-03T06:51:48.164132",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Completa (Retrovisores/Lanternas)' para cobertura de vidros."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('Básica (Somente para-brisa)')",
+            "text": "Básica (Somente para-brisa)",
+            "x_percent": 0.246484375,
+            "y_percent": 0.7765440666204025,
+            "timestamp": "2026-07-03T06:51:53.090435",
+            "scenario": "default",
+            "business_description": "Selecionar a opção 'Básica (Somente para-brisa)' para cobertura de vidros."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "div",
+            "text": "0%",
+            "x_percent": 0.4765625,
+            "y_percent": 0.5972222222222222,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "RCV - Danos Corporais 100.000,00 Isenta "
+            },
+            "timestamp": "2026-07-03T06:51:54.824751",
+            "scenario": "default",
+            "business_description": "Clicar na opção '0%'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "[role='option']:has-text('10%')",
+            "text": "10%",
+            "x_percent": 0.47239583333333335,
+            "y_percent": 0.7074074074074074,
+            "timestamp": "2026-07-03T06:51:55.625358",
+            "scenario": "default",
+            "business_description": "Selecionar a opção '10%'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "table #grid-tbody tr button:has-text('Cláusulas')",
+            "text": "Cláusulas",
+            "x_percent": 0.5291666666666667,
+            "y_percent": 0.7148148148148148,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "RCV - Danos Morais 10.000,00 Isenta 0% C"
+            },
+            "timestamp": "2026-07-03T06:51:57.082553",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Cláusulas'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".mat-dialog-container span",
+            "text": "Danos Morais Adicionais Familiar",
+            "x_percent": 0.4744791666666667,
+            "y_percent": 0.48148148148148145,
+            "parent": {
+                "selector": ".mat-dialog-container",
+                "has_text": "Cláusulas - RCV"
+            },
+            "timestamp": "2026-07-03T06:51:57.982004",
+            "scenario": "default",
+            "business_description": "Clicar na opção 'Danos Morais Adicionais Familiar'."
+        },
+        {
+            "type": "click",
+            "tag": "INPUT",
+            "selector": "label:has-text('Danos Morais Adicionais Familiar') input",
+            "text": "",
+            "x_percent": 0.4744791666666667,
+            "y_percent": 0.48148148148148145,
+            "parent": {
+                "selector": ".mat-dialog-container",
+                "has_text": "Cláusulas - RCV"
+            },
+            "timestamp": "2026-07-03T06:51:57.983709",
+            "scenario": "default",
+            "business_description": "Clicar no input associado a 'Danos Morais Adicionais Familiar'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "button:has-text('Salvar Cláusulas')",
+            "text": "Salvar Cláusulas",
+            "x_percent": 0.5552083333333333,
+            "y_percent": 0.6324074074074074,
+            "timestamp": "2026-07-03T06:52:00.155726",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Salvar Cláusulas'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-next-step",
+            "text": "Avançar",
+            "x_percent": 0.7984375,
+            "y_percent": 0.9333333333333333,
+            "timestamp": "2026-07-03T06:52:04.557249",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Avançar'."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".mat-checkbox-inner-container span",
+            "text": "",
+            "x_percent": 0.16302083333333334,
+            "y_percent": 0.3990740740740741,
+            "parent": {
+                "selector": ".mat-checkbox-inner-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:52:07.147949",
+            "scenario": "default",
+            "business_description": "Clicar na caixa de seleção."
+        },
+        {
+            "type": "click",
+            "tag": "INPUT",
+            "selector": "input",
+            "text": "",
+            "x_percent": 0.16302083333333334,
+            "y_percent": 0.3990740740740741,
+            "parent": {
+                "selector": "#step-content-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:52:07.149739",
+            "scenario": "default",
+            "business_description": "Clicar no campo de input."
+        },
+        {
+            "type": "click",
+            "tag": "SPAN",
+            "selector": ".mat-checkbox-inner-container span",
+            "text": "",
+            "x_percent": 0.16197916666666667,
+            "y_percent": 0.3527777777777778,
+            "parent": {
+                "selector": ".mat-checkbox-inner-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:52:08.090367",
+            "scenario": "default",
+            "business_description": "Clicar na caixa de seleção."
+        },
+        {
+            "type": "click",
+            "tag": "INPUT",
+            "selector": "label:has-text('Extensão de Perímetro (Países do Mercosul)') input",
+            "text": "",
+            "x_percent": 0.16197916666666667,
+            "y_percent": 0.3527777777777778,
+            "parent": {
+                "selector": "#step-content-container",
+                "has_text": null
+            },
+            "timestamp": "2026-07-03T06:52:08.091410",
+            "scenario": "default",
+            "business_description": "Clicar no input associado a 'Extensão de Perímetro (Países do Mercosul)'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-next-step",
+            "text": "Finalizar & Emitir",
+            "x_percent": 0.7822916666666667,
+            "y_percent": 0.8518518518518519,
+            "timestamp": "2026-07-03T06:52:11.577170",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Finalizar & Emitir'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-go-to-payment",
+            "text": "💳 Prosseguir para Pagamento",
+            "x_percent": 0.565625,
+            "y_percent": 0.6564814814814814,
+            "timestamp": "2026-07-03T06:52:14.922577",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Prosseguir para Pagamento'."
+        },
+        {
+            "type": "fill",
+            "tag": "INPUT",
+            "selector": "input",
+            "value": "00020101021226870014br.gov.bcb.pix2565pix.segura.com.br/cotacao/19201928019",
+            "name": "",
+            "placeholder": "",
+            "id": "",
+            "parent": {
+                "selector": ".pix-copia-cola-container",
+                "has_text": "Copiar Código"
+            },
+            "timestamp": "2026-07-03T06:52:21.086750",
+            "scenario": "default",
+            "is_date": false,
+            "business_description": "Preencher o campo de input com o código PIX '00020101021226870014br.gov.bcb.pix2565pix.segura.com.br/cotacao/19201928019'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-copy-pix",
+            "text": "Copiar Código",
+            "x_percent": 0.45416666666666666,
+            "y_percent": 0.5879629629629629,
+            "timestamp": "2026-07-03T06:52:21.087817",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Copiar Código'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#btn-confirm-payment-progress",
+            "text": "Formalizar & Emitir",
+            "x_percent": 0.71875,
+            "y_percent": 0.45925925925925926,
+            "timestamp": "2026-07-03T06:52:23.307478",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Formalizar & Emitir'."
+        },
+        {
+            "type": "click",
+            "tag": "DIV",
+            "selector": "#shadow-dom-host",
+            "text": "",
+            "x_percent": 0.5578125,
+            "y_percent": 0.3712962962962963,
+            "timestamp": "2026-07-03T06:52:28.053963",
+            "scenario": "default",
+            "business_description": "Clicar no elemento 'shadow-dom-host'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "button:has-text('Voltar para o Painel')",
+            "text": "Voltar para o Painel",
+            "x_percent": 0.5864583333333333,
+            "y_percent": 0.5787037037037037,
+            "timestamp": "2026-07-03T06:52:32.593991",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Voltar para o Painel'."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "#proposal-viewport #proposal-content table tr button:has-text('📄')",
+            "text": "📄",
+            "x_percent": 0.7984375,
+            "y_percent": 0.5453703703703704,
+            "parent": {
+                "selector": ".mat-row",
+                "has_text": "PRO-80935 daniel setttt 22401666818 FIPE"
+            },
+            "timestamp": "2026-07-03T06:52:36.772172",
+            "scenario": "default",
+            "business_description": "Clicar no botão com ícone de documento."
+        },
+        {
+            "type": "click",
+            "tag": "BUTTON",
+            "selector": "button:has-text('Fechar')",
+            "text": "Fechar",
+            "x_percent": 0.5869791666666667,
+            "y_percent": 0.5527777777777778,
+            "timestamp": "2026-07-03T06:52:38.481028",
+            "scenario": "default",
+            "business_description": "Clicar no botão 'Fechar'."
+        }
+    ],
+    "network_payloads": {},
+    "anti_bot_fields": [
+        "label:has-text('CPF do Cliente') ~ input",
+        "label:has-text('Nome Completo') ~ input",
+        "label:has-text('Data de Nascimento') ~ input",
+        "label:has-text('E-mail de Contato') ~ input",
+        "label:has-text('Celular') ~ input"
+    ]
+}

@@ -3769,10 +3769,22 @@
                 const alreadyMerged = robotSteps.some(s => s.status === 'STOPPED');
                 if (!alreadyMerged && executionPlan && Array.isArray(executionPlan.steps)) {
                     const planSteps = executionPlan.steps;
-                    const executedCount = robotSteps.length;
-                    if (planSteps.length > executedCount) {
-                        for (let i = executedCount; i < planSteps.length; i++) {
-                            const ps = planSteps[i];
+                    // Reconciliação por step_id: robotSteps NÃO é necessariamente um prefixo
+                    // posicional de planSteps quando o plano v2 tem passos sup_ intercalados
+                    // (execution_hint: "skip") — uma fatia posicional duplicaria st_ já
+                    // concluídos como STOPPED. Só usa reconciliação por conjunto de IDs quando
+                    // o histórico tem pelo menos um step_id no formato "st_NNN" (execução
+                    // pós-schema v2); histórico legado (índices numéricos puros, sem step_id
+                    // gravado) nunca bate com os IDs string do plano e cai no fallback
+                    // posicional antigo para não marcar o plano inteiro como STOPPED por engano.
+                    const hasStStepIds = robotSteps.some(s => typeof s.index === 'string' && s.index.startsWith('st_'));
+                    if (hasStStepIds) {
+                        const executedIds = new Set(robotSteps.map(s => String(s.index)));
+                        planSteps.forEach((ps, i) => {
+                            const hint = ps.execution_hint || 'required';
+                            if (hint !== 'required') return; // optional/skip: não emitido pelo bot, esperado
+                            const psId = ps.step_id !== undefined && ps.step_id !== null ? String(ps.step_id) : null;
+                            if (psId !== null && executedIds.has(psId)) return; // já executado
                             robotSteps.push({
                                 index: ps.step_id || (i + 1),
                                 exec_order: ps.step_id || (i + 1),
@@ -3787,6 +3799,27 @@
                                 event_index: null,
                                 flaky: !!ps.flaky
                             });
+                        });
+                    } else {
+                        const executedCount = robotSteps.length;
+                        if (planSteps.length > executedCount) {
+                            for (let i = executedCount; i < planSteps.length; i++) {
+                                const ps = planSteps[i];
+                                robotSteps.push({
+                                    index: ps.step_id || (i + 1),
+                                    exec_order: ps.step_id || (i + 1),
+                                    type: ps.type,
+                                    selector: ps.selector,
+                                    desc: ps.description,
+                                    status: 'STOPPED',   // não foi alcançado
+                                    error: '',
+                                    usedHealing: false,
+                                    screenshot: null,
+                                    row_id: null,
+                                    event_index: null,
+                                    flaky: !!ps.flaky
+                                });
+                            }
                         }
                     }
                 }

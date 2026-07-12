@@ -352,7 +352,14 @@ def validate_bot_against_plan(
     """
     Compara step_ids do código gerado com plano_execucao.json.
 
-    Valida: step_ids presentes, ordem correta, contagem.
+    Ciente de 'execution_hint' por step ('required' ausente/explícito |
+    'optional' | 'skip'): exige apenas que os ids 'required' apareçam no
+    código, como SUBSEQUÊNCIA na ordem relativa do plano (não mais igualdade
+    posicional total). Ids 'optional'/'skip' emitidos pela LLM são aceitos
+    desde que existam no plano e respeitem essa mesma ordem relativa — só
+    ids fora do plano viram EXTRA_STEPS. Um plano v1 (sem nenhum
+    'execution_hint') tem TODOS os ids como 'required', reduzindo este
+    validador ao comportamento anterior nos casos sem id extra/alucinado.
     NÃO valida: tipo de método, seletores, comentários.
 
     Corações com campo 'required_reopen' pedem uma chamada de sincronização
@@ -363,6 +370,10 @@ def validate_bot_against_plan(
     retry, toleramos aqui UM step_id extra nessa posição exata e delegamos a
     checagem de conteúdo real (chamada certa, seletor certo, posição certa)
     para validate_required_reopen_patterns, que não depende de step_id nenhum.
+    O conjunto de referência dessa tolerância (planned_set_for_reopen) inclui
+    TODOS os ids do plano, inclusive 'skip' — a LLM pode legitimamente
+    reintroduzir nessa posição um 'sup_NNN' já existente no plano (D6); só um
+    id verdadeiramente ausente do plano é engolido por essa tolerância.
     """
     if not os.path.exists(plan_path):
         return {
@@ -377,7 +388,15 @@ def validate_bot_against_plan(
     with open(plan_path, "r", encoding="utf-8") as f:
         plan = json.load(f)
 
-    planned_ids = [s["step_id"] for s in plan.get("steps", [])]
+    plan_steps = plan.get("steps", [])
+    planned_ids = [s["step_id"] for s in plan_steps]  # TODOS os ids do plano (required+optional+skip)
+    required_ids = [
+        s["step_id"] for s in plan_steps
+        if s.get("execution_hint") in (None, "required")
+    ]
+    emit_allowed = set(planned_ids)
+    required_set = set(required_ids)
+
     code_ids = extract_step_ids_from_code(bot_code)
 
     if pending_corrections:
@@ -407,45 +426,68 @@ def validate_bot_against_plan(
         }
 
     errors = []
+    code_set = set(code_ids)
 
-    if len(code_ids) != len(planned_ids):
+    # 1. EXTRA_STEPS — ids no código fora do conjunto de TODOS os ids do plano
+    # (required+optional+skip). Calculado ANTES do check de ordem abaixo: um
+    # id aqui NUNCA participa do cálculo de ordem — ids extras/alucinados pela
+    # LLM são o erro mais comum deste pipeline, e um lookup por valor tipo
+    # list.index() num id fora do plano lançaria ValueError não tratado, que
+    # o code_generator.py converteria em RuntimeError fatal, abortando o
+    # Ralph Loop inteiro em vez de só reportar EXTRA_STEPS como sempre fez.
+    extra = sorted(code_set - emit_allowed)
+    if extra:
         errors.append({
-            "type": "COUNT_MISMATCH",
-            "expected": len(planned_ids),
-            "found": len(code_ids),
-            "detail": f"Esperado {len(planned_ids)} passos, encontrado {len(code_ids)}"
+            "type": "EXTRA_STEPS",
+            "step_ids": extra,
+            "detail": f"Passos no código mas ausentes no plano: {extra}"
         })
 
-    max_len = max(len(planned_ids), len(code_ids))
-    for i in range(max_len):
-        planned = planned_ids[i] if i < len(planned_ids) else None
-        coded = code_ids[i] if i < len(code_ids) else None
-
-        if planned != coded:
-            errors.append({
-                "type": "STEP_ID_MISMATCH",
-                "position": i + 1,
-                "expected_id": planned,
-                "found_id": coded,
-                "detail": f"Posição {i+1}: esperado {planned}, encontrado {coded}"
-            })
-
-    planned_set = set(planned_ids)
-    code_set = set(code_ids)
-    missing = sorted(planned_set - code_set)
-    extra = sorted(code_set - planned_set)
-
+    # 2. MISSING_STEPS — ids com hint ausente/'required' que não aparecem no código
+    missing = sorted(required_set - code_set)
     if missing:
         errors.append({
             "type": "MISSING_STEPS",
             "step_ids": missing,
             "detail": f"Passos no plano mas ausentes no código: {missing}"
         })
-    if extra:
+
+    # 3. ORDEM — subsequência monotônica. Filtra primeiro para a subsequência
+    # de ids que estão no plano (ids extras/alucinados já foram reportados no
+    # item 1 acima e NUNCA entram neste cálculo) e exige índice-no-plano
+    # estritamente crescente sobre essa subsequência filtrada. Mantém o TIPO
+    # de erro STEP_ID_MISMATCH (NÃO renomear — code_generator.py:603 dispara
+    # a reordenação automática determinística checando literalmente
+    # error_types.issubset({"STEP_ID_MISMATCH"}); um rename quebraria esse
+    # gatilho para todo projeto, não só os re-sanitizados em v2) e as mesmas
+    # chaves position/expected_id/found_id/detail do formato atual —
+    # code_generator.py lê expected_id/found_id para escopo de correção
+    # cirúrgica. Só a LÓGICA de detecção muda, de igualdade posicional
+    # estrita para subsequência monotônica.
+    code_ids_in_plan = [cid for cid in code_ids if cid in emit_allowed]
+    last_plan_index = -1
+    for pos, cid in enumerate(code_ids_in_plan):
+        plan_index = planned_ids.index(cid)
+        if plan_index <= last_plan_index:
+            expected_id = planned_ids[pos] if pos < len(planned_ids) else None
+            errors.append({
+                "type": "STEP_ID_MISMATCH",
+                "position": pos + 1,
+                "expected_id": expected_id,
+                "found_id": cid,
+                "detail": f"Posição {pos + 1}: esperado {expected_id}, encontrado {cid} (fora de ordem)"
+            })
+        last_plan_index = max(last_plan_index, plan_index)
+
+    # 4. COUNT_MISMATCH — compara só o subconjunto required (ids optional/skip
+    # não emitidos pela LLM não contam como "faltando").
+    required_found = len(required_set & code_set)
+    if required_found != len(required_set):
         errors.append({
-            "type": "EXTRA_STEPS",
-            "step_ids": extra,
-            "detail": f"Passos no código mas ausentes no plano: {extra}"
+            "type": "COUNT_MISMATCH",
+            "expected": len(required_set),
+            "found": required_found,
+            "detail": f"Esperado {len(required_set)} passos, encontrado {required_found}"
         })
 
     return {
@@ -739,6 +781,12 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
 
     Motivo: essas regras já existem no prompt/playbook, mas o LLM as ignora sem
     nenhuma validação mecânica pegando isso.
+
+    Ciente de 'execution_hint': um step 'optional'/'skip' do plano que a LLM
+    não emitiu no código é pulado (nada a validar); se a LLM emitiu esse
+    step_id mesmo assim, ele é cobrado pelos mesmos padrões de um step
+    'required'. Planos v1 (sem 'execution_hint') não têm esse campo em
+    nenhum step, então o guard nunca dispara — comportamento inalterado.
     """
     if not os.path.exists(plan_path):
         return {"status": "PASS", "total_errors": 0, "errors": []}
@@ -831,9 +879,18 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
         return any(call["method"] in methods for call in calls_by_step.get(step_id, []))
 
     errors = []
+    # Ciente de execution_hint: um step 'optional'/'skip' que a LLM decidiu
+    # NÃO emitir não deve ser cobrado quanto a padrão de resiliência (não há
+    # chamada nenhuma para inspecionar). Se a LLM EMITIU o step suprimido
+    # (reintroduziu o step_id do plano, ver D6), ele É validado normalmente
+    # pelos checks abaixo, como qualquer step required.
+    code_ids = set(extract_step_ids_from_code(bot_code))
     for step in plan.get("steps", []):
         step_id = step["step_id"]
         step_type = step.get("type")
+
+        if step.get("execution_hint") in ("optional", "skip") and step["step_id"] not in code_ids:
+            continue
 
         if step_type == "select_native":
             if not any_call(step_id, ("select_option_native_resilient",)):
