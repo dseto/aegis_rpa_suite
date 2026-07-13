@@ -20,7 +20,7 @@ Cobre:
      resultado que uma chamada direta a `_generate_scoped_blocks(mode="correct")`
      para uma fixture de correção escopada simples.
 
-Executar com: python aegis_sanitizer/test_generate_scoped_blocks.py
+Executar com: python aegis_code_generator/test_generate_scoped_blocks.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import os
@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
+from aegis_code_generator.code_generator import CodeGeneratorService
 
 
 # Bot mínimo com 3 blocos "# [PASSO N]" já anexados a step_id via

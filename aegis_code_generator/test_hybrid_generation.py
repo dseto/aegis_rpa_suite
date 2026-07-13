@@ -20,7 +20,7 @@ Cobre os cenários do DoD:
      tentativa (segunda chamada ao gateway, com o prompt de arquivo
      inteiro).
 
-Executar com: python aegis_sanitizer/test_hybrid_generation.py
+Executar com: python aegis_code_generator/test_hybrid_generation.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import json
@@ -32,8 +32,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
-from aegis_sanitizer.step_validator import (
+from aegis_code_generator.code_generator import CodeGeneratorService
+from aegis_code_generator.step_validator import (
     validate_bot_structure, validate_bot_against_plan,
     validate_dataset_field_names, validate_resilience_patterns, dry_run_bot,
 )

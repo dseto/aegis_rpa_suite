@@ -22,7 +22,7 @@ Cobre os cenários do DoD (teste 4.1(3) do plano + requisitos da tarefa H6):
        `sup_003` com `provenance: "deterministic"` e `reason` citando a
        reintrodução.
 
-Executar com: python aegis_sanitizer/test_reintroduce_sup_step.py
+Executar com: python aegis_code_generator/test_reintroduce_sup_step.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import json
@@ -34,8 +34,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
-from aegis_sanitizer.step_validator import validate_bot_against_plan
+from aegis_code_generator.code_generator import CodeGeneratorService
+from aegis_code_generator.step_validator import validate_bot_against_plan
 
 FRAMEWORK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

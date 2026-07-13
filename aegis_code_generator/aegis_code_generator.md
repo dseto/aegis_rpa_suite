@@ -1,6 +1,6 @@
 # 🛡️ Aegis Code Generator (Fase 4) - Documentação Técnica e Funcional
 
-Este documento fornece uma especificação técnica e funcional detalhada do módulo **Aegis Code Generator** (`aegis_sanitizer/code_generator.py`). O público-alvo deste documento são arquitetos de soluções RPA, engenheiros de software e desenvolvedores que mantêm ou estendem o framework.
+Este documento fornece uma especificação técnica e funcional detalhada do módulo **Aegis Code Generator** (`aegis_code_generator/code_generator.py`). O público-alvo deste documento são arquitetos de soluções RPA, engenheiros de software e desenvolvedores que mantêm ou estendem o framework.
 
 ---
 
@@ -95,7 +95,7 @@ Se a gravação original (`gravacao.json`) contiver eventos com a ação `call_s
 
 ## 🧬 3.5 Geração Híbrida (Determinística + Cognitiva) — default desde 2026-07
 
-A LLM é o gargalo de custo/latência/alucinação da Fase 4 mesmo em passos 100% mecânicos (um `click` cujo seletor, tipo e binding de dataset já são deriváveis sem ambiguidade do próprio plano). O motor híbrido inverte a relação entre validador e gerador: em vez de a LLM escrever tudo e o `step_validator.py` cobrar o padrão depois, um novo módulo — `aegis_sanitizer/deterministic_emitter.py` — **emite** o padrão diretamente a partir do plano, e a LLM só é chamada para os passos onde resta julgamento real.
+A LLM é o gargalo de custo/latência/alucinação da Fase 4 mesmo em passos 100% mecânicos (um `click` cujo seletor, tipo e binding de dataset já são deriváveis sem ambiguidade do próprio plano). O motor híbrido inverte a relação entre validador e gerador: em vez de a LLM escrever tudo e o `step_validator.py` cobrar o padrão depois, um novo módulo — `aegis_code_generator/deterministic_emitter.py` — **emite** o padrão diretamente a partir do plano, e a LLM só é chamada para os passos onde resta julgamento real.
 
 ### A. Classificação por passo — linha de corte C1-C10 (`classify_step`)
 
@@ -318,9 +318,9 @@ O gerador de código requer as seguintes variáveis configuradas no ambiente do 
 ### Interface de Linha de Comando (CLI)
 Para compilar o código de um robô manualmente pelo terminal, execute:
 ```powershell
-python aegis_sanitizer/code_generator.py --project-dir <caminho_do_projeto>
+python aegis_code_generator/code_generator.py --project-dir <caminho_do_projeto>
 ```
-* **Exemplo:** `python aegis_sanitizer/code_generator.py --project-dir projects/portal_segura/tests/001_teste`
+* **Exemplo:** `python aegis_code_generator/code_generator.py --project-dir projects/portal_segura/tests/001_teste`
 
 ---
 

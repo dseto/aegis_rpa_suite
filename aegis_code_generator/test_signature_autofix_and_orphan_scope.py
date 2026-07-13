@@ -17,7 +17,7 @@ PARTE 2 — guard de lineno órfão no roteamento de `_surgical_correct`
   (d) um erro com `lineno` DENTRO de um bloco conhecido continua no modo
       escopado normalmente (não regride o comportamento existente).
 
-Executar com: python aegis_sanitizer/test_signature_autofix_and_orphan_scope.py
+Executar com: python aegis_code_generator/test_signature_autofix_and_orphan_scope.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import os
@@ -27,8 +27,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
-from aegis_sanitizer.step_validator import (
+from aegis_code_generator.code_generator import CodeGeneratorService
+from aegis_code_generator.step_validator import (
     validate_bot_structure,
     _validate_scenario_function_signature,
 )

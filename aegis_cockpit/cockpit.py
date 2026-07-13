@@ -1244,7 +1244,7 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
             proj_dir = project_manager.get_project_dir(slug)
             if test_slug:
                 proj_dir = os.path.join(proj_dir, "tests", test_slug)
-            generator_script = os.path.join(PROJECT_ROOT, 'aegis_sanitizer', 'code_generator.py')
+            generator_script = os.path.join(PROJECT_ROOT, 'aegis_code_generator', 'code_generator.py')
             cmd = [sys.executable, '-u', generator_script, '--project-dir', proj_dir]
             process_manager.run_command_in_background(cmd, 'GERAÇÃO_CÓDIGO', cwd=PROJECT_ROOT, project_slug=slug, test_slug=test_slug)
             self._json({'success': True, 'message': 'Gerador de código iniciado!'})

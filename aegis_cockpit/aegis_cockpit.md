@@ -15,7 +15,7 @@ O Aegis Cockpit centraliza o ciclo de vida de automações baseadas em transaç�
    * **Gravação (`aegis_blackbox.recorder`):** Captura interações no navegador em tempo real.
    * **Sanitização (`aegis_sanitizer.sanitizer`):** Geração do dicionário semântico e relatórios higienizados de passos.
    * **Validação (`aegis_sanitizer.dataset_validator`):** Validação de datasets estruturados frente às especificações do dicionário.
-   * **Geração de Código (`aegis_sanitizer.code_generator`):** Criação ou correção cirúrgica do robô Playwright de produção.
+   * **Geração de Código (`aegis_code_generator.code_generator`):** Criação ou correção cirúrgica do robô Playwright de produção.
    * **Execução do Robô:** Execução controlada em background monitorando logs, capturando screenshots de erros e gerando relatórios de transação.
 3. **Mecanismo de Snapshots e Versões:** Registro histórico de versões (código e metadados) do robô para rollback ou duplicação.
 4. **Painel de Triagem e Feedback do Ralph Loop (Self-Healing):** Interface para o Analista de QA auditar as tentativas de autocorreção propostas pela IA (seletores resilientes sugeridos pós-timeout), permitindo aprovar, recusar ou enriquecer correções pendentes.

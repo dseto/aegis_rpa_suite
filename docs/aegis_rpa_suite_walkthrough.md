@@ -12,7 +12,7 @@ O desenvolvimento de robôs na suite Aegis segue as **5 fases automatizadas do p
 graph TD
     A["Fase 1: Gravação Instrumentada (aegis_blackbox/recorder.py)"] --> B["Fase 2: Sanitização & Plano (aegis_sanitizer/sanitizer.py)"]
     B --> C["Fase 3: Validação do Dataset (aegis_sanitizer/dataset_validator.py)"]
-    C --> D["Fase 4: Geração de Código via LLM (aegis_sanitizer/code_generator.py)"]
+    C --> D["Fase 4: Geração de Código via LLM (aegis_code_generator/code_generator.py)"]
     D --> E["Fase 5: Execução Local & Evidências (aegis_runner/runner.py)"]
 ```
 
@@ -82,7 +82,7 @@ Ao ler o `relatorio.md` da Fase 2 — seja você ou o LLM na Fase 4 — mapeie a
 ## 💻 Fase 4: Geração de Código via LLM (compila código Zero-LLM-Runtime)
 
 ```powershell
-python aegis_sanitizer/code_generator.py --project-dir projects/meu_projeto
+python aegis_code_generator/code_generator.py --project-dir projects/meu_projeto
 ```
 
 Requer `AEGIS_COGNITIVE_ENABLED=true` + `AEGIS_COGNITIVE_API_KEY`/`AEGIS_COGNITIVE_PROVIDER`/`AEGIS_COGNITIVE_MODEL` configurados (`.env` do projeto ou raiz do framework). O `code_generator.py` lê `plano_execucao.json` + `dicionario.json` + dataset validado, injeta o catálogo de padrões (`aegis_mentor/skills/rpa-copilot-coder.md`) no prompt, e chama o LLM para compilar `bot_producao.py` + `skills_lib.py` em `projects/meu_projeto/tests/<slug_do_teste>/code/`.
@@ -155,7 +155,7 @@ A fase final atesta a estabilidade do robô através de instrumentação de logs
 2. **Modo E2E do portal alvo:** se o site de destino suportar uma flag de teste determinística (ex.: `?e2e=true` para desativar simulações de latência aleatória do servidor), use-a na URL de entrada — é uma convenção do site alvo, não uma feature do framework.
 3. **Instrumentação de Logs:** cada passo é logado via `[AEGIS_STEP]` (controlável por `AEGIS_STEP_LOGS_REALTIME`) e consolidado em `historico_passos.json` + relatório CSV, gravados em `projects/meu_projeto/tests/<slug_do_teste>/executions/run_<timestamp>/reports/`.
 4. **Screenshots por passo:** opcionais via `AEGIS_STEP_SCREENSHOTS=true`, salvos na mesma pasta de execução — nunca em caminho hardcoded fora da estrutura do projeto.
-5. **Estrutura Organizacional:** os motores genéricos (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_mentor`) são isolados e não contêm código específico de processos. Todos os RPAs ficam em `projects/<slug>/tests/<slug_do_teste>/code/bot_producao.py`.
+5. **Estrutura Organizacional:** os motores genéricos (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_code_generator`, `aegis_mentor`) são isolados e não contêm código específico de processos. Todos os RPAs ficam em `projects/<slug>/tests/<slug_do_teste>/code/bot_producao.py`.
 
 ---
 
@@ -174,7 +174,7 @@ Para manter o ecossistema Aegis em conformidade com as melhores práticas de seg
 * **Isolamento de Projetos e Proteção do Core Framework (Aegis Suite Blindado):**
   * **Não Geração de Arquivos na Raiz:** Não devem ser gerados arquivos na raiz do projeto (exceto em casos de extrema necessidade, como atualizações de dependências globais no `requirements.txt`).
   * **Artefatos Específicos Isolados:** Artefatos específicos de um sistema (logs de execução, capturas de tela, datasets e relatórios temporários) só podem ser gerados e salvos dentro da própria estrutura de pastas do projeto (`projects/<slug>/`), nunca dentro de pastas da suíte do Aegis.
-  * **Separação Externa de Projetos:** Tudo o que for específico de um processo automatizado (RPA) deve ser externo à pasta principal do Aegis. A estrutura do Aegis (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_mentor`) é um motor blindado e deve ser protegida contra alterações específicas de robôs.
+  * **Separação Externa de Projetos:** Tudo o que for específico de um processo automatizado (RPA) deve ser externo à pasta principal do Aegis. A estrutura do Aegis (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_code_generator`, `aegis_mentor`) é um motor blindado e deve ser protegida contra alterações específicas de robôs.
   * **Localização de `projects/` e `telemetry_data/`:** ambas ficam externas ao core do Aegis, nunca aninhadas dentro das pastas internas de ferramentas do framework.
 
 ---

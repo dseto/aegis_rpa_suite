@@ -73,7 +73,7 @@ Nenhum seletor é hardcoded pro site específico — o driver carrega seletores 
 - Valida que dados de entrada batem com dicionário semântico
 
 #### Fase 4: Geração de código
-- `python aegis_sanitizer/code_generator.py --project-dir projects/<slug>/tests/<test_slug>`
+- `python aegis_code_generator/code_generator.py --project-dir projects/<slug>/tests/<test_slug>`
 - Valida saída: `bot_producao.py` (com `# [PASSO X]` comentários) e `skills_lib.py`
 - Lê `plano_execucao.json`: coleta métrica `(# steps com weak_selector) / N`
 

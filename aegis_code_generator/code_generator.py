@@ -17,7 +17,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from aegis_runner.cognitive_fallback import CognitiveGateway
-from aegis_sanitizer.step_validator import (
+from aegis_code_generator.step_validator import (
     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
     validate_dataset_field_names, validate_resilience_patterns, validate_required_wait_patterns,
     validate_required_reopen_patterns, validate_required_method_patterns, RUNNER_METHODS
@@ -34,7 +34,7 @@ from aegis_sanitizer.step_validator import (
 # corpo de `execute_scenario_default` com os blocos deterministic prontos +
 # placeholders cognitivos parseáveis. Usado só por `_generate_new_code`
 # (rota híbrida, atrás de `AEGIS_CODEGEN_HYBRID`).
-from aegis_sanitizer.deterministic_emitter import (
+from aegis_code_generator.deterministic_emitter import (
     emit_step_block as _emit_deterministic_step_block,
     _plan_checksum as _deterministic_plan_checksum,
     _STEP_ANCHOR_RENUMBER_RE as _DETERMINISTIC_ANCHOR_RENUMBER_RE,

@@ -33,7 +33,7 @@ Esta skill instrui o agente a executar uma simulação completa do pipeline Aegi
     1. Gravação (telemetria bruta em `gravacao.json`).
     2. Sanitização ([sanitizer.py](file:///c:/Projetos/aegis_rpa_suite/aegis_sanitizer/sanitizer.py)).
     3. Validação do Dataset ([dataset_validator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_sanitizer/dataset_validator.py)).
-    4. Geração de Código ([code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_sanitizer/code_generator.py)).
+    4. Geração de Código ([code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_code_generator/code_generator.py)).
     5. Execução do Bot (`bot_producao.py`).
   - **Relatório de Desempenho:** Geração do runbook final em `.specs/relatorio-piloto-<slug>.md` estruturado com métricas consolidadas (percentual de `weak_selector`, taxa de sucesso, etc.).
 
@@ -65,7 +65,7 @@ Esta skill especifica o portão de controle de qualidade para integração cont�
 
 - **Missão:** Executar automações de referência e comparar seu comportamento contra baselines históricos congelados para identificar regressões técnicas ou de retrocompatibilidade.
 - **Princípios Operacionais Chaves:**
-  1. **NUNCA regenera o bot:** O gate testa obrigatoriamente o código do bot exatamente como compilado anteriormente. Isso blinda o teste contra possíveis alterações do [code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_sanitizer/code_generator.py), isolando exclusivamente alterações do runner.
+  1. **NUNCA regenera o bot:** O gate testa obrigatoriamente o código do bot exatamente como compilado anteriormente. Isso blinda o teste contra possíveis alterações do [code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_code_generator/code_generator.py), isolando exclusivamente alterações do runner.
   2. **Isolamento de Alterações:** O agente não tenta corrigir falhas. Se o robô de referência falhar, a skill reporta o erro e interrompe a esteira.
   3. **Persistência Incremental de Baseline:** Os resultados de novas baterias de teste são adicionados ao final do arquivo `.specs/plans/<nome-do-baseline>.md` via *append*, mantendo o histórico de execuções passadas intacto.
 - **Critérios Rigorosos de Aprovação (Veredito):**

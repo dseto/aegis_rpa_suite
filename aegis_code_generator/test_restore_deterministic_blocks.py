@@ -17,7 +17,7 @@ Cobre os 9 cenários do DoD:
      `RuntimeError`.
   9. Rota full-LLM grava manifest `{'generator_version': 'full-llm', 'steps': {}}`.
 
-Executar com: python aegis_sanitizer/test_restore_deterministic_blocks.py
+Executar com: python aegis_code_generator/test_restore_deterministic_blocks.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import json
@@ -29,8 +29,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
-from aegis_sanitizer.deterministic_emitter import (
+from aegis_code_generator.code_generator import CodeGeneratorService
+from aegis_code_generator.deterministic_emitter import (
     emit_step_block,
     _plan_checksum,
     _STEP_ANCHOR_RENUMBER_RE,

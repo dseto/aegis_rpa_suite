@@ -8,7 +8,7 @@ Cobre:
   2. Projeto SEM o campo -> o bloco __main__ gerado é byte-idêntico ao
      boilerplate histórico (".toast-error, .alert-danger").
 
-Executar com: python aegis_sanitizer/test_error_selector_config.py
+Executar com: python aegis_code_generator/test_error_selector_config.py
 (sem pytest, seguindo o padrão dos demais testes do repositório)
 """
 import os
@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aegis_sanitizer.code_generator import CodeGeneratorService
+from aegis_code_generator.code_generator import CodeGeneratorService
 
 DEFAULT_SELECTOR = ".toast-error, .alert-danger"
 

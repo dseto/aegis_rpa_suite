@@ -18,7 +18,7 @@
     {
       "id": 2,
       "name": "audit-ai-self-healing-risk",
-      "prompt": "Meu bot tem um CognitiveGateway que usa LLM para self-healing quando click/fill falha. Quero auditar: a IA é confiável o suficiente pra usar em produção? Tem limites de retry ou pode ficar em loop? O pipeline valida código gerado por IA antes de rodar, ou confia? Analisando C:\\Projetos\\aegis_rpa_suite, especialmente aegis_runner/cognitive_fallback.py e aegis_sanitizer/code_generator.py. Me diz riscos críticos e a menor correção pra cada um.",
+      "prompt": "Meu bot tem um CognitiveGateway que usa LLM para self-healing quando click/fill falha. Quero auditar: a IA é confiável o suficiente pra usar em produção? Tem limites de retry ou pode ficar em loop? O pipeline valida código gerado por IA antes de rodar, ou confia? Analisando C:\\Projetos\\aegis_rpa_suite, especialmente aegis_runner/cognitive_fallback.py e aegis_code_generator/code_generator.py. Me diz riscos críticos e a menor correção pra cada um.",
       "expected_output": "Relatório focado em IA: onde IA é usada (design vs runtime), validação de código, limites de retry, trade-offs resilência vs fragilidade. Máx 5 riscos com evidência. Recomendação de próximo passo.",
       "files": []
     }

@@ -1,11 +1,11 @@
 """
-aegis_sanitizer/deterministic_emitter.py
+aegis_code_generator/deterministic_emitter.py
 
 Emissores puros do motor de geração híbrido do Code Generator (Fase 4).
 Ver `.specs/plano-codegen-hibrido-deterministico.md` (Seções 2.1 e 3.2).
 
 Cada `_emit_*` espelha o check correspondente de
-`step_validator.validate_resilience_patterns` (aegis_sanitizer/step_validator.py:774)
+`step_validator.validate_resilience_patterns` (aegis_code_generator/step_validator.py:774)
 no sentido contrário: em vez de COBRAR o padrão de resiliência exigido para um
 step, o emissor PRODUZ o código que já satisfaz esse padrão por construção.
 

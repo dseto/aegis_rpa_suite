@@ -14,7 +14,8 @@ aegis_rpa_suite/
 │   └── recorder.py              # Classe AegisRecorder para capturar eventos reativos
 ├── aegis_sanitizer/             # Compactador, Dicionário de Dados e Firewall
 │   ├── sanitizer.py             # Classe SanitizerService (relatórios de telemetria)
-│   ├── dataset_validator.py     # Classe DatasetValidatorService (firewall de dados)
+│   └── dataset_validator.py     # Classe DatasetValidatorService (firewall de dados)
+├── aegis_code_generator/        # Gerador de Código (Fase 4)
 │   └── code_generator.py        # Classe CodeGeneratorService (geração cognitiva via IA)
 ├── aegis_runner/                # Camada e helpers de execução resiliente
 │   ├── runner.py                # TransactionRunner com suporte a injeção do gateway
@@ -49,7 +50,7 @@ aegis_rpa_suite/
 
 1. **Não Geração de Arquivos na Raiz:** Não devem ser gerados arquivos na raiz do projeto (como screenshots, relatórios ou CSVs temporários), exceto em casos de extrema necessidade técnica.
 2. **Isolamento de Diretórios de Processos (Projects):** Todos os scripts, simuladores, testes e logs específicos de um sistema alvo devem ficar confinados exclusivamente sob subpastas de `projects/`, nunca dentro de pastas internas do Aegis.
-3. **Core Framework Blindado:** A estrutura de pastas internas do Aegis (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_mentor`) é um motor de execução genérico e blindado.
+3. **Core Framework Blindado:** A estrutura de pastas internas do Aegis (`aegis_runner`, `aegis_blackbox`, `aegis_cockpit`, `aegis_sanitizer`, `aegis_code_generator`, `aegis_mentor`) é um motor de execução genérico e blindado.
 4. **Desacoplamento de `projects/` e `telemetry_data/`:** Devem ser tratadas como áreas completamente externas à suite core do Aegis, mantendo o framework 100% reutilizável e desacoplado.
 5. **Múltiplos Cenários de Teste por Projeto:** Cada cenário é isolado em um subdiretório `tests/<slug_cenario>/` dentro do projeto, contendo suas próprias telemetrias, datasets, scripts gerados, arquivos `.env`, histórico de passos e histórico de execuções.
 
@@ -251,7 +252,7 @@ python aegis_sanitizer/dataset_validator.py --dataset projects/seu_projeto/datas
 
 ### 4. Fase 4: Geração Automática de Código (Aegis Code Generator)
 ```powershell
-python aegis_sanitizer/code_generator.py --project-dir projects/seu_projeto
+python aegis_code_generator/code_generator.py --project-dir projects/seu_projeto
 ```
 * Compila `bot_producao.py` e `skills_lib.py` usando IA (Gemini via OpenRouter).
 * Valida sintaticamente o script gerado com `compile()` antes de salvar.

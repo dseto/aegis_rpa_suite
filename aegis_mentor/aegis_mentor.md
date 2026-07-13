@@ -6,7 +6,7 @@ Este documento descreve as especificações funcionais e as diretrizes do módul
 
 ## 📖 1. Visão Geral e Propósito
 
-O **Aegis Mentor** funciona como uma **Base de Conhecimento e Playbook Arquitetural** integrado ao framework. Ele não executa código de automação diretamente, mas serve como a fonte de verdade para boas práticas, guias de desenvolvimento e, crucialmente, é consumido pelo **Aegis Code Generator** ([code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_sanitizer/code_generator.py)) para injetar regras e padrões de codificação nos prompts enviados às LLMs.
+O **Aegis Mentor** funciona como uma **Base de Conhecimento e Playbook Arquitetural** integrado ao framework. Ele não executa código de automação diretamente, mas serve como a fonte de verdade para boas práticas, guias de desenvolvimento e, crucialmente, é consumido pelo **Aegis Code Generator** ([code_generator.py](file:///c:/Projetos/aegis_rpa_suite/aegis_code_generator/code_generator.py)) para injetar regras e padrões de codificação nos prompts enviados às LLMs.
 
 ### Filosofia de Design
 * **Centralização de Boas Práticas**: Evita que regras de resiliência fiquem espalhadas no código. Elas são descritas em arquivos markdown legíveis que orientam humanos (QA/Desenvolvedores) e agentes de IA.

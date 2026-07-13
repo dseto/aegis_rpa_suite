@@ -198,7 +198,7 @@ Agora que leu os artefatos (5 sempre presentes + o manifest quando o bot for hí
 
 3.1. **plano_execucao.json vs generation_manifest.json vs bot_producao.py (só bots híbridos):**
    - `plan_checksum` do manifest bate com o sha1 de `plano_execucao.json` atual? Se não, o manifest é de uma geração anterior a uma re-sanitização — trate qualquer `provenance` dele com cautela antes de atribuir culpa a um step.
-   - Para um step específico com defeito: confira `steps["<step_id>"].provenance` — `"deterministic"` direciona a investigação para `aegis_sanitizer/deterministic_emitter.py` (bug mecânico, reproduzível); `"cognitive"`/`"cognitive_patched"` direciona para o texto do slot que a LLM recebeu naquela chamada (julgamento pontual, não necessariamente reproduzível).
+   - Para um step específico com defeito: confira `steps["<step_id>"].provenance` — `"deterministic"` direciona a investigação para `aegis_code_generator/deterministic_emitter.py` (bug mecânico, reproduzível); `"cognitive"`/`"cognitive_patched"` direciona para o texto do slot que a LLM recebeu naquela chamada (julgamento pontual, não necessariamente reproduzível).
    - Todo `step_id` de `steps` no manifest existe em `plano_execucao.json`? Se não, o manifest também está desatualizado.
 
 4. **dataset_inicial.json vs bot_producao.py:**

@@ -137,7 +137,7 @@ python aegis_sanitizer/dataset_validator.py --dataset projects/meu_novo_bot/data
 #### 4. Compilar o Robô Resiliente com IA
 Dispare a geração cognitiva do script final de produção:
 ```powershell
-python aegis_sanitizer/code_generator.py --project-dir projects/meu_novo_bot
+python aegis_code_generator/code_generator.py --project-dir projects/meu_novo_bot
 ```
 *Isso criará o script executável final `bot_producao.py` na pasta do seu projeto.*
 
