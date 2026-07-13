@@ -1,0 +1,177 @@
+{
+  "version": "2.0",
+  "test_dir": "synthetic_hybrid_matrix",
+  "generated_at": "2026-07-12T00:00:00",
+  "total_steps": 9,
+  "total_recorded_steps": 10,
+  "fidelity_summary": {
+    "raw_events": 10,
+    "steps_required": 8,
+    "steps_optional": 1,
+    "steps_suppressed": 1,
+    "merges": 0
+  },
+  "steps": [
+    {
+      "step_id": "st_001",
+      "execution_hint": "optional",
+      "type": "click",
+      "selector": ".cdk-overlay-backdrop-transparent",
+      "description": "Fechar overlay residual (opcional, pode não existir em toda execução).",
+      "scenario": "default",
+      "original_index": 0
+    },
+    {
+      "step_id": "st_002",
+      "type": "click",
+      "selector": "table #grid-tbody tr button:has-text('Detalhes')",
+      "description": "Clicar no botão 'Detalhes'.",
+      "scenario": "default",
+      "text": "Detalhes",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "Item Genérico 001"
+      },
+      "coords": [
+        0.5291666666666667,
+        0.7148148148148148
+      ],
+      "original_index": 1
+    },
+    {
+      "step_id": "sup_001",
+      "execution_hint": "skip",
+      "step_role": "phantom_click",
+      "suppression_reason": "Clique registrado a poucos % de distância do coords_trigger do select seguinte — mesmo clique físico capturado 2x pelo recorder antes do overlay estabilizar.",
+      "type": "click",
+      "selector": "#field-estado-civil div",
+      "description": "Clicar no campo de seleção de 'Estado Civil'.",
+      "scenario": "default",
+      "text": "Estado Civil\nSelecione",
+      "parent": {
+        "selector": "#field-estado-civil",
+        "has_text": null
+      },
+      "coords": [
+        0.5,
+        0.6
+      ],
+      "original_index": 2
+    },
+    {
+      "step_id": "st_003",
+      "step_role": "composite_select",
+      "type": "select",
+      "selector": "",
+      "description": "Selecionar 'Selecionar a opção 'Casado(a)'.' em 'Clicar na opção 'Selecione' para o campo 'Estado Civil'.'",
+      "scenario": "default",
+      "parent": {
+        "selector": ".mat-form-field-wrapper",
+        "has_text": "Estado Civil Selecione"
+      },
+      "dropdown_label": "Estado Civil",
+      "option_text": "Casado(a)",
+      "trigger_selector": "label:has-text('Estado Civil') ~ div",
+      "option_selector": "[role='option']:has-text('Casado(a)')",
+      "coords_trigger": [
+        0.5,
+        0.6
+      ],
+      "coords_option": [
+        0.5,
+        0.65
+      ],
+      "source_events": [
+        3,
+        4
+      ],
+      "original_index": 3
+    },
+    {
+      "step_id": "st_004",
+      "type": "select_native",
+      "selector": "#nivel_experiencia",
+      "description": "Selecionar o nível de experiência 'Pleno'.",
+      "scenario": "default",
+      "option_text": "Pleno",
+      "original_index": 4
+    },
+    {
+      "step_id": "st_005",
+      "type": "click",
+      "selector": "#proposal-viewport #proposal-content table tr button:has-text('📄')",
+      "description": "Clicar no botão com ícone de documento.",
+      "scenario": "default",
+      "text": "📄",
+      "parent": {
+        "selector": ".mat-row",
+        "has_text": "cliente exemplo 12345678900 categoria",
+        "has_text_original": "PRO-99999 cliente exemplo 12345678900 categoria"
+      },
+      "coords": [
+        0.7984375,
+        0.5453703703703704
+      ],
+      "sanitization_notes": [
+        "padrao_q: removido token 'PRO-99999'"
+      ],
+      "original_index": 5
+    },
+    {
+      "step_id": "st_006",
+      "type": "click",
+      "selector": "#mat-autocomplete-panel-cidade div:has-text('Curitiba')",
+      "description": "Selecionar 'Curitiba' na lista de autocompletar de cidades.",
+      "scenario": "default",
+      "text": "Curitiba",
+      "parent": {
+        "selector": "#mat-autocomplete-panel-cidade",
+        "has_text": null
+      },
+      "coords": [
+        0.203125,
+        0.5351851851851852
+      ],
+      "original_index": 6
+    },
+    {
+      "step_id": "st_007",
+      "type": "click",
+      "selector": "#mat-autocomplete-panel-cidade div:has-text('Nenhuma cidade encontrada')",
+      "description": "Clicar no aviso 'Nenhuma cidade encontrada' do painel de autocompletar (mensagem estática do widget, não valor de negócio).",
+      "scenario": "default",
+      "text": "Nenhuma cidade encontrada",
+      "parent": {
+        "selector": "#mat-autocomplete-panel-cidade",
+        "has_text": null
+      },
+      "coords": [
+        0.203125,
+        0.6
+      ],
+      "original_index": 7
+    },
+    {
+      "step_id": "st_008",
+      "weak_selector": true,
+      "type": "click",
+      "selector": "button.btn-icon",
+      "description": "Clicar no botão de confirmação do endereço (seletor de baixa confiança, ancorado via parent.has_text).",
+      "scenario": "default",
+      "parent": {
+        "selector": ".card-endereco",
+        "has_text": "Confirmar Endereço"
+      },
+      "original_index": 8
+    },
+    {
+      "step_id": "st_009",
+      "weak_selector": true,
+      "type": "click",
+      "selector": "button.btn-icon-2",
+      "description": "Clicar em botão genérico sem nenhum material de ancoragem disponível.",
+      "scenario": "default",
+      "original_index": 9
+    }
+  ]
+}

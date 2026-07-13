@@ -645,6 +645,13 @@ def _validate_scenario_function_signature(bot_code: str) -> List[Dict[str, Any]]
         if len(param_names) < 2:
             errors.append({
                 "type": "INVALID_SCENARIO_SIGNATURE",
+                # lineno aqui e' principalmente para diagnostico/rastreio: a assinatura da
+                # funcao raramente esta "dentro" de um bloco # [PASSO N], entao o mapeamento
+                # lineno -> bloco em code_generator.py (_compute_restore_target_scope via
+                # _parse_step_blocks) tende a nao achar bloco correspondente e ignorar
+                # silenciosamente — comportamento aceitavel, pois o fallback full-file do
+                # Ralph Loop acaba vendo o arquivo inteiro de qualquer forma.
+                "lineno": node.lineno,
                 "detail": f"'execute_scenario_default' tem {len(param_names)} parametro(s): {param_names}. "
                           f"Esperado: (page, row, runner) — o runner chama posicionalmente nessa ordem."
             })
@@ -658,6 +665,10 @@ def _validate_scenario_function_signature(bot_code: str) -> List[Dict[str, Any]]
             errors.append({
                 "type": "WRONG_SCENARIO_PARAM_ORDER",
                 "found_order": param_names,
+                # Mesma ressalva do INVALID_SCENARIO_SIGNATURE acima: lineno serve para
+                # diagnostico/rastreio, nao necessariamente para resolver o escopo cirurgico
+                # de imediato (a assinatura da funcao raramente esta dentro de um bloco de passo).
+                "lineno": node.lineno,
                 "detail": f"'execute_scenario_default' declarado como ({', '.join(param_names)}), "
                           f"mas o runner chama o callback posicionalmente como (page, row, runner). "
                           f"A ordem dos parametros DEVE ser exatamente (page, row, runner), pois a chamada "
@@ -807,6 +818,22 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
         for field in dicionario.get("fields", {}).values()
         if field.get("fill_strategy") == "HUMAN_LIKE"
     }
+
+    # Q-b (Padrão Q endurecido, Seção 3.3 do plano híbrido): mapeia
+    # observed_value -> [chaves do dicionário]. Reimplementação LOCAL do
+    # coletor do emissor (deterministic_emitter._collect_observed_values) —
+    # deliberadamente NÃO importado de lá, para não inverter a dependência
+    # conceitual validador->emissor. Diferente da C10 do emissor (pertinência
+    # EXATA: literal ∈ observed_values), aqui o casamento é por SUBSTRING
+    # (observed_value ⊂ parent.has_text), porque parent.has_text é sempre um
+    # valor COMPOSTO ('nome cpf FIPE'), nunca um observed_value inteiro.
+    # Valores curtos (<3 chars) são ignorados para reduzir falso-positivo de
+    # substring (ex.: 'Sim' casando por acaso um residual estático).
+    observed_value_keys: Dict[str, List[str]] = {}
+    for field_key, field in dicionario.get("fields", {}).items():
+        observed = field.get("observed_value")
+        if isinstance(observed, str) and len(observed) >= 3:
+            observed_value_keys.setdefault(observed, []).append(field_key)
 
     try:
         tree = ast.parse(bot_code)
@@ -976,29 +1003,121 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
                             break
                     code_has_text = code_parent_dict.get("has_text")
                     code_selector = code_parent_dict.get("selector") or ""
-                    # has_text montado dinamicamente (f-string/concat com row.get(...)) não dá
-                    # pra comparar por igualdade de string com o literal gravado no plano, mas
-                    # é uma parametrização legítima — o dataset é a fonte de verdade em runtime,
-                    # não o valor congelado no momento da gravação.
-                    has_text_ok = (
-                        (code_has_text == plan_has_text)
-                        or (plan_has_text in code_selector)
-                        or ("has_text" in code_parent_dynamic_keys)
+
+                    # Q-b (HARDCODED_PARENT_HAS_TEXT, Seção 3.3 do plano
+                    # híbrido): gatilho = Padrão Q registrado pelo sanitizer
+                    # (parent.has_text_original presente) E o literal residual
+                    # de parent.has_text contendo >=1 observed_value do
+                    # dicionário por SUBSTRING. Sob o gatilho, copiar o
+                    # literal gravado (igual ao plano, ou embutido no seletor
+                    # via :has-text) DEIXA de contar como prova válida — é
+                    # hardcode de dado de negócio (nome/CPF do cliente
+                    # gravado), que passa em todos os validadores e no dry
+                    # run mas mira sempre o cliente da gravação com dataset
+                    # de 2+ linhas. Só composição dinâmica (f-string/concat
+                    # com row.get(...)) passa. Fora do gatilho (sem
+                    # has_text_original, ou residual 100% estático), o
+                    # comportamento antigo (MISSING_PARENT_HAS_TEXT) fica
+                    # intacto — literal continua aceito, e é o correto lá.
+                    matched_values = (
+                        {
+                            value: keys
+                            for value, keys in observed_value_keys.items()
+                            if value in plan_has_text
+                        }
+                        if parent.get("has_text_original") and isinstance(plan_has_text, str)
+                        else {}
                     )
-                    if not has_text_ok:
-                        errors.append({
-                            "type": "MISSING_PARENT_HAS_TEXT",
-                            "step_id": step_id,
-                            "detail": f"Passo '{step_id}' tem parent.has_text='{plan_has_text}' gravado no "
-                                      f"plano (usado para distinguir entre múltiplos elementos que casam com "
-                                      f"o seletor genérico do pai '{parent.get('selector', '')}'), mas a "
-                                      f"chamada runner.{chained_method}(...) não aplica esse filtro — nem via "
-                                      f"parent={{'selector': '{parent.get('selector', '')}', 'has_text': "
-                                      f"'{plan_has_text}'}} nem embutindo o texto diretamente no seletor "
-                                      f"(ex.: parent={{'selector': \"{parent.get('selector', '')}:has-text('{plan_has_text}')\"}}). "
-                                      f"Sem esse filtro o robô pode interagir com o elemento errado quando "
-                                      f"mais de um elemento casa com o seletor do pai."
-                        })
+                    if matched_values:
+                        if "has_text" not in code_parent_dynamic_keys:
+                            # Chaves candidatas derivadas mecanicamente, em
+                            # ordem de aparição no literal do plano.
+                            ambiguous = any(len(keys) > 1 for keys in matched_values.values())
+                            ordered_matches = sorted(
+                                matched_values.items(),
+                                key=lambda kv: plan_has_text.find(kv[0]),
+                            )
+                            derived_keys = [keys[0] for _value, keys in ordered_matches]
+                            if ambiguous or not derived_keys:
+                                # Degradação: match ambíguo (mais de uma chave
+                                # com o MESMO observed_value — ex.: '2026' pode
+                                # ser ano_modelo E ano_fabricacao) ou vazio —
+                                # não adivinhe qual chave; mensagem genérica de
+                                # proibição de hardcode, sem nomear chave.
+                                detail = (
+                                    f"Passo '{step_id}' tem Padrão Q (parent.has_text_original presente) e o "
+                                    f"parent.has_text do plano ('{plan_has_text}') contém dado(s) de negócio do "
+                                    f"dicionário, mas o mapeamento para chaves do dataset é ambíguo ou "
+                                    f"indeterminado. É PROIBIDO copiar esse literal para o código (hardcode de "
+                                    f"dado de negócio — o robô miraria sempre o registro da gravação com "
+                                    f"dataset de 2+ linhas). Componha 'has_text' DINAMICAMENTE com f-string "
+                                    f"usando row.get(\"<chave>\", \"\") com as chaves corretas do dicionário de "
+                                    f"dados, preservando apenas o texto estático residual como literal dentro "
+                                    f"da mesma f-string."
+                                )
+                            else:
+                                # Sugestão prescritiva: substitui cada
+                                # observed_value casado pela expressão
+                                # row.get(...) correspondente (valores mais
+                                # longos primeiro, para um valor curto não
+                                # corromper a substituição de um longo que o
+                                # contenha).
+                                suggestion = plan_has_text
+                                for value, keys in sorted(
+                                    matched_values.items(), key=lambda kv: -len(kv[0])
+                                ):
+                                    suggestion = suggestion.replace(
+                                        value, "{row.get('%s', '')}" % keys[0]
+                                    )
+                                keys_desc = ", ".join(
+                                    f"{keys[0]} ('{value}')" for value, keys in ordered_matches
+                                )
+                                detail = (
+                                    f"Passo '{step_id}' tem Padrão Q (parent.has_text_original presente) e o "
+                                    f"parent.has_text do plano ('{plan_has_text}') contém dado(s) de negócio do "
+                                    f"dicionário: {keys_desc}. É PROIBIDO copiar esse literal para o código — "
+                                    f"nem em parent={{'has_text': '<literal>'}} nem embutido no seletor via "
+                                    f":has-text('<literal>') (hardcode de dado de negócio — o robô miraria "
+                                    f"sempre o registro da gravação com dataset de 2+ linhas). Componha "
+                                    f"'has_text' DINAMICAMENTE com f-string usando row.get(...) para cada "
+                                    f"chave, preservando o texto estático residual como literal, ex.: "
+                                    f"parent={{'selector': '{parent.get('selector', '')}', "
+                                    f"'has_text': f\"{suggestion}\"}}."
+                                )
+                            errors.append({
+                                "type": "HARDCODED_PARENT_HAS_TEXT",
+                                "step_id": step_id,
+                                "detail": detail,
+                            })
+                        # Sob o gatilho Q-b, o check antigo (else abaixo) não
+                        # roda: ou o dinâmico está presente (OK), ou o erro
+                        # novo já prescreveu a correção — o texto antigo
+                        # sugeriria o literal como correção válida, exatamente
+                        # o que o check novo passou a rejeitar.
+                    else:
+                        # has_text montado dinamicamente (f-string/concat com row.get(...)) não dá
+                        # pra comparar por igualdade de string com o literal gravado no plano, mas
+                        # é uma parametrização legítima — o dataset é a fonte de verdade em runtime,
+                        # não o valor congelado no momento da gravação.
+                        has_text_ok = (
+                            (code_has_text == plan_has_text)
+                            or (plan_has_text in code_selector)
+                            or ("has_text" in code_parent_dynamic_keys)
+                        )
+                        if not has_text_ok:
+                            errors.append({
+                                "type": "MISSING_PARENT_HAS_TEXT",
+                                "step_id": step_id,
+                                "detail": f"Passo '{step_id}' tem parent.has_text='{plan_has_text}' gravado no "
+                                          f"plano (usado para distinguir entre múltiplos elementos que casam com "
+                                          f"o seletor genérico do pai '{parent.get('selector', '')}'), mas a "
+                                          f"chamada runner.{chained_method}(...) não aplica esse filtro — nem via "
+                                          f"parent={{'selector': '{parent.get('selector', '')}', 'has_text': "
+                                          f"'{plan_has_text}'}} nem embutindo o texto diretamente no seletor "
+                                          f"(ex.: parent={{'selector': \"{parent.get('selector', '')}:has-text('{plan_has_text}')\"}}). "
+                                          f"Sem esse filtro o robô pode interagir com o elemento errado quando "
+                                          f"mais de um elemento casa com o seletor do pai."
+                            })
 
         coords = step.get("coords")
         if coords:

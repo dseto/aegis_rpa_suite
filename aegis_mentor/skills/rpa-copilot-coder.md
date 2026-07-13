@@ -351,3 +351,58 @@ O plano de execução determinístico (`plano_execucao.json`, schema v2) que aco
   - **Emita um passo suprimido SOMENTE se houver justificativa concreta** vinda de uma correção pendente ou do próprio contexto do fluxo em correção cirúrgica (ex.: um passo posterior falha porque um overlay que esse `sup_` fechava ficou aberto; uma validação assíncrona precisa ser re-disparada e o `sup_` é exatamente esse gatilho).
   - **Ao emitir, use o `step_id` EXATO da seção suprimida** (ex.: `sup_003`) — nunca invente um id novo nem reaproveite um `st_...` para esse fim — e **preserve a ordem relativa** dele em meio aos demais passos do plano.
   - Isso não é uma restrição nova de comportamento: é a mesma regra "Zero passos inventados" que já existe para campos do dataset sem step no plano (Seção 2, Diretrizes de Codificação), aplicada ao caso inverso — aqui o passo existe no plano, mas foi marcado para não ser reproduzido, salvo necessidade comprovada.
+
+---
+
+## 🧩 4. Geração híbrida — o que a LLM escreve e o que ela nunca escreve
+
+A Fase 4 pode rodar em **modo híbrido** (`AEGIS_CODEGEN_HYBRID=true`): um motor determinístico (`deterministic_emitter.py`) emite a maior parte dos passos do `bot_producao.py` diretamente do plano de execução, sem chamada de LLM nenhuma. A LLM só entra para os passos que exigem julgamento real. Entender essa divisão evita dois erros simétricos: tentar "ajudar" reescrevendo um bloco que já está correto por construção, ou tratar como trivial um passo que na verdade precisa de decisão.
+
+### O que o motor determinístico escreve sozinho
+Todo passo `click`/`fill`/`select`/`select_native` cujo seletor, binding de dataset e forma de chamada sejam mecanicamente derivá­veis do plano + `dicionario.json` — sem nenhuma ambiguidade — vira código determinístico. Você (a LLM) **nunca vê esses passos como tarefa**: eles chegam prontos no arquivo, ou nem chegam a aparecer no prompt.
+
+### Os slots cognitivos: o único código que você escreve
+Quando um passo exige julgamento, o motor deixa um placeholder no lugar dele, sempre nesta forma (parseável pela mesma âncora `# [PASSO N]` de sempre):
+```python
+# [PASSO N] <descrição do passo>
+# AEGIS_COGNITIVE_SLOT step_id="st_014" motivo="<razão da classificação>"
+pass
+```
+Você recebe, numa única chamada, **somente** os slots cognitivos da geração atual — nunca o arquivo inteiro. A resposta é sempre no formato delimitado:
+```
+# BEGIN_STEP st_014
+<bloco completo do passo, incluindo o comentário '# [PASSO N]'>
+# END_STEP st_014
+```
+Um par BEGIN_STEP/END_STEP por `step_id` alvo, nada além disso — não reproduza blocos de contexto vizinhos que apareçam no prompt (eles são só leitura, para você entender a sequência).
+
+### Casos que permanecem cognitivos (onde o julgamento é seu)
+- **Padrão Q dinâmico** (`has_text_original` ≠ `has_text` atual, ou `sanitization_notes` mencionando `padrao_q`): decidir entre usar o literal sanitizado tal como está ou compor `has_text` dinamicamente com `row.get(...)` — **este é um dos poucos pontos onde você ainda escreve a lógica de composição do seletor**, não só preenche um template (ver Regra ANTI-HARDCODE do Padrão Q, Seção 1, e Seção 3.3 do plano híbrido).
+- **Decisão de emitir um passo `optional`**: o motor nunca decide sozinho se um passo `execution_hint: "optional"` deve entrar no script — essa análise contextual da telemetria/relatório continua sua (ver contrato da Seção 3 acima).
+- **Padrão N (menu suspenso `>>`)**: identificar que um seletor pertence a um submenu e dividi-lo em `Pai >> Filho` é julgamento sobre a estrutura do menu, não uma regra puramente mecânica de binding.
+- **Seletor com valor de negócio embutido**: qualquer seletor (ou `child` derivado dele) cujo texto contenha um valor observado na gravação (`observed_value` do dicionário) — ex. `:has-text('Hyundai')` num clique de opção de autocomplete — precisa ser parametrizado com `row.get(...)`, **nunca** emitido como literal gravado. O motor rebaixa esses passos para cognitivo justamente porque só uma decisão semântica evita o hardcode aqui.
+- **Passos alvo de correção pendente**: um `step_id` referenciado por `pending_corrections` (diretamente ou via `required_reopen.after_step_id`) nasce cognitivo mesmo que a forma canônica do passo seja mecanicamente óbvia — a correção em si é a prova de que a forma canônica não bastou. Quando isso acontece, as entradas relevantes de `pending_corrections` (qa_insight, tentativas fracassadas, correção requisitada) vêm junto no prompt do slot, na mesma renderização já usada por `_surgical_correct`.
+
+### Template canônico do passo `optional`
+Quando você decide **emitir** um passo `optional`, use sempre este formato — não-fatal, com o erro impresso no `except` (nunca engula silenciosamente):
+```python
+# [PASSO 7] Fechar overlay residual (optional/sup_003 — não-fatal)
+try:
+    runner.click_resilient(page, selector=".cdk-overlay-backdrop",
+                           target_description="Fechar overlay residual",
+                           step_id="sup_003")
+except Exception as _opt_err:
+    print(f"[BOT] Passo opcional sup_003 pulado (não-fatal): {_opt_err}")
+```
+Um passo `required` **nunca** recebe esse wrapper — fatalidade de `required` é contrato do runner e não muda.
+
+**Convenção de bloco-vazio para `optional` NÃO emitido:** se você decidir **não** emitir o passo, não deixe o slot "faltando" — isso derruba a geração inteira para o fluxo full-LLM. Devolva o par delimitador com um bloco-vazio explícito, preservando o comentário `AEGIS_COGNITIVE_SLOT` com o `step_id` original e ajustando só o `motivo=`:
+```
+# BEGIN_STEP st_014
+# [PASSO N] <descrição>
+# AEGIS_COGNITIVE_SLOT step_id="st_014" motivo="optional não emitido: <justificativa curta>"
+# END_STEP st_014
+```
+
+### Proibição no modo reflection/correção
+No ciclo de auto-reflexão (Ralph Loop) e em correções cirúrgicas, **nunca toque em blocos deterministic fora do escopo da correção atual** — mesmo que pareçam melhoráveis. Qualquer bloco `deterministic` do manifest que você alterar fora do seu escopo é **restaurado automaticamente** à forma canônica pela política anti-drift antes da próxima validação; a sua edição nesses blocos é descartada sem aviso, então gastar tokens reescrevendo-os não muda o arquivo final. Concentre toda a atenção nos blocos explicitamente marcados como alvo da correção.

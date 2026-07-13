@@ -28,6 +28,7 @@ from step_validator import (
     validate_bot_against_plan,
     validate_resilience_patterns,
     extract_step_ids_from_code,
+    _validate_scenario_function_signature,
 )
 
 
@@ -441,6 +442,44 @@ def execute_scenario_default(page, row, runner):
         result = self._run(bot_code)
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("MISSING_SELECT_OPTION_RESILIENT", {e["type"] for e in result["errors"]})
+
+
+class TestScenarioFunctionSignatureLineno(unittest.TestCase):
+    """[SUBAGENTE 13]: INVALID_SCENARIO_SIGNATURE e WRONG_SCENARIO_PARAM_ORDER
+    (_validate_scenario_function_signature) precisam carregar 'lineno' — sem
+    isso o erro fica invisível para o mecanismo de escopo cirúrgico do
+    code_generator.py (live_error_step_ids / _compute_restore_target_scope),
+    causando oscilação infinita do Ralph Loop (ver CLAUDE.md, working
+    agreement nº 5, e o retry 3 do gate H8)."""
+
+    def test_invalid_scenario_signature_carries_correct_lineno(self):
+        bot_code = (
+            "import os\n"
+            "\n"
+            "\n"
+            "def execute_scenario_default(page):\n"
+            "    pass\n"
+        )
+        errors = _validate_scenario_function_signature(bot_code)
+        invalid_sig_errors = [e for e in errors if e["type"] == "INVALID_SCENARIO_SIGNATURE"]
+        self.assertEqual(len(invalid_sig_errors), 1, errors)
+        # linha 4 (1-based) é onde 'def execute_scenario_default(page):' está declarada
+        self.assertEqual(invalid_sig_errors[0]["lineno"], 4)
+
+    def test_wrong_scenario_param_order_carries_correct_lineno(self):
+        bot_code = (
+            "import os\n"
+            "import sys\n"
+            "\n"
+            "\n"
+            "def execute_scenario_default(runner, row, page):\n"
+            "    pass\n"
+        )
+        errors = _validate_scenario_function_signature(bot_code)
+        wrong_order_errors = [e for e in errors if e["type"] == "WRONG_SCENARIO_PARAM_ORDER"]
+        self.assertEqual(len(wrong_order_errors), 1, errors)
+        # linha 5 (1-based) é onde 'def execute_scenario_default(runner, row, page):' está declarada
+        self.assertEqual(wrong_order_errors[0]["lineno"], 5)
 
 
 if __name__ == "__main__":

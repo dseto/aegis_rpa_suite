@@ -1,0 +1,48 @@
+{
+  "initial_url": "http://localhost:5173/",
+  "fields": {
+    "estado_civil_cliente": {
+      "selector": "label:has-text('Estado Civil') ~ div",
+      "type": "string",
+      "observed_value": "Casado(a)",
+      "required": true,
+      "confidence": 75,
+      "selector_type": "has-text",
+      "fill_strategy": "DIRECT",
+      "description": "Campo de seleção estado civil do cliente mapeado na tela (select customizado — binding via trigger_selector, caso [c] da matriz).",
+      "validation_rules": {
+        "regex": "",
+        "enum": ["Solteiro(a)", "Casado(a)", "Divorciado(a)"]
+      }
+    },
+    "nivel_experiencia_profissional": {
+      "selector": "#nivel_experiencia",
+      "type": "string",
+      "observed_value": "Pleno",
+      "required": true,
+      "confidence": 85,
+      "selector_type": "id",
+      "fill_strategy": "DIRECT",
+      "description": "Campo <select> nativo de nível de experiência mapeado na tela (select_native — binding via selector, caso [h] da matriz).",
+      "validation_rules": {
+        "regex": "",
+        "enum": ["Junior", "Pleno", "Senior"]
+      }
+    },
+    "cidade_cliente": {
+      "selector": "input[placeholder='Pesquisar Cidade...']",
+      "type": "string",
+      "observed_value": "Curitiba",
+      "required": true,
+      "confidence": 80,
+      "selector_type": "name-or-placeholder",
+      "fill_strategy": "DIRECT",
+      "description": "Campo de autocomplete de cidade mapeado na tela. 'Curitiba' é o observed_value que aparece hardcoded no seletor de st_006 (caso [f] positivo da matriz) — usado pelo teste negativo do emissor (Seção 4.1 item 4 do plano) para provar que nenhum bloco deterministic pode conter esse literal.",
+      "validation_rules": {
+        "regex": "",
+        "enum": []
+      }
+    }
+  },
+  "outputs": {}
+}

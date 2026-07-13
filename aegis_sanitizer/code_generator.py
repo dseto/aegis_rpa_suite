@@ -5,6 +5,7 @@ import re
 import ast
 import argparse
 import difflib
+import textwrap
 from datetime import datetime
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -20,6 +21,24 @@ from aegis_sanitizer.step_validator import (
     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
     validate_dataset_field_names, validate_resilience_patterns, validate_required_wait_patterns,
     validate_required_reopen_patterns, validate_required_method_patterns, RUNNER_METHODS
+)
+# Política anti-drift do Ralph Loop + ciclo de vida do manifest (H5 do plano
+# híbrido, .specs/plano-codegen-hibrido-deterministico.md, Seções 2.4/5.2).
+# `emit_step_block`/`_plan_checksum` regeneram o bloco canônico e o checksum
+# do plano pra comparação com o manifest; `_STEP_ANCHOR_RENUMBER_RE` é o
+# mesmo regex que `build_skeleton` usa pra renumerar a âncora '# [PASSO N]'
+# sequencialmente — reaproveitado aqui pra que o bloco restaurado tenha o
+# MESMO número que já estava no arquivo (ver _restore_deterministic_blocks).
+# `build_skeleton` é o motor de montagem do H4 (Seção 2.3 do plano híbrido)
+# — classifica cada step do plano em deterministic/cognitive/omit e monta o
+# corpo de `execute_scenario_default` com os blocos deterministic prontos +
+# placeholders cognitivos parseáveis. Usado só por `_generate_new_code`
+# (rota híbrida, atrás de `AEGIS_CODEGEN_HYBRID`).
+from aegis_sanitizer.deterministic_emitter import (
+    emit_step_block as _emit_deterministic_step_block,
+    _plan_checksum as _deterministic_plan_checksum,
+    _STEP_ANCHOR_RENUMBER_RE as _DETERMINISTIC_ANCHOR_RENUMBER_RE,
+    build_skeleton as _build_hybrid_skeleton,
 )
 
 
@@ -169,6 +188,105 @@ class CodeGeneratorService:
         for start, end in sorted(ranges_to_strip, reverse=True):
             del lines[start:end]
         return "\n".join(lines)
+
+    def _rewrite_scenario_signature_to_canonical(self, bot_code: str) -> str:
+        """
+        Autofix determinístico da assinatura de `execute_scenario_default`.
+
+        A ordem/quantidade de parâmetros do callback é 100% mecânica, sem
+        nenhum julgamento de negócio: o runner chama o cenário POSICIONALMENTE
+        como `(page, row, self)` (ver `aegis_runner/runner.py` ~L2274-2278, que
+        aceita 2 ou 3 parâmetros — 3 é a forma canônica preferida). Logo, se a
+        LLM declarou os parâmetros trocados/incompletos MAS usando apenas nomes
+        conhecidos (subconjunto de {page, row, runner}), basta reescrever a
+        assinatura para a forma canônica `(page, row, runner)`: cada nome volta
+        a ligar-se ao objeto certo em runtime e o corpo — que usa esses mesmos
+        nomes semanticamente — passa a funcionar sem tocar em mais nada. Ex.: o
+        bug real `execute_scenario_default(runner, row)` (runner passa (page,row)
+        → `runner` recebe a Page → `runner.fill_resilient` estoura
+        AttributeError) vira `(page, row, runner)` e resolve na raiz.
+
+        Só dispara quando TODOS os nomes ∈ {page, row, runner} e não há
+        *args/**kwargs/kwonly/posonly/defaults. Se houver qualquer nome
+        alienígena (a LLM inventou nomes), NÃO mexe — reescrever cegamente
+        arriscaria quebrar o corpo da função — deixa cair no fluxo normal de
+        correção via LLM.
+
+        Este autofix é o irmão determinístico das 3 autocorreções já existentes
+        em `generate()` (rename de método alucinado, strip de TransactionRunner
+        espúrio, reordenação de passos). Fecha a causa raiz da oscilação
+        infinita do Ralph Loop documentada no working agreement nº 5 do
+        CLAUDE.md: a linha da assinatura fica FORA de qualquer bloco
+        `# [PASSO N]`, então o modo de correção escopado jamais a alcança.
+
+        NÃO usa `ast.unparse` (3.9+; o projeto exige >=3.8) nem reformata o
+        resto do arquivo — reescreve textualmente apenas a lista de parâmetros,
+        localizada por matching de parênteses.
+        """
+        try:
+            tree = ast.parse(bot_code)
+        except SyntaxError:
+            return bot_code
+
+        allowed = {"page", "row", "runner"}
+
+        def is_fixable_args(a) -> bool:
+            if a.vararg or a.kwarg or a.defaults or a.kwonlyargs:
+                return False
+            if getattr(a, "posonlyargs", None):
+                return False
+            names = [arg.arg for arg in a.args]
+            return bool(names) and set(names).issubset(allowed) and names != ["page", "row", "runner"]
+
+        needs_fix = any(
+            isinstance(node, ast.FunctionDef)
+            and node.name == "execute_scenario_default"
+            and is_fixable_args(node.args)
+            for node in ast.walk(tree)
+        )
+        if not needs_fix:
+            return bot_code
+
+        result = bot_code
+        search_pos = 0
+        def_re = re.compile(r'def\s+execute_scenario_default\s*\(')
+        while True:
+            m = def_re.search(result, search_pos)
+            if not m:
+                break
+            open_idx = m.end() - 1  # posição do '(' de abertura
+            depth = 0
+            close_idx = None
+            for i in range(open_idx, len(result)):
+                ch = result[i]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        close_idx = i
+                        break
+            if close_idx is None:
+                break
+
+            params_text = result[open_idx + 1:close_idx]
+            # Reconfirma os nomes DESTE def específico re-parseando o snippet
+            # (robusto a anotações/formatação; casa com o critério AST acima).
+            fixable_here = False
+            try:
+                snippet_tree = ast.parse("def _f(" + params_text + "): pass")
+                fn = snippet_tree.body[0]
+                fixable_here = isinstance(fn, ast.FunctionDef) and is_fixable_args(fn.args)
+            except SyntaxError:
+                fixable_here = False
+
+            if fixable_here:
+                result = result[:open_idx + 1] + "page, row, runner" + result[close_idx:]
+                search_pos = open_idx + 1 + len("page, row, runner")
+            else:
+                search_pos = close_idx + 1
+
+        return result
 
     @staticmethod
     def _strip_internal_step_fields(steps: list) -> list:
@@ -508,11 +626,30 @@ Exemplo de chamada de Skill:
         code_dir = os.path.join(self.project_dir, "code")
         os.makedirs(code_dir, exist_ok=True)
 
+        # ── Manifest de proveniência (Seção 2.4 do plano híbrido) ──
+        # Carregado UMA vez: representa o estado do bot híbrido (se houver)
+        # ANTES desta chamada de generate(). Ausente/corrompido -> None, e
+        # toda a política anti-drift abaixo degrada pro comportamento atual
+        # (nunca é pré-requisito). `plan_data_for_restore` é o plano JÁ
+        # carregado (não só o caminho) — necessário pro checksum de
+        # `_restore_deterministic_blocks` e pra resolver o step completo na
+        # regeneração do bloco canônico.
+        existing_manifest = self._load_generation_manifest(code_dir)
+        plan_data_for_restore = None
+        if os.path.exists(self.plan_path):
+            try:
+                with open(self.plan_path, "r", encoding="utf-8") as f:
+                    plan_data_for_restore = json.load(f)
+            except Exception as e:
+                print(f"[WARNING] Falha ao ler plano de execução para a política anti-drift: {e}")
+
         # ── Ralph Loop: tentativas com validação AST ──
         MAX_RETRIES = int(os.getenv("AEGIS_CODEGEN_MAX_RETRIES", "5"))
         attempts_history = []
         bot_code = None
         diff = None
+        restore_target_scope = set()
+        restored_this_attempt = []
 
         for attempt in range(1, MAX_RETRIES + 1):
             print(f"\n[AEGIS CODEGEN] Tentativa {attempt}/{MAX_RETRIES}...")
@@ -543,6 +680,19 @@ Exemplo de chamada de Skill:
                         pending_corrections, self.gateway, project_json_path,
                         code_dir, correcoes_acumuladas_path
                     )
+                    # Ciclo de vida do manifest (Seção 2.4 do plano híbrido):
+                    # se esta chamada produziu um bot híbrido de verdade
+                    # (AEGIS_CODEGEN_HYBRID=true, `_generate_new_code` seta
+                    # `self._hybrid_manifest`), o manifest REAL desta geração
+                    # passa a ser a base para o resto do loop — tanto o
+                    # restore anti-drift de tentativas seguintes (reflection)
+                    # quanto o write final de sucesso (`_finalize_generation_manifest`
+                    # abaixo) precisam enxergar ESTE manifest, não o que
+                    # estava em disco antes desta chamada de generate(). Rota
+                    # full-LLM (flag off/skills/plano ausente/fallback de
+                    # slot) deixa `self._hybrid_manifest` em None — no-op.
+                    if getattr(self, "_hybrid_manifest", None):
+                        existing_manifest = self._hybrid_manifest
             else:
                 # Reflection: surgical correct with diff feedback (Ralph Loop)
                 bot_code = self._surgical_correct_with_reflection(
@@ -562,6 +712,25 @@ Exemplo de chamada de Skill:
             # Normaliza deterministicamente o bloco __main__/imports (a LLM erra
             # esse boilerplate mesmo quando o prompt diz que já está pronto)
             bot_code = self._normalize_boilerplate(bot_code)
+
+            # Política anti-drift do Ralph Loop (Seção 5.2 do plano híbrido):
+            # restaura à forma canônica qualquer bloco 'deterministic' do
+            # manifest que a LLM tenha adulterado FORA do escopo desta
+            # tentativa, antes de rodar os validadores. No-op completo se não
+            # há manifest, manifest sem steps, ou plan_checksum divergente da
+            # re-sanitização — ver docstring de _restore_deterministic_blocks.
+            restore_target_scope = self._compute_restore_target_scope(
+                pending_corrections, diff, bot_code
+            )
+            bot_code, restored_this_attempt = self._restore_deterministic_blocks(
+                bot_code, existing_manifest, restore_target_scope,
+                plan_data_for_restore, dict_data
+            )
+            if restored_this_attempt:
+                print(
+                    f"[AEGIS CODEGEN] 🔧 Bloco(s) deterministic restaurado(s) (anti-drift): "
+                    f"{', '.join(restored_this_attempt)}"
+                )
 
             # Validate bot structure (proíbe classes customizadas, asyncio.run, etc.)
             try:
@@ -634,6 +803,38 @@ Exemplo de chamada de Skill:
                         print("[AEGIS CODEGEN] 🔧 Instanciação espúria de TransactionRunner removida automaticamente (sem gastar tentativa de LLM).")
                         bot_code = stripped_code
                         struct_result = retry_struct
+
+            # Correção determinística da assinatura de execute_scenario_default:
+            # a ordem/quantidade de parâmetros do callback é mecânica (o runner
+            # chama posicionalmente (page, row, runner) — aegis_runner/runner.py
+            # ~L2274-2278). Quando a LLM troca/incompleta a assinatura usando só
+            # nomes conhecidos ({page,row,runner}), reescrever para a forma
+            # canônica religa cada nome ao objeto certo sem tocar no corpo —
+            # mais forte que pedir em prosa. A assinatura vive FORA de qualquer
+            # bloco '# [PASSO N]', então o modo escopado nunca a alcança (causa
+            # raiz da oscilação do Ralph Loop — CLAUDE.md working agreement nº 5,
+            # retry 3 do gate H8). Nomes alienígenas NÃO disparam o autofix
+            # (ver _rewrite_scenario_signature_to_canonical) e caem no fluxo de
+            # correção via LLM. Mesmo molde das 3 autocorreções acima: re-roda a
+            # validação e só adota o resultado se os erros de assinatura sumiram.
+            if struct_result["status"] == "FAIL":
+                sig_types = {"WRONG_SCENARIO_PARAM_ORDER", "INVALID_SCENARIO_SIGNATURE"}
+                sig_errors = [e for e in struct_result["errors"] if e["type"] in sig_types]
+                if sig_errors:
+                    rewritten_code = self._rewrite_scenario_signature_to_canonical(bot_code)
+                    if rewritten_code != bot_code:
+                        try:
+                            retry_struct = validate_bot_structure(rewritten_code)
+                        except Exception as validator_err:
+                            raise RuntimeError(
+                                f"Bug interno no validador (validate_bot_structure): {validator_err}. "
+                                f"Corrija o step_validator.py antes de tentar gerar código novamente."
+                            ) from validator_err
+                        remaining_sig = [e for e in retry_struct["errors"] if e["type"] in sig_types]
+                        if not remaining_sig:
+                            print("[AEGIS CODEGEN] 🔧 Assinatura de execute_scenario_default corrigida automaticamente para (page, row, runner) (sem gastar tentativa de LLM).")
+                            bot_code = rewritten_code
+                            struct_result = retry_struct
 
             if struct_result["status"] == "FAIL":
                 print(f"[AEGIS CODEGEN] ❌ Validação estrutural falhou: {len(struct_result['errors'])} erro(s)")
@@ -761,6 +962,19 @@ Exemplo de chamada de Skill:
                     continue
 
                 print(f"[AEGIS CODEGEN] ✅ Validação AST + dry run passaram na tentativa {attempt}!")
+
+                # Ciclo de vida do manifest (Seção 2.4 do plano híbrido): toda
+                # rota de geração bem-sucedida termina gravando o manifest.
+                # Hoje `generate()` só implementa a rota full-LLM
+                # (`_generate_new_code`/`_surgical_correct` — a rota híbrida via
+                # `build_skeleton` chega em H4, tarefa futura, e reutilizará
+                # este mesmo helper com um payload real de `steps`).
+                final_manifest = self._finalize_generation_manifest(
+                    existing_manifest, restore_target_scope,
+                    reason=f"corrigido por QA/Ralph Loop em {datetime.now().isoformat()}"
+                )
+                self._write_generation_manifest(code_dir, final_manifest)
+
                 self._write_bot(bot_code)
                 self._mark_corrections_applied(
                     pending_corrections, correcoes_acumuladas_path
@@ -771,6 +985,13 @@ Exemplo de chamada de Skill:
                 print(f"O robô resiliente está salvo e pronto para a Fase 5 (Execução).")
                 print("=" * 60 + "\n")
                 return True
+
+            # Fail-fast restrito de bug do emissor determinístico (Seção 5.2
+            # do plano híbrido): só dispara se ALGUM erro desta tentativa
+            # aponta pra um bloco que acabou de ser restaurado à forma
+            # canônica NESTA MESMA tentativa E o erro é de CONTEÚDO (não de
+            # ordem/contagem) — ver docstring de _enforce_restore_fail_fast.
+            self._enforce_restore_fail_fast(all_errors, restored_this_attempt, bot_code)
 
             # Merge structural + plan errors for diff tracking
             merged = {
@@ -808,6 +1029,34 @@ Exemplo de chamada de Skill:
                            skills_info_prompt: str, pending_corrections: list, gateway,
                            project_json_path: str, code_dir: str,
                            correcoes_acumuladas_path: str) -> str | None:
+        # ── Geração híbrida (H4 do plano híbrido, Seção 2.3 —
+        # .specs/plano-codegen-hibrido-deterministico.md) ──
+        # Curto-circuito full-LLM preservado INTACTO logo abaixo (rota
+        # nunca deletada, byte-idêntica) para: flag desligada (default),
+        # projeto com skills (`skills_info_prompt` não vazio — C7 do
+        # plano, condição GLOBAL sobre o projeto), plano de execução
+        # ausente, ou qualquer fallback do próprio motor híbrido nesta
+        # MESMA tentativa (slot cognitivo com resposta malformada/faltando
+        # — `_generate_new_code_hybrid` retorna None nesse caso).
+        # `self._hybrid_manifest` é o sinal que `generate()` usa para saber
+        # se esta chamada produziu um manifest REAL (Seção 2.4) — permanece
+        # None em qualquer rota full-LLM, inclusive fallback.
+        self._hybrid_manifest = None
+        hybrid_enabled = os.getenv("AEGIS_CODEGEN_HYBRID", "true").strip().lower() == "true"
+        if hybrid_enabled and not skills_info_prompt and os.path.exists(self.plan_path):
+            with open(self.plan_path, "r", encoding="utf-8") as pf:
+                hybrid_plan = json.load(pf)
+            hybrid_code = self._generate_new_code_hybrid(
+                hybrid_plan, dict_data, pending_corrections, gateway,
+                correcoes_acumuladas_path
+            )
+            if hybrid_code is not None:
+                return hybrid_code
+            print(
+                "[AEGIS CODEGEN] [HYBRID] Fallback para o fluxo full-LLM de arquivo "
+                "inteiro nesta tentativa (resposta de slot cognitivo ausente/malformada)."
+            )
+
         correcoes_prompt = ""
         if pending_corrections:
             print(f"[INFO] Detectadas {len(pending_corrections)} correções pendentes aprovadas para aplicação.")
@@ -1123,6 +1372,241 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         generated_code = self._extract_python_code(response_text)
         return generated_code
 
+    # -------------------------------------------------------------------
+    # Motor híbrido (H4 do plano híbrido — Seção 2.3 de
+    # .specs/plano-codegen-hibrido-deterministico.md). Chamado SOMENTE por
+    # `_generate_new_code`, atrás de `AEGIS_CODEGEN_HYBRID`.
+    # -------------------------------------------------------------------
+
+    def _generate_new_code_hybrid(self, plan: dict, dict_data: dict,
+                                   pending_corrections: list, gateway,
+                                   correcoes_acumuladas_path: str):
+        """
+        Monta o skeleton via `deterministic_emitter.build_skeleton` (blocos
+        deterministic prontos + placeholders cognitivos parseáveis pelo
+        `_STEP_ID_IN_BLOCK_RE` existente) e, se houver slot(s) cognitivo(s),
+        pede à LLM SOMENTE esses blocos numa ÚNICA chamada via
+        `_generate_scoped_blocks(mode="write")` — generalização do modo
+        escopado já usado por `_surgical_correct_scoped`. Zero slots
+        cognitivos ⇒ zero chamadas LLM nesta geração.
+
+        Retorna o código do bot (str, só o corpo de
+        `execute_scenario_default` — `_normalize_boilerplate`, chamado pelo
+        `generate()` logo em seguida, reconstrói header/`__main__` por cima,
+        exatamente como já faz hoje para a saída do fluxo full-LLM) em
+        sucesso, com `self._hybrid_manifest` setado para o manifest real
+        (Seção 2.4 — `generator_version: "hybrid-1"`).
+
+        Retorna None se o motor decidir cair para o fluxo full-LLM desta
+        MESMA tentativa: `scoped_plan` inalcançável (bug do motor — os
+        anchors de `build_skeleton` são garantidos únicos por construção,
+        nunca deveria acontecer com dados reais) ou resposta da LLM
+        malformada/com slot faltando (`_generate_scoped_blocks` já retorna
+        None nesse caso — mesma semântica do fallback escopado→full de
+        hoje). Em qualquer caso de retorno None, `self._hybrid_manifest`
+        permanece None (setado no topo de `_generate_new_code`) — o CALLER
+        segue para o prompt de arquivo inteiro já existente sem que nenhum
+        estado híbrido "vaze" para uma geração que na prática foi full-LLM.
+        """
+        force_llm_step_ids = [
+            s.strip() for s in os.getenv("AEGIS_CODEGEN_FORCE_LLM_STEPS", "").split(",")
+            if s.strip()
+        ]
+        skeleton_code, manifest = _build_hybrid_skeleton(
+            plan, dict_data, pending_corrections, force_llm_step_ids
+        )
+
+        # Rota determinística de reintrodução de sup_ (H6, Seção 3.1 do
+        # plano híbrido) — PÓS-skeleton: `build_skeleton` já omitiu todo
+        # step 'skip'/sup_ por padrão (contrato v2/D6); aqui, qualquer
+        # correção pendente com `reintroduce_step_id` insere o bloco
+        # daquele sup_ específico deterministicamente (sempre com wrapper
+        # try/except não-fatal), na posição relativa correta do plano.
+        # Mesma implementação usada por `_surgical_correct` (ver docstring
+        # de `_apply_deterministic_sup_reintroductions`); aqui o resultado
+        # também é mesclado no manifest (`provenance: "deterministic"`) —
+        # zero chamada LLM.
+        skeleton_code, reintroduced_sup_steps = self._apply_deterministic_sup_reintroductions(
+            skeleton_code, pending_corrections, plan, dict_data
+        )
+        manifest["steps"].update(reintroduced_sup_steps)
+
+        for step_id, entry in sorted(manifest.get("steps", {}).items()):
+            print(f"[HYBRID] {step_id} -> {entry.get('provenance')} ({entry.get('reason')})")
+
+        cognitive_ids = sorted(
+            step_id for step_id, entry in manifest.get("steps", {}).items()
+            if entry.get("provenance") == "cognitive"
+        )
+
+        if not cognitive_ids:
+            print("[HYBRID] Zero slots cognitivos — zero chamadas LLM nesta geração.")
+            self._hybrid_manifest = manifest
+            return skeleton_code
+
+        scoped_plan = self._build_scoped_edit_plan(skeleton_code, cognitive_ids)
+        if scoped_plan is None:
+            print(
+                "[WARNING] [HYBRID] Slot(s) cognitivo(s) inalcançáveis no skeleton recém-montado "
+                "(bug do motor determinístico) — fallback full-LLM nesta tentativa."
+            )
+            return None
+
+        plan_steps = plan.get("steps", [])
+        context_desc = self._render_hybrid_slots_context(
+            dict_data, pending_corrections, cognitive_ids, correcoes_acumuladas_path
+        )
+
+        print(f"[INFO] [HYBRID] Solicitando SOMENTE o(s) slot(s) cognitivo(s): {', '.join(cognitive_ids)}")
+        filled_code = self._generate_scoped_blocks(
+            scoped_plan, cognitive_ids, context_desc, plan_steps, gateway,
+            reflection_block="", mode="write",
+        )
+        if filled_code is None:
+            print(
+                "[WARNING] [HYBRID] Resposta da LLM para slot(s) cognitivo(s) incompleta/malformada "
+                "— fallback full-LLM nesta tentativa."
+            )
+            return None
+
+        # Convenção de bloco-vazio (Seção 2.3 passo 5 do plano): um slot
+        # `optional` que a LLM decidiu NÃO emitir devolve o comentário
+        # 'AEGIS_COGNITIVE_SLOT' intacto (com o motivo ajustado) em vez de
+        # código real — o splice acima já ACEITA isso (não é "slot
+        # faltando"); aqui só atualizamos o manifest pra refletir a decisão,
+        # em vez de deixar a 'reason' original de classify_step (que
+        # descrevia por que o step FOI PARA a LLM, não o que a LLM decidiu).
+        blocks_after_fill = self._parse_step_blocks(filled_code) or []
+        blocks_by_id = {b["step_id"]: b for b in blocks_after_fill if b["step_id"]}
+        for step_id in cognitive_ids:
+            block = blocks_by_id.get(step_id)
+            if block and "AEGIS_COGNITIVE_SLOT" in block["text"]:
+                manifest["steps"][step_id] = {
+                    "provenance": "cognitive",
+                    "reason": "optional_omitted",
+                }
+
+        self._hybrid_manifest = manifest
+        return filled_code
+
+    def _render_hybrid_slots_context(self, dict_data: dict, pending_corrections: list,
+                                      slot_step_ids: list, correcoes_acumuladas_path: str) -> str:
+        """
+        Monta o `context_desc` da chamada única de slots cognitivos (Seção
+        2.3 passo 5 do plano híbrido) — vira o corpo da seção
+        "REQUISITOS DO PLANO A IMPLEMENTAR" dentro do prompt montado por
+        `_generate_scoped_blocks(mode="write")`. Contém, nesta ordem
+        (enumeração da Seção 2.3, exceto playbook/fatia do plano/blocos
+        vizinhos, que `_generate_scoped_blocks` já injeta sozinho):
+          1. Dicionário de dados completo (mapeamento físico-semântico).
+          2. Regras cognitivas obrigatórias: Padrão Q (has_text dinâmico),
+             Padrão N (menu suspenso `>>`), contrato `optional` com o
+             template canônico (Seção 3.2) + a convenção de bloco-vazio.
+          3. As entradas de `pending_corrections` cujo `step_id` OU
+             `required_reopen.after_step_id` esteja entre `slot_step_ids`
+             (achado I3 da rodada 2 do plano — sem isso a C8 do
+             `deterministic_emitter` é autossabotada: o step foi para a LLM
+             POR CAUSA da correção, mas a LLM não a veria), renderizadas na
+             MESMA forma de `_surgical_correct` (qa_insight, tentativas
+             fracassadas, correção requisitada).
+        """
+        slot_ids = set(slot_step_ids)
+        relevant_corrections = [
+            c for c in (pending_corrections or [])
+            if c.get("step_id") in slot_ids
+            or (c.get("required_reopen") or {}).get("after_step_id") in slot_ids
+        ]
+
+        desc = "### 📋 DICIONÁRIO DE DADOS (MAPEAMENTO FÍSICO-SEMÂNTICO)\n"
+        desc += f"```json\n{json.dumps(dict_data, indent=2, ensure_ascii=False)}\n```\n\n"
+
+        desc += "### 🧠 REGRAS COGNITIVAS OBRIGATÓRIAS PARA ESTES BLOCOS\n"
+        desc += (
+            "**Padrão Q (texto dinâmico em has_text) — regra PRESCRITIVA, não julgamento:** quando o "
+            "passo tiver `parent.has_text_original` (diferente do `parent.has_text` atual) E o literal "
+            "residual de `parent.has_text` contiver um ou mais `observed_value` do dicionário de dados "
+            "acima, a composição DEVE ser dinâmica: f-string com `row.get(\"<chave>\", \"\")` para CADA "
+            "chave cujo `observed_value` aparece no literal, preservando o texto estático residual "
+            "(ex.: `\"FIPE\"`) como literal dentro da MESMA f-string — ex.: "
+            "`parent={\"selector\": \".mat-row\", \"has_text\": f\"{row.get('nome_cliente', '')} "
+            "{row.get('cpf_cliente', '')} FIPE\"}`. Copiar o literal gravado nesse caso é hardcode de "
+            "dado de negócio (mesma proibição absoluta abaixo) e será REPROVADO pelo validador "
+            "(HARDCODED_PARENT_HAS_TEXT). O literal puro só é aceitável quando NENHUM `observed_value` "
+            "do dicionário aparece no residual (residual 100% estático).\n\n"
+            "**Padrão N (menu suspenso):** se o seletor deste passo pertencer a um menu suspenso/"
+            "dropdown (contém '.sub-menu', '.dropdown-menu' ou '#menu-item-'), converta em seletor "
+            "composto encadeado com ' >> ' separando o item pai do item de submenu (ex.: "
+            "'#menu-item-28904 >> #menu-item-141846 a:has-text(...)'), ativando a expansão automática "
+            "por hover do runner.\n\n"
+            "**Proibição absoluta de hardcode:** use sempre `row.get(\"chave\", \"\")` para dados de "
+            "negócio — NUNCA um literal observado na telemetria, mesmo embutido em `:has-text(...)`.\n\n"
+            "**Passos com `\"execution_hint\": \"optional\"` presentes na fatia do plano acima:** você "
+            "decide se emite ou não. Se decidir EMITIR, use o template canônico não-fatal (Seção 3.2 "
+            "do plano híbrido):\n"
+            "```python\n"
+            "# [PASSO N] <descrição>\n"
+            "try:\n"
+            "    runner.click_resilient(page, selector=\"...\", target_description=\"...\", step_id=\"st_XXX\")\n"
+            "except Exception as _opt_err:\n"
+            "    print(f\"[BOT] Passo opcional st_XXX pulado (não-fatal): {_opt_err}\")\n"
+            "```\n"
+            "Se decidir NÃO EMITIR (o elemento não é necessário neste fluxo), retorne o bloco-vazio "
+            "EXATAMENTE assim — preservando o comentário 'AEGIS_COGNITIVE_SLOT' com o `step_id` "
+            "original, ajustando SOMENTE o `motivo=` para justificar a omissão:\n"
+            "```\n"
+            "# [PASSO N] <descrição>\n"
+            "# AEGIS_COGNITIVE_SLOT step_id=\"st_XXX\" motivo=\"optional não emitido: <justificativa curta>\"\n"
+            "```\n\n"
+        )
+
+        if relevant_corrections:
+            desc += "### 🛠️ CORREÇÕES PENDENTES RELEVANTES A ESTES BLOCOS\n"
+            qa_insights = list(set(
+                c.get("qa_insight") for c in relevant_corrections if c.get("qa_insight")
+            ))
+            if qa_insights:
+                desc += "**INSIGHT CRÍTICO DO ANALISTA QA (PRIORIDADE MÁXIMA):**\n"
+                for insight in qa_insights:
+                    desc += f"> {insight}\n"
+                desc += "\n"
+
+            failed_attempts = []
+            if os.path.exists(correcoes_acumuladas_path):
+                try:
+                    with open(correcoes_acumuladas_path, "r", encoding="utf-8") as cf:
+                        all_corrs = json.load(cf)
+                    for pc in relevant_corrections:
+                        p_sel = pc.get("failed_selector")
+                        p_act = pc.get("action")
+                        for c in all_corrs:
+                            if (
+                                c.get("status") == "failed_attempt"
+                                and c.get("failed_selector") == p_sel
+                                and c.get("action") == p_act
+                                and c not in failed_attempts
+                            ):
+                                failed_attempts.append(c)
+                except Exception as ex:
+                    print(f"[WARNING] Erro ao carregar tentativas anteriores (slots híbridos): {ex}")
+
+            if failed_attempts:
+                desc += "**HISTÓRICO DE ABORDAGENS ANTERIORES QUE FALHARAM (PROIBIÇÃO DE REPETIÇÃO):**\n"
+                for fa in failed_attempts:
+                    desc += (
+                        f"- Ação '{fa.get('action')}' no seletor '{fa.get('failed_selector')}': "
+                        f"proposta que falhou: {fa.get('proposed_fix')}\n"
+                    )
+                desc += "\n"
+
+            desc += "**CORREÇÃO(ÕES) REQUISITADA(S):**\n"
+            for idx, corr in enumerate(relevant_corrections):
+                desc += f"{idx+1}. Ação '{corr.get('action')}' no seletor '{corr.get('failed_selector')}':\n"
+                desc += f"   - Causa Raiz: {corr.get('root_cause')}\n"
+                desc += f"   - Correção Requisitada: {corr.get('proposed_fix')}\n"
+            desc += "\n"
+
+        return desc
+
     _STEP_ANCHOR_RE = re.compile(r'^\s*#\s*\[PASSO\s+([^\]]+)\]')
     _STEP_ID_IN_BLOCK_RE = re.compile(r'step_id\s*=\s*"([^"]+)"')
 
@@ -1204,21 +1688,649 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             "context_after": context_after,
         }
 
-    def _surgical_correct_scoped(self, scoped_plan: dict, target_step_ids: list,
-                                  correcoes_desc: str, plan_steps: list,
-                                  gateway, reflection_block: str):
+    # -------------------------------------------------------------------
+    # Política anti-drift do Ralph Loop + ciclo de vida do manifest de
+    # proveniência (H5 do plano híbrido — .specs/plano-codegen-hibrido-
+    # deterministico.md, Seções 2.4 e 5.2). Nenhuma destas funções chama
+    # LLM; são deterministas e testáveis isoladamente.
+    # -------------------------------------------------------------------
+
+    _RESTORE_FAILFAST_EXCLUDED_TYPES = frozenset({
+        "STEP_ID_MISMATCH", "COUNT_MISMATCH", "MISSING_STEPS", "EXTRA_STEPS",
+    })
+
+    def _load_generation_manifest(self, code_dir: str):
         """
-        Monta um prompt reduzido contendo só o(s) bloco(s) do(s) step_id(s)
-        sob correção (+ 1 bloco de contexto antes/depois, somente leitura),
-        pede de volta só esse(s) bloco(s) corrigido(s) e splica a resposta no
-        arquivo original por substituição de linhas — o resto do arquivo fica
-        byte-idêntico por construção.
-        Levanta exceção se a chamada à API de LLM falhar (mesma semântica de
-        falha do fluxo de arquivo inteiro). Retorna None (não exceção) se a
-        resposta não contiver as seções BEGIN_STEP/END_STEP esperadas — o
-        caller trata isso como sinal para tentar o fluxo de arquivo inteiro
-        nesta mesma tentativa, sem abortar o Ralph Loop.
+        Lê `code/generation_manifest.json` se existir e for JSON válido.
+        Retorna None se ausente ou corrompido — toda a política anti-drift
+        degrada pro comportamento atual quando recebe None (Seção 2.4 do
+        plano: manifest ausente/corrompido nunca é pré-requisito).
         """
+        manifest_path = os.path.join(code_dir, "generation_manifest.json")
+        if not os.path.exists(manifest_path):
+            return None
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARNING] generation_manifest.json corrompido/ilegível, ignorando: {e}")
+            return None
+
+    def _write_generation_manifest(self, code_dir: str, manifest: dict) -> None:
+        """
+        Grava `manifest` em `code/generation_manifest.json`, ao lado de
+        `bot_producao.py` (Seção 2.4 do plano híbrido). Chamado em todo
+        ponto de sucesso de `generate()` — hoje só a rota full-LLM existe;
+        a rota híbrida (H4, tarefa futura) reutiliza este mesmo helper.
+        """
+        manifest_path = os.path.join(code_dir, "generation_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _full_llm_manifest_payload() -> dict:
+        """
+        Payload gravado pela rota full-LLM (Seção 2.4 do plano híbrido) —
+        hoje a ÚNICA rota que `generate()` implementa
+        (`_generate_new_code`/`_surgical_correct`; a rota híbrida via
+        `build_skeleton` chega em H4 e reutilizará `_write_generation_manifest`
+        com um payload real de `steps`). `steps` vazio faz
+        `_restore_deterministic_blocks` degradar pra no-op por construção na
+        PRÓXIMA chamada de `generate()` — previne manifest stale armando o
+        restore contra um bot que nunca foi híbrido.
+        """
+        return {"generator_version": "full-llm", "steps": {}}
+
+    def _finalize_generation_manifest(self, existing_manifest, target_scope, reason: str) -> dict:
+        """
+        Decide o manifest a persistir no ponto de sucesso de `generate()`.
+        Sem manifest pré-existente com `steps` (caso comum hoje — a rota
+        full-LLM "pura"), grava o payload full-LLM vazio (Seção 2.4). Quando
+        UM manifest com `steps` já existia (bot híbrido de um run anterior
+        sendo corrigido cirurgicamente agora), atualiza pra
+        'cognitive_patched' os steps de `target_scope` que ainda estavam
+        marcados 'deterministic' (Seção 5.2 — "correção legítima mirando
+        bloco deterministic": regenerações futuras do zero voltam a emiti-lo
+        deterministicamente) e persiste o manifest patcheado em vez de
+        descartá-lo. Nunca muta `existing_manifest` (retorna uma cópia).
+        """
+        if not existing_manifest or not existing_manifest.get("steps"):
+            return self._full_llm_manifest_payload()
+
+        patched = json.loads(json.dumps(existing_manifest))
+        for step_id in target_scope or []:
+            entry = patched.get("steps", {}).get(step_id)
+            if entry and entry.get("provenance") == "deterministic":
+                entry["provenance"] = "cognitive_patched"
+                entry["reason"] = reason
+        return patched
+
+    def _compute_restore_target_scope(self, pending_corrections, current_diff, bot_code: str) -> set:
+        """
+        Calcula o target_scope da política anti-drift para a tentativa ATUAL
+        do Ralph Loop (Seção 5.2 do plano híbrido) — união de: (a) step_ids
+        de toda correção pendente (`c["step_id"]`, mesma coleta que
+        `_surgical_correct` usa para o escopo cirúrgico); (b)
+        `live_error_step_ids` do diff da tentativa ANTERIOR desta mesma
+        chamada de `generate()` (erros resolvidos por
+        step_id/expected_id/found_id/step_ids, ou por `lineno` mapeado ao
+        bloco que o contém via `_parse_step_blocks` — mesma técnica usada em
+        `_surgical_correct`); (c) `after_step_id` de todo `required_reopen`
+        pendente (achado M1 da rodada 2 do plano — o re-disparo exigido por
+        `validate_required_reopen_patterns` vive textualmente no bloco do
+        `after_step_id`; um restore que não o poupasse causaria
+        MISSING_REOPEN_PATTERN e oscilação).
+
+        Duplicada deliberadamente da lógica equivalente dentro de
+        `_surgical_correct` (instrução explícita desta tarefa é não alterar
+        `_surgical_correct`): o ponto de chamada do restore roda ANTES da
+        próxima invocação de `_surgical_correct`/`_surgical_correct_with_reflection`
+        na mesma tentativa.
+        """
+        target_ids = {c.get("step_id") for c in (pending_corrections or []) if c.get("step_id")}
+
+        # GUARD DE LINENO ÓRFÃO — detecção espelhada (duplicação deliberada) de
+        # `_surgical_correct` (ver aquele método). Um erro que traz lineno(s)
+        # mas não resolveu para nenhum step_id está fora de qualquer bloco
+        # "# [PASSO N]" e sinaliza que a correção desta tentativa cairá no
+        # fluxo de arquivo inteiro (o `_surgical_correct`, que roda no topo do
+        # mesmo loop, força isso). Aqui apenas registramos o sinal em
+        # `self._restore_scope_incomplete` para paridade/observabilidade — o
+        # conjunto retornado NÃO muda (o restore anti-drift só toca blocos
+        # `deterministic` de passo, e a assinatura órfã nunca é um bloco de
+        # passo, então não há escopo cirúrgico de restore a "forçar").
+        live_error_step_ids = set()
+        scope_incomplete = False
+        if current_diff:
+            blocks_for_lineno, _offset = self._step_blocks_within_scenario(bot_code)
+            for e in current_diff.get("errors", []):
+                this_error_ids = set()
+                for key in ("step_id", "expected_id", "found_id"):
+                    v = e.get(key)
+                    if v:
+                        this_error_ids.add(v)
+                for v in e.get("step_ids") or []:
+                    this_error_ids.add(v)
+                linenos = list(e.get("linenos") or [])
+                if e.get("lineno"):
+                    linenos.append(e["lineno"])
+                if linenos and blocks_for_lineno:
+                    for lineno in linenos:
+                        line_idx = lineno - 1
+                        for b in blocks_for_lineno:
+                            if b["start"] <= line_idx < b["end"] and b["step_id"]:
+                                this_error_ids.add(b["step_id"])
+                                break
+                live_error_step_ids |= this_error_ids
+                if linenos and not this_error_ids:
+                    scope_incomplete = True
+        self._restore_scope_incomplete = scope_incomplete
+
+        reopen_after_ids = set()
+        for c in (pending_corrections or []):
+            reopen = c.get("required_reopen") or {}
+            after_id = reopen.get("after_step_id")
+            if after_id:
+                reopen_after_ids.add(after_id)
+
+        return target_ids | live_error_step_ids | reopen_after_ids
+
+    def _step_blocks_within_scenario(self, bot_code: str):
+        """
+        Como `_parse_step_blocks`, mas restrito ao corpo de
+        `execute_scenario_default` (via AST). `_parse_step_blocks`, quando
+        chamado sobre o ARQUIVO INTEIRO (header + função + bloco
+        'if __name__'), faz o ÚLTIMO bloco '# [PASSO N]' se estender até o
+        fim do texto recebido — porque não há nenhuma âncora depois do
+        último passo pra fechar o intervalo. Sobre o arquivo inteiro, isso
+        engoliria a linha em branco seguinte E o bloco 'if __name__' inteiro
+        como se fossem "conteúdo do último passo", fazendo
+        `_restore_deterministic_blocks` comparar o canônico (só a chamada
+        do runner) contra um texto que inclui o boilerplate de main — SEMPRE
+        diferente — e, pior, re-splicear por cima apagaria o 'if __name__'
+        do arquivo no restore. Delimitar ao corpo da função (via
+        `end_lineno` do AST) evita isso.
+
+        Retorna `(blocks, offset)`, onde `offset` é o índice de linha
+        (0-based) em que o corpo da função começa no `bot_code` completo —
+        necessário pra traduzir `start`/`end` dos blocos de volta pras
+        coordenadas do arquivo inteiro antes de splicar. Retorna `(None, 0)`
+        se o código não parsear ou a função não for encontrada (sinal pro
+        caller tratar como "sem blocos").
+        """
+        try:
+            tree = ast.parse(bot_code)
+        except SyntaxError:
+            return None, 0
+
+        func_node = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and n.name == "execute_scenario_default"),
+            None,
+        )
+        if func_node is None:
+            return None, 0
+
+        lines = bot_code.split("\n")
+        start_idx = func_node.lineno - 1
+        end_idx = func_node.end_lineno
+        scenario_text = "\n".join(lines[start_idx:end_idx])
+
+        blocks = self._parse_step_blocks(scenario_text)
+        if blocks is None:
+            return None, start_idx
+
+        for b in blocks:
+            b["start"] += start_idx
+            b["end"] += start_idx
+        return blocks, start_idx
+
+    def _restore_deterministic_blocks(self, bot_code: str, manifest, target_scope, plan, dicionario):
+        """
+        Política anti-drift do Ralph Loop (Seção 5.2 do plano híbrido). Para
+        cada step do `manifest` com `provenance == "deterministic"` e
+        `step_id` NÃO em `target_scope`, regenera o bloco canônico via
+        `deterministic_emitter.emit_step_block` e, se o bloco atual em
+        `bot_code` divergir, re-splica o canônico no lugar — restore
+        INCONDICIONAL (sem comparar `block_sha1`; `emit_step_block` é
+        determinístico, então re-splicear é idempotente).
+
+        Guardas de no-op (Seção 2.4 do plano): `manifest` ausente, `steps`
+        vazio, ou `plan_checksum` do manifest divergente do checksum do
+        `plan` atual (cobre re-sanitização que renumera step_ids) — em
+        qualquer um desses casos, retorna `(bot_code, [])` sem tocar em nada.
+
+        Bloco AUSENTE (âncora `# [PASSO N]` removida num rewrite full-file)
+        NÃO é caso de restore nem de erro — segue o fluxo normal, vira
+        `MISSING_STEPS`, cujo escopo cirúrgico já resolve.
+
+        A âncora `# [PASSO N]` do bloco canônico é renumerada pra bater com
+        o número JÁ presente no bloco atual do arquivo (em vez do número
+        derivado do sufixo do próprio step_id que `emit_step_block` usa
+        isoladamente) — sem isso, a comparação byte-a-byte reprovaria
+        sempre que a numeração sequencial de `build_skeleton` divergisse do
+        sufixo numérico do step_id, disparando restore espúrio em blocos
+        que a LLM nunca tocou.
+
+        Retorna `(novo_codigo, restored)` — `restored` é a lista de
+        step_ids efetivamente re-spliceados nesta chamada (usada pelo
+        caller em `generate()` para o fail-fast restrito de bug do emissor,
+        Seção 5.2).
+        """
+        if not manifest or not manifest.get("steps"):
+            return bot_code, []
+
+        if plan is None or manifest.get("plan_checksum") != _deterministic_plan_checksum(plan):
+            return bot_code, []
+
+        blocks, _offset = self._step_blocks_within_scenario(bot_code)
+        if not blocks:
+            return bot_code, []
+
+        blocks_by_id = {b["step_id"]: b for b in blocks if b["step_id"]}
+        steps_by_id = {s.get("step_id"): s for s in (plan.get("steps") or [])}
+        target_scope = set(target_scope or [])
+
+        pending_splices = []
+        restored = []
+
+        for step_id, entry in manifest.get("steps", {}).items():
+            if entry.get("provenance") != "deterministic":
+                continue
+            if step_id in target_scope:
+                continue
+
+            current_block = blocks_by_id.get(step_id)
+            if current_block is None:
+                # Bloco AUSENTE — ver docstring: não é restore, não é erro.
+                continue
+
+            step = steps_by_id.get(step_id)
+            if step is None:
+                # Step não existe mais no plano atual. plan_checksum já
+                # deveria ter degradado pra no-op antes disso — defesa extra:
+                # sem o step, não há como regenerar o canônico.
+                continue
+
+            canonical_raw = _emit_deterministic_step_block(step, dicionario)
+            canonical = _DETERMINISTIC_ANCHOR_RENUMBER_RE.sub(
+                rf"\1# [PASSO {current_block['label']}]", canonical_raw, count=1
+            )
+            if current_block["text"] != canonical:
+                pending_splices.append((current_block["start"], current_block["end"], canonical))
+                restored.append(step_id)
+
+        if not pending_splices:
+            return bot_code, []
+
+        lines = bot_code.split("\n")
+        for start, end, canonical in sorted(pending_splices, key=lambda t: t[0], reverse=True):
+            lines[start:end] = canonical.split("\n")
+
+        return "\n".join(lines), restored
+
+    # -------------------------------------------------------------------
+    # Rota determinística de reintrodução de sup_ (H6 do plano híbrido —
+    # .specs/plano-codegen-hibrido-deterministico.md, Seção 3.1). Zero
+    # chamada LLM. ÚNICO ponto de integração para os dois fluxos do plano
+    # (achado da própria tarefa H6): chamado por `_generate_new_code_hybrid`
+    # (pós-skeleton, geração nova híbrida) e por `_surgical_correct`
+    # (pré-LLM, ciclo de correção cirúrgica) — a MESMA implementação cobre
+    # os dois, cada caller só decide QUANDO chamar e o que fazer com o
+    # manifest resultante.
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _find_plan_step(plan, step_id):
+        """Busca um step por `step_id` em `plan['steps']`. `None` se ausente."""
+        for step in (plan or {}).get("steps") or []:
+            if step.get("step_id") == step_id:
+                return step
+        return None
+
+    @staticmethod
+    def _emit_reintroduced_sup_block(step, dicionario):
+        """
+        Emite o bloco de um step `sup_`/`skip` reintroduzido via correção
+        `reintroduce_step_id` (Seção 3.1) — SEMPRE envelopado no wrapper
+        try/except não-fatal da Seção 3.2, já que um `sup_` reintroduzido é
+        por definição não-fatal (o Sanitizer já o classificou como ruído;
+        se não existir nesta execução específica, o robô não deve quebrar
+        por causa dele). `emit_step_block` só aplica esse wrapper quando
+        `execution_hint == "optional"` — por isso construímos uma CÓPIA do
+        step com o hint forçado para "optional" só para fins de emissão
+        (nunca muta o step original do plano, e nunca escreve isso de volta
+        no `plano_execucao.json"). Reaproveita o emissor real em vez de
+        duplicar a lógica do wrapper aqui.
+        Propaga `ValueError` se o tipo do step não for suportado pelo
+        emissor determinístico (click/fill/select/select_native) — o
+        CALLER decide o que fazer (loga warning e cai pro fluxo LLM
+        normal; nunca crasha o generate()).
+        """
+        forced_step = dict(step)
+        forced_step["execution_hint"] = "optional"
+        return _emit_deterministic_step_block(forced_step, dicionario)
+
+    def _apply_deterministic_sup_reintroductions(self, bot_code: str, pending_corrections: list,
+                                                  plan, dicionario):
+        """
+        Para cada correção pendente com o campo `reintroduce_step_id` (ex.:
+        `"sup_003"`), insere deterministicamente o bloco desse step do
+        plano em `bot_code`, na posição relativa correta entre os blocos
+        vizinhos já emitidos — usando as âncoras `# [PASSO N]`/`step_id`
+        JÁ PRESENTES em `bot_code` (via `_step_blocks_within_scenario`) para
+        achar o ponto de inserção, sem jamais reordenar blocos existentes.
+        Zero chamada LLM (Seção 3.1 do plano híbrido).
+
+        Posição de inserção: percorre `plan['steps']` a partir do índice do
+        step `sup_` (a "ordem do array steps do plano" exigida pela tarefa)
+        procurando, primeiro para TRÁS, o vizinho mais próximo que já tem
+        bloco em `bot_code` — insere logo APÓS o fim desse bloco. Se não
+        houver vizinho anterior emitido (sup_ é o primeiro step do plano),
+        procura para FRENTE o próximo vizinho emitido e insere logo ANTES
+        do início desse bloco. Sem nenhum vizinho localizável (bot_code sem
+        nenhum bloco reconhecível), insere ao final do corpo da função.
+
+        Idempotente: se o `step_id` da correção já aparece como bloco em
+        `bot_code`, pula sem duplicar — cobre chamadas repetidas na mesma
+        tentativa/rodada (ex.: `_surgical_correct_with_reflection` reusa o
+        mesmo `_surgical_correct`, que chama esta função de novo a cada
+        tentativa) e também protege contra a LLM ter removido o bloco entre
+        tentativas (reinserido de novo, sem duplicar).
+
+        `reintroduce_step_id` inexistente no plano, ou de tipo não
+        suportado pelo emissor determinístico, NUNCA crasha: loga warning e
+        deixa a correção seguir intocada em `pending_corrections`, tratada
+        pelo fluxo LLM normal (a correção permanece elegível ao escopo
+        cirúrgico/prompt de correções como qualquer outra).
+
+        Retorna `(novo_bot_code, reintroduced)` — `reintroduced` é um dict
+        `{step_id: {"provenance": "deterministic", "reason": "..."}}` só
+        com as entradas efetivamente inseridas NESTA chamada, para o
+        CALLER mesclar no manifest de proveniência quando aplicável (rota
+        híbrida — Seção 2.4; a rota de correção cirúrgica sobre um bot
+        pré-existente pode ignorar o retorno se não mantiver manifest).
+        """
+        reintroduced = {}
+
+        for correction in pending_corrections or []:
+            sup_step_id = correction.get("reintroduce_step_id")
+            if not sup_step_id:
+                continue
+
+            blocks, offset = self._step_blocks_within_scenario(bot_code)
+            if blocks is None:
+                print(
+                    f"[WARNING] [H6] Não foi possível localizar 'execute_scenario_default' em "
+                    f"bot_code para reintroduzir '{sup_step_id}' — correção seguirá pelo fluxo LLM normal."
+                )
+                continue
+
+            blocks_by_id = {b["step_id"]: b for b in blocks if b["step_id"]}
+            if sup_step_id in blocks_by_id:
+                # Já reintroduzido nesta mesma tentativa/rodada — idempotente.
+                continue
+
+            step = self._find_plan_step(plan, sup_step_id)
+            if step is None:
+                print(
+                    f"[WARNING] [H6] reintroduce_step_id='{sup_step_id}' não encontrado no plano "
+                    f"de execução atual — correção seguirá pelo fluxo LLM normal."
+                )
+                continue
+
+            try:
+                block_text = self._emit_reintroduced_sup_block(step, dicionario)
+            except ValueError as e:
+                print(
+                    f"[WARNING] [H6] Não foi possível emitir '{sup_step_id}' deterministicamente "
+                    f"({e}) — correção seguirá pelo fluxo LLM normal."
+                )
+                continue
+
+            plan_steps = (plan or {}).get("steps") or []
+            sup_index = next(
+                (i for i, s in enumerate(plan_steps) if s.get("step_id") == sup_step_id), None
+            )
+            if sup_index is None:
+                # Defesa extra — não deveria acontecer, já que `step` acima
+                # veio da mesma lista.
+                print(
+                    f"[WARNING] [H6] '{sup_step_id}' resolvido no plano mas sem índice — "
+                    f"correção seguirá pelo fluxo LLM normal."
+                )
+                continue
+
+            anchor_block = None
+            insert_after = True
+            for i in range(sup_index - 1, -1, -1):
+                candidate_id = plan_steps[i].get("step_id")
+                if candidate_id in blocks_by_id:
+                    anchor_block = blocks_by_id[candidate_id]
+                    insert_after = True
+                    break
+            if anchor_block is None:
+                for i in range(sup_index + 1, len(plan_steps)):
+                    candidate_id = plan_steps[i].get("step_id")
+                    if candidate_id in blocks_by_id:
+                        anchor_block = blocks_by_id[candidate_id]
+                        insert_after = False
+                        break
+
+            lines = bot_code.split("\n")
+            block_lines = block_text.split("\n")
+
+            if anchor_block is None:
+                # Nenhum vizinho do plano tem bloco reconhecível em bot_code
+                # — insere ao final do corpo da função (fim do último bloco
+                # conhecido, ou logo após a assinatura quando não há bloco
+                # nenhum ainda).
+                insertion_line = blocks[-1]["end"] if blocks else (offset + 1)
+            else:
+                insertion_line = anchor_block["end"] if insert_after else anchor_block["start"]
+
+            lines[insertion_line:insertion_line] = block_lines
+            bot_code = "\n".join(lines)
+
+            reintroduced[sup_step_id] = {
+                "provenance": "deterministic",
+                "reason": f"reintroduzido deterministicamente via correção pendente (reintroduce_step_id={sup_step_id!r})",
+            }
+            print(f"[H6] Step suprimido '{sup_step_id}' reintroduzido deterministicamente (sem LLM).")
+
+        return bot_code, reintroduced
+
+    def _enforce_restore_fail_fast(self, errors, restored_step_ids, bot_code: str) -> None:
+        """
+        Fail-fast restrito da Seção 5.2 do plano híbrido: levanta
+        `RuntimeError` SOMENTE quando (a) um erro de validação da tentativa
+        ATUAL aponta pra um step_id que está em `restored_step_ids` (acabou
+        de ser re-spliceado à forma canônica NESTA MESMA tentativa por
+        `_restore_deterministic_blocks`, e mesmo assim falhou) E (b) o tipo
+        do erro NÃO é de ORDEM/CONTAGEM (`STEP_ID_MISMATCH`/
+        `COUNT_MISMATCH`/`MISSING_STEPS`/`EXTRA_STEPS` — achado I6 da
+        rodada 2: um rewrite full-file pode mover um bloco deterministic; o
+        restore o reverte NO LUGAR MOVIDO, e o erro de ordem causado pelo
+        layout dos OUTROS blocos aponta pro bloco restaurado, que não tem
+        culpa nenhuma). Erros de dry-run nunca chegam aqui (não carregam
+        lineno, `step_validator.py:1750-1758`, e dry run só roda quando
+        `errors` já está vazio nesta mesma tentativa — nunca coexistem). Não
+        faz nada se nenhuma condição bater.
+        """
+        if not restored_step_ids:
+            return
+        restored_set = set(restored_step_ids)
+        blocks, _offset = self._step_blocks_within_scenario(bot_code)
+        blocks = blocks or []
+
+        for err in errors or []:
+            err_type = err.get("type")
+            if err_type in self._RESTORE_FAILFAST_EXCLUDED_TYPES:
+                continue
+
+            candidate_ids = set()
+            for key in ("step_id", "expected_id", "found_id"):
+                v = err.get(key)
+                if v:
+                    candidate_ids.add(v)
+            for v in err.get("step_ids") or []:
+                candidate_ids.add(v)
+
+            linenos = list(err.get("linenos") or [])
+            if err.get("lineno"):
+                linenos.append(err["lineno"])
+            for lineno in linenos:
+                line_idx = lineno - 1
+                for b in blocks:
+                    if b["start"] <= line_idx < b["end"] and b["step_id"]:
+                        candidate_ids.add(b["step_id"])
+                        break
+
+            hit = candidate_ids & restored_set
+            if hit:
+                step_id = sorted(hit)[0]
+                raise RuntimeError(
+                    f"bug no deterministic_emitter para {step_id} — não gaste tentativas de LLM "
+                    f"(bloco restaurado à forma canônica nesta mesma tentativa e ainda assim "
+                    f"reprovado por {err_type})"
+                )
+
+    # -------------------------------------------------------------------
+    # Textos-moldura por modo de `_generate_scoped_blocks` (H3 do plano
+    # híbrido — Seção 5.3): "correct" é o texto usado hoje por
+    # `_surgical_correct_scoped` ("corrija este bloco existente"); "write" é
+    # a variação prevista para a Seção 2.3 passo 5 do plano ("escreva este
+    # bloco novo a partir do plano") — parametrização em si só; nenhum
+    # caller usa "write" nesta tarefa.
+    # -------------------------------------------------------------------
+    _SCOPED_BLOCK_MODE_TEXT = {
+        "correct": {
+            "task_intro": (
+                "Sua tarefa é aplicar uma correção CIRÚRGICA em UM OU MAIS BLOCOS ISOLADOS de um robô RPA maior. Você está vendo\n"
+                "APENAS um recorte do arquivo — o(s) bloco(s) de contexto (se houver) são fornecidos só pra você entender a\n"
+                "sequência, NUNCA os reproduza na resposta."
+            ),
+            "principle_1": 'Altere APENAS o(s) bloco(s) marcado(s) como "a corrigir" abaixo. Não toque nos blocos de contexto.',
+            "target_label": "a corrigir",
+            "context_heading": "CONTEXTO E BLOCO(S) A CORRIGIR",
+            "insights_heading": "CORREÇÕES E INSIGHTS A APLICAR",
+            "return_desc": "bloco(s) corrigido(s)",
+            "return_template_desc": "bloco corrigido completo",
+        },
+        "write": {
+            "task_intro": (
+                "Sua tarefa é ESCREVER UM OU MAIS BLOCOS NOVOS, a partir do plano de execução, para um robô RPA maior. Você está vendo\n"
+                "APENAS um recorte do arquivo — o(s) bloco(s) de contexto (se houver) são fornecidos só pra você entender a\n"
+                "sequência, NUNCA os reproduza na resposta."
+            ),
+            "principle_1": 'Escreva APENAS o(s) bloco(s) marcado(s) como "a escrever" abaixo. Não toque nos blocos de contexto.',
+            "target_label": "a escrever",
+            "context_heading": "CONTEXTO E BLOCO(S) A ESCREVER",
+            "insights_heading": "REQUISITOS DO PLANO A IMPLEMENTAR",
+            "return_desc": "bloco(s) escrito(s)",
+            "return_template_desc": "bloco novo completo",
+        },
+    }
+
+    # Raízes de chamada aceitas dentro do corpo de um `try` de wrapper
+    # opcional (Seção 3.2 do plano) — `_validate_optional_block_ast` só
+    # aceita `runner.*`/`page.*` como Expr de Call.
+    _TRY_BODY_ALLOWED_ROOTS = ("runner", "page")
+
+    @staticmethod
+    def _handler_reprints_error(handler: "ast.ExceptHandler") -> bool:
+        """
+        True se o corpo do `except ... as <var>` contém uma chamada a
+        `print(...)` cujos argumentos referenciam `<var>` — inclusive dentro
+        de f-strings (`ast.walk` alcança o `Name` dentro do
+        `JoinedStr`/`FormattedValue`). Garante que o template do wrapper
+        opcional (Seção 3.2 do plano) nunca engole o erro silenciosamente.
+        """
+        for node in ast.walk(handler):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print":
+                for arg_node in ast.walk(node):
+                    if isinstance(arg_node, ast.Name) and arg_node.id == handler.name:
+                        return True
+        return False
+
+    def _validate_optional_block_ast(self, block_text: str) -> bool:
+        """
+        Ast-lint barato descrito na Seção 7 do plano híbrido (mitigação do
+        risco "except do bloco optional engolindo NameError/TypeError de
+        código cognitivo mau-gerado dentro do try"). Só se aplica a blocos
+        que contêm algum `try/except` (wrapper de step optional, Seção 3.2)
+        — um bloco sem `Try` nenhum passa trivialmente. Quando há `Try`:
+        (a) todo statement do corpo do try deve ser uma chamada (`Expr` de
+        `Call`) em `runner.*`/`page.*`; (b) todo handler `except` deve
+        nomear a exceção (`except ... as x`) E re-imprimi-la
+        (`_handler_reprints_error`). Bloco com erro de sintaxe não é
+        responsabilidade deste lint (outros guards tratam isso) — retorna
+        True (não bloqueia).
+        """
+        dedented = textwrap.dedent(block_text)
+        try:
+            tree = ast.parse(dedented)
+        except SyntaxError:
+            return True
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            for stmt in node.body:
+                if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+                    return False
+                func = stmt.value.func
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in self._TRY_BODY_ALLOWED_ROOTS
+                ):
+                    return False
+            for handler in node.handlers:
+                if not handler.name or not self._handler_reprints_error(handler):
+                    return False
+        return True
+
+    def _generate_scoped_blocks(self, scoped_plan: dict, target_step_ids: list,
+                                 context_desc: str, plan_steps: list,
+                                 gateway, reflection_block: str,
+                                 mode: str = "correct"):
+        """
+        Núcleo compartilhado de prompt/parse/splice para geração ESCOPADA de
+        blocos "# [PASSO N]" — extraído de `_surgical_correct_scoped` (H3 do
+        plano híbrido, Seção 5.3: refatoração mecânica, comportamento
+        EXTERNO byte-idêntico ao anterior para `mode="correct"`). Monta um
+        prompt reduzido contendo só o(s) bloco(s) alvo (+ 1 bloco de
+        contexto antes/depois, somente leitura), pede de volta só esse(s)
+        bloco(s) no formato BEGIN_STEP/END_STEP e splica a resposta no
+        código original por substituição de linhas — o resto do arquivo
+        fica byte-idêntico por construção.
+
+        `mode` seleciona o texto-moldura do prompt via
+        `_SCOPED_BLOCK_MODE_TEXT`: "correct" ("corrija este bloco
+        existente" — o único usado hoje, por `_surgical_correct_scoped`) ou
+        "write" ("escreva este bloco novo a partir do plano" — reservado
+        para a integração da geração nova, Seção 2.3 passo 5 do plano;
+        nenhum caller usa "write" nesta tarefa).
+
+        `context_desc` é o texto livre da seção de correções/insights (para
+        "correct", o `correcoes_desc` já montado por `_surgical_correct`;
+        para "write", seria a descrição de requisitos do plano) — o
+        conteúdo é decisão do CALLER, esta função só formata a seção.
+
+        Levanta exceção se a chamada à API de LLM falhar (mesma semântica
+        de falha do fluxo de arquivo inteiro). Retorna None (não exceção)
+        se: a resposta não contiver as seções BEGIN_STEP/END_STEP
+        esperadas; um bloco retornado contiver uma definição em nível de
+        módulo (`def`/`class` em coluna 0 — guard de corrupção estrutural
+        preexistente); ou um bloco retornado violar o ast-lint de wrapper
+        opcional (`_validate_optional_block_ast`). Em qualquer um desses
+        casos, o caller trata isso como sinal para tentar o fluxo de
+        arquivo inteiro nesta mesma tentativa, sem abortar o Ralph Loop.
+        """
+        text = self._SCOPED_BLOCK_MODE_TEXT[mode]
+
         lines = scoped_plan["lines"]
         target_blocks = scoped_plan["target_blocks"]
         context_before = scoped_plan["context_before"]
@@ -1250,7 +2362,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         targets_section = ""
         for b in target_blocks:
             targets_section += (
-                f"\n#### Bloco a corrigir (step_id={b['step_id']}):\n```python\n{b['text']}\n```\n"
+                f"\n#### Bloco {text['target_label']} (step_id={b['step_id']}):\n```python\n{b['text']}\n```\n"
             )
 
         if context_after:
@@ -1260,7 +2372,7 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             )
 
         return_format = "\n".join(
-            f"# BEGIN_STEP {b['step_id']}\n<bloco corrigido completo de {b['step_id']}, incluindo o comentário '# [PASSO ...]'>\n# END_STEP {b['step_id']}"
+            f"# BEGIN_STEP {b['step_id']}\n<{text['return_template_desc']} de {b['step_id']}, incluindo o comentário '# [PASSO ...]'>\n# END_STEP {b['step_id']}"
             for b in target_blocks
         )
 
@@ -1269,12 +2381,10 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         prompt = f"""
 {reflection_part}
 Você é um Engenheiro de IA especialista em Automação de Processos Robóticos (RPA) de alta resiliência usando Playwright e Python.
-Sua tarefa é aplicar uma correção CIRÚRGICA em UM OU MAIS BLOCOS ISOLADOS de um robô RPA maior. Você está vendo
-APENAS um recorte do arquivo — o(s) bloco(s) de contexto (se houver) são fornecidos só pra você entender a
-sequência, NUNCA os reproduza na resposta.
+{text['task_intro']}
 
 Princípios obrigatórios (Karpathy style):
-1. Altere APENAS o(s) bloco(s) marcado(s) como "a corrigir" abaixo. Não toque nos blocos de contexto.
+1. {text['principle_1']}
 2. Mantenha o comentário '# [PASSO X] Descrição' e o step_id exato de cada bloco.
 3. Proibição absoluta de hardcode: use row.get("campo", "") para dados de negócio, nunca valores literais de teste.
 4. Cada chamada ao runner mantém 'page' como primeiro argumento posicional e step_id como keyword argument.
@@ -1288,15 +2398,15 @@ Fatia do plano de execução relevante a estes blocos:
 {plan_slice_json}
 ```
 ---
-### CONTEXTO E BLOCO(S) A CORRIGIR
+### {text['context_heading']}
 {context_section}
 {targets_section}
 ---
-### CORREÇÕES E INSIGHTS A APLICAR
-{correcoes_desc}
+### {text['insights_heading']}
+{context_desc}
 ---
 ### REGRAS DE SAÍDA (OBRIGATÓRIO)
-Retorne EXCLUSIVAMENTE o(s) bloco(s) corrigido(s), delimitados EXATAMENTE assim (sem markdown fences, sem texto
+Retorne EXCLUSIVAMENTE o(s) {text['return_desc']}, delimitados EXATAMENTE assim (sem markdown fences, sem texto
 antes/depois, um par BEGIN_STEP/END_STEP por step_id alvo):
 {return_format}
 
@@ -1336,12 +2446,39 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
                 print(f"[WARNING] Resposta escopada do bloco {sid} contém definição em nível de módulo (def/class) — rejeitada para evitar corrupção estrutural.")
                 return None
 
+        # Ast-lint barato do wrapper opcional (Seção 7 do plano — mitigação
+        # do risco "except engole erro de código cognitivo mau-gerado"):
+        # roda depois do guard de def/class (que já garante que o bloco é
+        # sintaticamente seguro de inspecionar) e antes do splice.
+        for sid, block_text in found.items():
+            if not self._validate_optional_block_ast(block_text):
+                print(
+                    f"[WARNING] Resposta escopada do bloco {sid} viola o ast-lint de wrapper opcional "
+                    f"(except deve reimprimir o erro; corpo do try só chamadas runner/page) — rejeitada."
+                )
+                return None
+
         new_lines = list(lines)
         for b in sorted(target_blocks, key=lambda b: b["start"], reverse=True):
             new_block_lines = found[b["step_id"]].strip("\n").split("\n")
             new_lines[b["start"]:b["end"]] = new_block_lines
 
         return "\n".join(new_lines)
+
+    def _surgical_correct_scoped(self, scoped_plan: dict, target_step_ids: list,
+                                  correcoes_desc: str, plan_steps: list,
+                                  gateway, reflection_block: str):
+        """
+        Aplica correção CIRÚRGICA a bloco(s) já existentes no código —
+        caller fino de `_generate_scoped_blocks` (mode="correct"), extraído
+        na tarefa H3 do plano híbrido (Seção 5.3). Comportamento externo
+        (prompt gerado, parsing, splice, valores de retorno) byte-idêntico
+        ao anterior à extração.
+        """
+        return self._generate_scoped_blocks(
+            scoped_plan, target_step_ids, correcoes_desc, plan_steps,
+            gateway, reflection_block, mode="correct",
+        )
 
     def _surgical_correct(self, bot_path: str, pending_corrections: list, gateway,
                           project_json_path: str, code_dir: str,
@@ -1355,6 +2492,39 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
             print("[INFO] Lendo código-fonte existente...")
             with open(bot_path, "r", encoding="utf-8") as f:
                 existing_code = f.read()
+
+        # Rota determinística de reintrodução de sup_ (H6, Seção 3.1 do
+        # plano híbrido) — passo PRÉ-LLM do ciclo de correção cirúrgica:
+        # aplicada sobre `existing_code` ANTES de montar qualquer prompt,
+        # para que tanto o modo escopado quanto o fallback de arquivo
+        # inteiro abaixo já enxerguem o bloco reintroduzido. Mesma
+        # implementação usada por `_generate_new_code_hybrid` (ver
+        # docstring de `_apply_deterministic_sup_reintroductions`) —
+        # carrega plano + dicionário aqui, localmente, sem alterar a
+        # assinatura de `_surgical_correct` (o restante da função já
+        # carrega o plano de novo mais abaixo, pra renderização do prompt;
+        # essa pequena duplicação de leitura evita mexer no fluxo
+        # existente). Idempotente e tolerante a ausência de plano/dicionário
+        # (nesse caso é simplesmente no-op — nunca crasha).
+        _plan_for_reintro = None
+        if os.path.exists(self.plan_path):
+            try:
+                with open(self.plan_path, "r", encoding="utf-8") as _pf:
+                    _plan_for_reintro = json.load(_pf)
+            except Exception as e:
+                print(f"[WARNING] [H6] Falha ao ler plano de execução para reintrodução de sup_: {e}")
+        _dicionario_for_reintro = {}
+        _dicionario_path_for_reintro = os.path.join(self.project_dir, "dicionario.json")
+        if os.path.exists(_dicionario_path_for_reintro):
+            try:
+                with open(_dicionario_path_for_reintro, "r", encoding="utf-8") as _df:
+                    _dicionario_for_reintro = json.load(_df)
+            except Exception as e:
+                print(f"[WARNING] [H6] Falha ao ler dicionario.json para reintrodução de sup_: {e}")
+        if _plan_for_reintro is not None:
+            existing_code, _ = self._apply_deterministic_sup_reintroductions(
+                existing_code, pending_corrections, _plan_for_reintro, _dicionario_for_reintro
+            )
 
         # Monta os insights/correções
         correcoes_desc = ""
@@ -1465,16 +2635,36 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         # errado, ou em código não coberto por nenhum step). Resolve via
         # _parse_step_blocks: acha o bloco cujo range de linhas contém o
         # lineno do erro e adiciona o step_id dele ao escopo.
+        #
+        # GUARD DE LINENO ÓRFÃO (fecha a classe GERAL do bug, não só a
+        # assinatura de execute_scenario_default): um erro que traz lineno(s)
+        # mas NÃO resolveu para nenhum step_id — nem por chave direta
+        # (step_id/expected_id/found_id/step_ids) nem por mapeamento
+        # lineno->bloco — está fisicamente fora de qualquer bloco
+        # "# [PASSO N]". O modo escopado jamais o alcançaria: editaria só os
+        # blocos dos OUTROS step_ids e deixaria o erro real intocado, gerando
+        # a oscilação infinita do Ralph Loop (o retry 3 do gate H8, com a
+        # assinatura errada fora de todo bloco). Nesse caso marcamos a
+        # tentativa como escopo-incompleto e forçamos o fluxo de ARQUIVO
+        # INTEIRO abaixo — mesmo que outros step_ids do target_step_ids tenham
+        # blocos válidos. Pagar uma correção de arquivo inteiro ocasional é
+        # melhor do que oscilar sem nunca ver o erro real.
+        # NOTA: esta MESMA detecção está espelhada (duplicação deliberada) em
+        # _compute_restore_target_scope (ver aquele método) — os dois pontos
+        # calculam o escopo cirúrgico a partir do mesmo diff, em fases
+        # diferentes do loop de generate().
         live_error_step_ids = set()
+        scope_incomplete = False
         if current_diff:
             blocks_for_lineno = self._parse_step_blocks(existing_code)
             for e in current_diff.get("errors", []):
+                this_error_ids = set()
                 for key in ("step_id", "expected_id", "found_id"):
                     v = e.get(key)
                     if v:
-                        live_error_step_ids.add(v)
+                        this_error_ids.add(v)
                 for v in e.get("step_ids") or []:
-                    live_error_step_ids.add(v)
+                    this_error_ids.add(v)
                 linenos = list(e.get("linenos") or [])
                 if e.get("lineno"):
                     linenos.append(e["lineno"])
@@ -1483,10 +2673,18 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
                         line_idx = lineno - 1
                         for b in blocks_for_lineno:
                             if b["start"] <= line_idx < b["end"] and b["step_id"]:
-                                live_error_step_ids.add(b["step_id"])
+                                this_error_ids.add(b["step_id"])
                                 break
+                live_error_step_ids |= this_error_ids
+                # Erro posicional que não caiu em nenhum bloco conhecido:
+                # órfão -> força arquivo inteiro nesta tentativa.
+                if linenos and not this_error_ids:
+                    scope_incomplete = True
         target_step_ids = sorted({c.get("step_id") for c in pending_corrections if c.get("step_id")} | live_error_step_ids)
-        if target_step_ids:
+        if target_step_ids and scope_incomplete:
+            print("[INFO] Erro com lineno fora de qualquer bloco '# [PASSO N]' detectado (escopo incompleto) — "
+                  "forçando correção de ARQUIVO INTEIRO nesta tentativa (modo escopado ignorado).")
+        elif target_step_ids:
             scoped_plan = self._build_scoped_edit_plan(existing_code, target_step_ids)
             if scoped_plan is not None:
                 print(f"[INFO] Modo cirúrgico ESCOPADO ativo — editando apenas bloco(s): {', '.join(target_step_ids)}")
@@ -1653,6 +2851,10 @@ Por que o erro aconteceu? (Pense passo a passo):
 2. Se tentou corrigir um step_id e falhou, mude a abordagem.
 3. Corrija APENAS os erros listados. Não refatore nada.
 4. Output APENAS o código Python corrigido completo, sem explicações textuais.
+
+Blocos marcados como deterministic no manifest e fora do escopo desta correção serão RESTAURADOS
+automaticamente à forma canônica após sua resposta — não gaste tokens reescrevendo-os; qualquer
+alteração neles será descartada.
 """
 
         # Use the reflection-enhanced surgical correct

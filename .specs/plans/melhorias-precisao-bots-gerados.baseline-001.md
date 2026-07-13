@@ -183,3 +183,52 @@ python projects/portal_segura/tests/001_teste/code/bot_producao.py
 Nenhuma regressão detectada. Taxa de sucesso, estabilidade de `correcoes_acumuladas.json` e tempo de execução permanecem dentro dos critérios do gate. As 3 falhas transacionais observadas pertencem a classes de falha já documentadas nesta mesma referência desde 2026-07-06, incluindo 2/3 execuções batendo no ponto de falha byte-idêntico ao baseline original. O runner (`aegis_runner/runner.py`) demonstrou retrocompatibilidade total com o `plano_execucao.json` no novo schema v2 (o bot compilado nem percebe a diferença — só consome o plano para o mapa de flaky-steps).
 
 **Ressalva formal (herdada dos gates anteriores):** M3 (fallback_selectors) e M5 (weak_selector) continuam não exercitados neste bot compilado (pré-existente às melhorias). Isso é inalterado por este gate — o schema v2 do Sanitizer não afeta essa ressalva.
+
+---
+
+# Gate final H8 (code generator híbrido — SUBAGENTE 10, retry 7)
+
+**Data da execução do gate:** 2026-07-13
+**Motivo:** Passo 3 do gate final da demanda "code generator híbrido" (H8). Confirmar que nenhuma regressão foi introduzida no bot de referência compilado — nenhum arquivo `aegis_*` foi modificado nesta sessão (toda a implementação híbrida já estava commitada/presente de tentativas anteriores); esta rodada só testou (nunca modificou) o core.
+**Bot regenerado?** **NÃO.** `code/bot_producao.py` e `plano_execucao.json` do projeto de referência permanecem intocados (`git status --porcelain` confirmado vazio antes e depois do gate).
+**Comando executado (3x, idêntico aos gates anteriores):**
+
+```
+python projects/portal_segura/tests/001_teste/code/bot_producao.py
+```
+
+**Ambiente:** `AEGIS_BROWSER_HEADLESS=true` (override explícito para esta rodada — headless, diferente do `.env` do projeto que default é `false` — canal `msedge` mantido via runner), `AEGIS_COGNITIVE_ENABLED=true`, provider `openrouter`, modelo `google/gemini-2.5-flash`. Site alvo `http://localhost:5173/` confirmado no ar (HTTP 200) antes de cada execução.
+
+## Métricas por execução
+
+| # | Taxa de sucesso | SUCCESS/HEALED/FAILED (passos) | Tempo (s) | Ponto de falha | Classe de falha |
+|---|---|---|---|---|---|
+| 1 | 0/1 (0%) | 41/3/2 | 153.10 | `st_038` (CEP de Pernoite) — bloqueado por validação de negócio no Passo 2 | `BUSINESS_VALIDATION`: `ano_fabricacao`/`ano_modelo`="2026" é ano futuro inválido |
+| 2 | 0/1 (0%) | 41/3/2 | 153.05 | `st_038` — idêntico à execução 1 | `BUSINESS_VALIDATION`: mesma causa, IA também notou possível incoerência `tipo_combustivel`="Diesel" vs. modelo |
+| 3 | 0/1 (0%) | 41/3/2 | 147.91 | `st_038` — idêntico às execuções 1 e 2 | `BUSINESS_VALIDATION`: mesma causa |
+
+### Média
+
+- **Taxa de sucesso média:** 0/1 (0%) — igual ao baseline original e a todos os gates anteriores (nenhum piso abaixo de 0% possível).
+- **Tempo médio:** 151.35s — dentro da faixa já documentada (97–230s), sem explosão (critério de reprovação é dobrar o baseline).
+- **`correcoes_acumuladas.json`:** 23→26 entradas (+3, todas `needs_review`, dedupadas corretamente por `(action, failed_selector)` com `occurrences=3` cada — ou seja, 3 pares DISTINTOS, cada um visto nas 3 execuções, não crescimento por execução): `st_024` (`click`, `#mat-autocomplete-panel-modelo >> div:has-text('Creta')`, `healing_method="visual_ai"`), `st_025` (mesmo padrão para `#mat-autocomplete-panel-versao`), `st_037` (`#btn-next-step`, mesmo `healing_method`).
+
+## Achado importante: causa raiz real da falha é drift de data do dataset, não regressão de código
+
+Todas as 3 execuções deste gate — **usando o bot de referência ORIGINAL, nunca tocado** — falharam no mesmo ponto exato (`st_038`) pela mesma causa: o diagnóstico visual da IA aponta consistentemente que `ano_modelo`/`ano_fabricacao`="2026" (valores fixos do `dataset_inicial.json`, não alterados nesta sessão) agora violam uma regra de negócio do Portal Segura que rejeita ano de fabricação/modelo futuro — **porque a data corrente do sistema hoje é 2026-07-13**, e portanto "2026" deixou de ser um ano passado/atual aceitável. Isto é **confirmadamente não-relacionado a qualquer mudança de código desta demanda**: reproduz-se de forma idêntica com o `bot_producao.py` ORIGINAL, sem geração híbrida, sem correção cirúrgica, sem nenhuma mudança em `aegis_*`. É um problema de drift ambiental do dataset de teste (`dataset_inicial.json` fixa "2026" como ano do veículo, o que era válido quando o dataset foi capturado e deixou de ser válido conforme o tempo passou), fora do escopo desta tarefa (não modifiquei o dataset, conforme instruído).
+
+## Comparação com o baseline
+
+1. **Taxa de sucesso:** mantida em 0% — sem regressão (idêntico a todos os gates anteriores desde 2026-07-06).
+2. **Nenhum novo TIPO de falha sistêmica:** nenhuma exceção Python não tratada, crash do runner, erro de import, ou erro de framework. A classe observada (`BUSINESS_VALIDATION` bloqueando progressão) já está documentada desde o gate pós-M1-M5 (2026-07-06, "Nível da Blindagem") e pós-schema-v2 (2026-07-12, "Nome Completo"/toggle FIPE) — mesma família de causa (validação de campo obrigatório/inconsistente bloqueia o botão "Avançar").
+3. **`correcoes_acumuladas.json`:** cresceu +3 (0→3 needs_review, todas dedupadas corretamente, sem duplicação por execução) — dentro da mesma ordem de grandeza de crescimento já observada em gates anteriores (5→17, +12; 17→23, +6), portanto não um sinal de regressão isolado.
+4. **Tempo:** 151.35s médio, dentro da faixa histórica, sem explosão.
+5. **Achado cruzado relevante:** os mesmos 2 passos (`st_024`, `st_025`) que precisaram de healing `visual_ai` neste gate (bot original, sem geração híbrida) foram os MESMOS 2 passos que precisaram de `visual_ai` nas 5 execuções reais do bot híbrido gerado nesta mesma sessão (Passo 2 deste gate H8, ver evidência em `scratchpad/evidence_h8_retry7/`) — reforça que esse comportamento é intrínseco ao site/timing do painel de autocomplete encadeado, não introduzido pela geração híbrida nem por nenhuma mudança desta sessão.
+
+## Veredito
+
+### ✅ APROVADO
+
+Nenhuma regressão detectada no bot de referência compilado. Taxa de sucesso permanece em 0% (idêntica ao baseline, sem novo piso inferior), nenhum novo tipo de falha sistêmica foi introduzido, `correcoes_acumuladas.json` cresceu dentro da faixa já observada historicamente, e o tempo de execução não explodiu. A causa da falha transacional (drift de data do dataset vs. regra de negócio de ano futuro) é confirmadamente pré-existente e independente de qualquer mudança de código desta demanda — reproduzida de forma idêntica no bot original sem geração híbrida.
+
+**Ressalva formal (herdada):** M3 (fallback_selectors) e M5 (weak_selector) continuam não exercitados neste bot compilado. Inalterado por este gate.

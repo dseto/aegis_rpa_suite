@@ -853,11 +853,13 @@ class TransactionRunner:
 
         return False, None, None
 
-    def _handle_unrecoverable_click(self, page, selector, target_description, e, original_coords=None, step_id=None, strict=False) -> bool:
+    def _handle_unrecoverable_click(self, page, selector, target_description, e, original_coords=None, step_id=None, strict=False, live_text=None) -> bool:
         """
         Decide o desfecho final de um clique que NENHUMA camada determinística
-        conseguiu resolver: aplica a mesma regra de strict/flaky, tenta o
-        Self-Healing Cognitivo por IA (Nível 3) e o Fallback Físico de
+        conseguiu resolver: aplica a mesma regra de strict/flaky, tenta a
+        Geometria DOM ao Vivo por texto (Nível 3, só quando o chamador
+        extraiu `live_text` do seletor), o Self-Healing Cognitivo por IA
+        (Nível 3.5, quando a geometria não resolveu) e o Fallback Físico de
         Coordenadas de Gravação (Nível 4) quando permitido, e por fim loga
         FAILED e relança a exceção `e`.
 
@@ -866,6 +868,12 @@ class TransactionRunner:
         e _finalize_click_success (CLICK_NO_EFFECT confirmado mesmo após a
         recuperação determinística) para não duplicar a decisão de
         strict/cognitivo/coordenadas nos dois pontos de chamada.
+
+        live_text: literal extraído de um :has-text('...') do seletor do
+        filho por click_chained (via _extract_has_text_literal). None nos
+        demais chamadores — o Nível 3 (geometria) então não se aplica e o
+        fluxo cai direto no Self-Healing Cognitivo (Nível 3.5), byte-idêntico
+        ao comportamento anterior à introdução do tier de geometria.
         """
         is_flaky_step = self.flaky_step_ids.get(step_id, False)
         flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
@@ -877,8 +885,47 @@ class TransactionRunner:
             self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
 
-        # Nível 3: Self-Healing Cognitivo por IA
+        # Nível 3: Geometria DOM ao Vivo por texto da opção (determinístico,
+        # sem LLM). Só se aplica quando o chamador (click_chained) extraiu o
+        # literal de um :has-text('...') do seletor do filho — caso típico:
+        # opção de autocomplete/overlay (ex.: div:has-text('Creta')). Overlays
+        # CDK reancoram o painel na posição VIVA do input a cada abertura
+        # (getBoundingClientRect().bottom), então a coordenada de gravação do
+        # Nível 4 fica obsoleta e pode cair no backdrop transparente — que
+        # CANCELA o overlay sem commitar o valor no estado do app (o commit só
+        # acontece no listener de clique da própria opção). Causa raiz
+        # confirmada da falha em cascata st_024→st_025 do Portal Segura
+        # (Modelo "selecionado" via coordenada morta a ~161px da opção real →
+        # Versão nunca popula). O sensor CLICK_NO_EFFECT não cobre este caso:
+        # fechar o painel via backdrop MUDA overlays/domSize, parecendo efeito
+        # real. Reaproveita _click_by_live_geometry (mesma primitiva já usada
+        # por select_option_resilient): resolve a opção por TEXTO e clica no
+        # centro do bounding rect ATUAL. Roda ANTES do Self-Healing Cognitivo
+        # (Nível 3.5) porque este último não tem verificação de pós-condição
+        # — `self_healing_click` clica onde a IA de visão aponta e retorna
+        # True sem confirmar que o clique realmente comitou o valor no
+        # estado do app (ex.: confundir o texto já digitado no campo de
+        # busca com a opção do dropdown, "clicando" no próprio input e
+        # retornando sucesso falso). A geometria ao vivo é determinística e
+        # verificável, então tem prioridade sempre que há `live_text`
+        # disponível; qualquer exceção aqui cai para o Nível 3.5, nunca
+        # propaga.
         healed_by_ia = False
+        if live_text:
+            try:
+                print(f"[AEGIS RUNNER] Tentando resolver clique via geometria DOM ao vivo pelo texto '{live_text}'...")
+                if self._click_by_live_geometry(page, live_text):
+                    # _log_step com status="HEALED" já registra needs_review
+                    # via _register_healing_for_review (Sensor F1), como nos
+                    # demais tiers de healing.
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="live_geometry_by_text")
+                    return True
+            except Exception as geo_err:
+                print(f"[AEGIS RUNNER] Falha no tier de geometria ao vivo por texto: {geo_err}")
+
+        # Nível 3.5: Self-Healing Cognitivo por IA. Roda quando a geometria ao
+        # vivo não resolveu (sem `live_text` extraível, ou
+        # `_click_by_live_geometry` retornou False/lançou exceção acima).
         cognitive_attempt_failed = False
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
@@ -1099,7 +1146,7 @@ class TransactionRunner:
         self._log_step(step_id=step_id, action="click_by_coordinates", selector="coords", target_description=target_description, status="SUCCESS")
         return True
 
-    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None, strict=False, identity_scoped=False) -> bool:
+    def _handle_click_failure(self, page, selector, target_description, timeout, e, original_coords=None, step_id=None, strict=False, identity_scoped=False, live_text=None) -> bool:
         # Níveis 1.5/2.5/2.75 reconsultam `selector` como string plana via
         # page.locator()/document.querySelector(). Chamadores encadeados
         # (click_chained) montam essa string concatenando parent >> child sem
@@ -1144,7 +1191,7 @@ class TransactionRunner:
         # o estado da página e mascarando a causa raiz em passos subsequentes — pior do
         # que uma falha limpa e rastreável neste passo. Decisão compartilhada com
         # _finalize_click_success via _handle_unrecoverable_click.
-        return self._handle_unrecoverable_click(page, selector, target_description, e, original_coords, step_id, strict)
+        return self._handle_unrecoverable_click(page, selector, target_description, e, original_coords, step_id, strict, live_text=live_text)
 
     def _slugify(self, text: str) -> str:
         import unicodedata
@@ -1152,20 +1199,102 @@ class TransactionRunner:
         text = re.sub(r'[^\w\s-]', '', text).strip().lower()
         return re.sub(r'[-\s]+', '-', text)
 
+    # Literal de :has-text('...')/:has-text("...") em seletores Playwright.
+    # Alternância de aspas simples/duplas em grupos separados; [^'"] evita
+    # atravessar o fechamento da string (has-text gerado pelo sanitizer não
+    # usa aspas escapadas dentro do literal).
+    _HAS_TEXT_LITERAL_RE = re.compile(r""":has-text\(\s*(?:'([^']*)'|"([^"]*)")\s*\)""")
+
+    def _extract_has_text_literal(self, selector):
+        """Extrai o texto do ÚLTIMO :has-text('...') de um seletor — o mais
+        interno/próximo do alvo, mesma convenção do JS do Nível 2.75 de
+        _attempt_deterministic_click_recovery (que também varre e usa o
+        último match). Retorna None quando o padrão não existe ou o literal
+        é vazio/só espaços — nesses casos o tier de geometria ao vivo
+        simplesmente não se aplica e a cadeia de fallback segue idêntica ao
+        comportamento anterior (coordenada gravada continua como está)."""
+        if not selector:
+            return None
+        matches = self._HAS_TEXT_LITERAL_RE.findall(str(selector))
+        if not matches:
+            return None
+        single_quoted, double_quoted = matches[-1]
+        text = (single_quoted or double_quoted).strip()
+        return text or None
+
     def _click_by_live_geometry(self, page, option_text) -> bool:
         """Localiza um elemento de opção pelo texto e clica no centro do seu
         bounding rect atual (via JS), em vez de depender de coordenadas
         percentuais gravadas que ficam obsoletas quando o overlay rola/reflui
-        de forma diferente da gravação original. Determinístico, sem LLM."""
+        de forma diferente da gravação original. Determinístico, sem LLM.
+
+        Nível 1 (comportamento original, preservado byte-a-byte e tentado
+        SEMPRE primeiro): procura o texto entre
+        `[role='option'], .mat-option, li, .select-option` em TODO o
+        documento. Cobre Angular Material (mat-select via role='option',
+        mat-autocomplete via .mat-option) e listas/selects genéricos.
+
+        Nível 2 (fallback adicional — só roda quando o Nível 1 não encontra
+        nada, então nunca compete com nem regride o caminho já validado):
+        alguns autocompletes renderizam as opções como `div` puro, sem
+        classe/role reconhecível pelo Nível 1. Soltar um seletor `div`
+        genérico no documento inteiro seria perigoso — casaria com uma
+        fração enorme de qualquer página. Em vez disso, primeiro localiza um
+        container que "parece" um overlay/painel/dropdown aberto (heurística
+        de classe/role comum entre frameworks: overlay/panel/dropdown/menu/
+        listbox, ou role listbox/menu/dialog — não exclusiva do Angular
+        Material), restringe aos candidatos cujo texto realmente contém o
+        alvo (distingue o painel certo quando há mais de um overlay "aberto"
+        simultaneamente no DOM — caso real observado com 2 painéis
+        cdk-overlay-pane coexistindo), prioriza o mais específico (texto mais
+        curto) e só então busca QUALQUER elemento folha dentro DESSE
+        container cujo texto bate — nunca no documento inteiro. Se nenhum
+        container "parecer" aberto, ou nenhum candidato contiver o
+        texto-alvo, ou nenhuma folha bater, retorna null e o método cai para
+        False como sempre fez."""
         try:
             rect = page.evaluate(
                 """(text) => {
-                    const sel = "[role='option'], .mat-option, li, .select-option";
                     const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
                     const target = norm(text);
-                    const els = Array.from(document.querySelectorAll(sel));
-                    const el = els.find(e => norm(e.textContent) === target)
+                    const isVisible = e => {
+                        const r = e.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+
+                    // Nivel 1: comportamento original, tentado sempre primeiro.
+                    const sel = "[role='option'], .mat-option, li, .select-option";
+                    const els = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+                    let el = els.find(e => norm(e.textContent) === target)
                         || els.find(e => norm(e.textContent).includes(target));
+
+                    // Nivel 2: fallback escopado a um container de overlay/painel
+                    // aberto, só tentado quando o Nivel 1 não achou nada.
+                    if (!el) {
+                        const containerSel = "[class*='overlay'], [class*='panel'], [class*='dropdown'], [class*='menu'], [class*='listbox'], [role='listbox'], [role='menu'], [role='dialog']";
+                        let containers = Array.from(document.querySelectorAll(containerSel))
+                            .filter(c => isVisible(c) && !/backdrop/i.test(c.className || ''));
+
+                        // Restringe aos containers cujo texto contém o alvo -- é
+                        // o que distingue o painel certo quando mais de um
+                        // overlay está "aberto" ao mesmo tempo no DOM.
+                        const withMatch = containers.filter(c => norm(c.textContent).includes(target));
+                        if (withMatch.length) containers = withMatch;
+
+                        // Entre os candidatos restantes, prioriza o de texto mais
+                        // curto (mais específico, mais próximo de ser o próprio
+                        // painel de opções, não um wrapper amplo da página).
+                        containers.sort((a, b) => norm(a.textContent).length - norm(b.textContent).length);
+
+                        for (const container of containers) {
+                            const leaves = Array.from(container.querySelectorAll('*'))
+                                .filter(node => isVisible(node) && node.children.length === 0);
+                            const found = leaves.find(e => norm(e.textContent) === target)
+                                || leaves.find(e => norm(e.textContent).includes(target));
+                            if (found) { el = found; break; }
+                        }
+                    }
+
                     if (!el) return null;
                     const r = el.getBoundingClientRect();
                     if (r.width <= 0 || r.height <= 0) return null;
@@ -1688,7 +1817,20 @@ class TransactionRunner:
                         page,
                         query_selector,
                         target_description, timeout, e, original_coords, step_id=step_id, strict=strict,
-                        identity_scoped=bool(parent.get("has_text"))
+                        identity_scoped=bool(parent.get("has_text")),
+                        # Nível 3.5 (geometria DOM ao vivo por texto): extrai o
+                        # literal do :has-text('...') do seletor do FILHO (o
+                        # alvo real do clique — ex. div:has-text('Creta') de um
+                        # painel de autocomplete). Tenta primeiro o seletor já
+                        # relativizado (o que o runner de fato usa) e cai para
+                        # o seletor bruto gravado caso a relativização tenha
+                        # descartado o segmento com o texto. None quando não há
+                        # texto extraível — o tier então não se aplica e a
+                        # cadeia segue idêntica ao comportamento anterior.
+                        live_text=(
+                            self._extract_has_text_literal(child_sel_clean)
+                            or self._extract_has_text_literal(child.get("selector", ""))
+                        ),
                     )
 
         return False
