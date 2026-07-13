@@ -16,15 +16,19 @@ Para isso, o runner adota uma abordagem híbrida de resiliência baseada em duas
 graph TD
     A[Execução de Ação no Robô] --> B[Camada Determinística: Playwright]
     B -->|Sucesso Visual/Efeito Confirmado| C[Sucesso]
-    B -->|Falha Técnica ou Sem Efeito| D[Recuperação Determinística]
-    D -->|Sucesso via Escape/CDK/Fallback Selectors| C
+    B -->|Falha Técnica ou Sem Efeito| D[Recuperação Determinística: Escape/CDK/Fallback Selectors]
+    D -->|Sucesso| C
     D -->|Falha em Modo Strict ou Flaky < 4| E[Lança FlakyStepFailure / Exceção]
-    D -->|Falha Geral / Flaky >= 4| F[Camada Cognitiva: Visual AI]
+    D -->|Falha Geral / Flaky >= 4| G3[Nível 3: Geometria DOM ao Vivo por Texto]
+    G3 -->|Sucesso| C
+    G3 -->|Não aplicável / Falha| F[Nível 3.5: Camada Cognitiva - Visual AI]
     F -->|Sucesso via IA Visual| C
-    F -->|Falha de IA| G[Último Recurso: Coordenadas Físicas de Gravação]
+    F -->|Falha de IA| G[Nível 4: Último Recurso - Coordenadas Físicas de Gravação]
     G -->|Clique Físico| C
     G -->|Erro de Posicionamento| H[Falha Crítica do Passo]
 ```
+
+> **Nota de ordenação (2026-07-13):** a Geometria DOM ao Vivo por Texto (Nível 3) roda **antes** do Self-Healing Cognitivo (Nível 3.5) — não depois, como uma versão anterior deste fluxo sugeria. A ordem importa: contra o site real, o self-healing cognitivo já resolveu (de forma imprecisa, um falso-positivo) alguns casos que a geometria determinística resolveria corretamente, mascarando o tier novo. Ver Seção 2-D.
 
 ### Arquitetura de Módulos e Componentes
 
@@ -40,16 +44,18 @@ O [TransactionRunner](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py
 
 ### A. Cliques Resilientes ([click_resilient](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py#L462))
 
-A ação de clique físico padrão em automação é uma das maiores causas de quebras ("flakiness"). O método [click_resilient](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py#L462) resolve essa volatilidade por meio de sete níveis progressivos:
+A ação de clique físico padrão em automação é uma das maiores causas de quebras ("flakiness"). O método [click_resilient](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py#L462) resolve essa volatilidade por meio de níveis progressivos:
 
+0. **Espera pré-clique por elemento conhecidamente desabilitado (sensor `ENABLE_TIMEOUT`):** antes de qualquer tentativa física, `_wait_for_known_disabled_button` espera (timeout configurável, default 15s) até que o seletor-alvo saia do estado `disabled` — cobre botões gated por validação assíncrona (ex.: submit que só habilita após uma consulta de CPF terminar). Ver subseção D.
 1. **Hover-to-Reveal Sequencial:** Se o seletor contiver o encadeamento de submenus (` >> `), o runner executa uma verificação rápida e realiza o `hover` recursivo em todos os elementos intermediários para garantir a expansão dinâmica dos submenus.
 2. **Priorização de Âncoras Reais (Heurística Estática):** Ao identificar múltiplos candidatos que batem com o seletor, o runner inspeciona o atributo `href`. Candidatos que não são âncoras locais (como `href="#"`) recebem prioridade sobre links meramente funcionais.
-3. **Sensor de Falso-Sucesso (`CLICK_NO_EFFECT`):** Muitos portais capturam cliques através de overlays invisíveis, fazendo com que o Playwright reporte sucesso no clique físico, mas sem causar nenhuma alteração na tela. O runner resolve isso tirando um snapshot leve pré-clique (URL atual, tamanho do DOM, quantidade de overlays ativos e classe/atributos ARIA dos irmãos diretos do elemento) e comparando com o estado pós-clique. Se nada mudar em até 800ms, o clique é declarado sem efeito (`CLICK_NO_EFFECT`) e a cadeia de recuperação é disparada.
+3. **Sensor de Falso-Sucesso (`CLICK_NO_EFFECT`):** Muitos portais capturam cliques através de overlays invisíveis, fazendo com que o Playwright reporte sucesso no clique físico, mas sem causar nenhuma alteração na tela. O runner resolve isso tirando um snapshot leve pré-clique (URL atual, tamanho do DOM, quantidade de overlays ativos e classe/atributos ARIA dos irmãos diretos do elemento) e comparando com o estado pós-clique. Se nada mudar em até 800ms, o clique é declarado sem efeito (`CLICK_NO_EFFECT`) e a mesma cadeia de recuperação determinística (Escape+retry → reposição CDK → `fallback_selectors`) é disparada **antes** de fechar o passo — só cai para cognitivo/coordenada se nenhuma delas produzir efeito real. Flag mestre `AEGIS_CLICK_EFFECT_SENSOR` (default `true`).
 4. **Resiliência por Escape reativo:** O runner envia a tecla `Escape` à página para descartar overlays, loaders ou modais abertos no meio da transação e retenta o clique mecânico.
 5. **Reposicionamento de Overlay CDK:** Se a falha for provocada por painéis flutuantes (como os overlays do Angular Material que estouram os limites do viewport), o runner injeta um script JavaScript no browser para reconfigurar as coordenadas de posicionamento de `.cdk-overlay-pane` (posicionando-o em local fixo e acessível) e injeta o clique através de um evento sintético.
 6. **Seletores de Fallback Determinísticos (`fallback_selectors`):** Derivados do plano de execução do robô (gravados sequencialmente durante o voo de telemetria), o runner tenta, um a um, seletores alternativos e estáveis que também foram registrados para o mesmo passo.
-7. **Self-Healing Cognitivo por IA:** Se ativado e o passo não for restritivo, o runner captura um screenshot e delega à LLM (`self_healing_click`) a localização espacial do elemento baseada na sua descrição amigável (`target_description`).
-8. **Clique por Coordenada Física (Último Recurso):** Clica na coordenada relativa em que o elemento foi gravado originalmente (`original_coords`).
+7. **Nível 3 — Geometria DOM ao Vivo por Texto (`_click_by_live_geometry`):** quando o chamador fornece o texto vivo da opção-alvo (extraído do `has_text` literal do seletor via `click_chained`), o runner varre o DOM em tempo real procurando um elemento cujo texto bate, clicando pela geometria (`Bounding Rect`) atual — não pela coordenada gravada, que fica obsoleta assim que o painel reancora na posição viva do input. Roda **antes** do self-healing cognitivo (ver Nota de ordenação da Seção 1). Não se aplica a `click_resilient` puro (sem texto vivo disponível) — só a `click_chained`, cujo caso de uso são opções de painel/menu com texto conhecido.
+8. **Nível 3.5 — Self-Healing Cognitivo por IA:** se ativado e o passo não for restritivo, o runner captura um screenshot e delega à LLM (`self_healing_click`) a localização espacial do elemento baseada na sua descrição amigável (`target_description`).
+9. **Nível 4 — Clique por Coordenada Física (Último Recurso):** Clica na coordenada relativa em que o elemento foi gravado originalmente (`original_coords`).
 
 > [!NOTE]
 > **Shadow DOM Piercing:** O runner suporta cliques diretos dentro de Shadow Roots abertos usando o encadeamento nativo `>>`. Para Shadow Roots fechados (invisíveis ao DOM virtual), o runner disponibiliza o método [click_by_coordinates](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py#L1074), que executa um clique físico bruto diretamente do sistema operacional nas coordenadas relativas convertidas do viewport.
@@ -74,6 +80,18 @@ A manipulação de campos dropdown não-nativos (como `<mat-select>` ou listas B
    - **Tabelas de Grid Dinâmico:** Se múltiplas linhas de uma tabela compartilharem o mesmo texto e possuírem colunas idênticas (ex: tabela de coberturas de seguros com várias colunas de dropdowns), o runner localiza a linha exata `.mat-row` filtrando pelo rótulo do plano e infere a coluna correta (0: LMG, 1: Franquia, 2: Desconto) a partir da máscara de texto da opção informada (percentual, valores monetários ou textos chaves).
 2. **Seleção da Opção:** Tenta clicar no item por meio de seletores como `[role='option']:has-text(...)` e `.mat-option:has-text(...)`.
    - **Geometria ao Vivo:** Se o dropdown não reabrir ou sumir do DOM virtual, o runner varre as dimensões de tela renderizadas procurando a coordenada de caixa (`Bounding Rect`) da opção textual exibida, disparando o clique por geometria de tela atualizada.
+
+`_click_by_live_geometry` é compartilhado entre `select_option_resilient` e o Nível 3 de `click_chained` (Seção 2.A) — internamente tem dois sub-níveis: **Nível 1** (comportamento original, casamento por classe/role reconhecível, tentado sempre primeiro) e **Nível 2** (fallback adicional escopado a um container de overlay/painel genérico aberto, só tentado quando o Nível 1 não encontra nada — evita soltar um seletor `div` puro contra o documento inteiro).
+
+### D. Sensor `ENABLE_TIMEOUT` — botões/elementos que só habilitam após validação assíncrona
+
+Alguns cliques dependem de um alvo que só fica habilitado depois que uma validação assíncrona do lado da aplicação termina (ex.: um botão de submit gated numa consulta de CPF). Dois mecanismos cobrem isso, ambos operando sobre **qualquer seletor**, não uma lista fixa:
+
+- **`_wait_for_known_disabled_button`** (pré-clique): espera até o seletor-alvo sair do estado `disabled`, timeout configurável (default 15s).
+- **`_wait_if_wizard_transition_button`** (pós-clique): depois do clique físico, faz polling do estado de habilitação do mesmo seletor; a cada iteração também reavalia o snapshot do sensor `CLICK_NO_EFFECT` para diagnosticar se o clique já teve efeito enquanto espera.
+- **`_recover_via_recent_fills`**: se o polling pós-clique estourar o timeout, o runner reproduz (na estratégia original de cada um) os preenchimentos recentes bufferizados em `self._recent_fills` (um `deque(maxlen=30)` alimentado só por `fill_resilient`, nunca limpo por-clique — o campo que precisa de replay pode estar vários passos atrás) e reavalia a habilitação uma vez. Cada entrada do buffer é presence-checked (`is_visible(timeout=500)`) antes do replay, para pular entradas obsoletas de uma tela já navegada em vez de pagar um timeout completo de `fill_resilient`.
+
+Se mesmo assim o alvo nunca habilitar, o fluxo cai para a mesma decisão terminal (`strict`/cognitivo/coordenada) de qualquer outra falha de clique. Uma recuperação bem-sucedida por este sensor registra `needs_review` com `healing_method="enable_timeout_recovered"` — mesmo hook (`_register_healing_for_review`) usado por qualquer outro tier de cura, independente de o sensor `CLICK_NO_EFFECT` também ter disparado para o mesmo passo.
 
 ---
 
@@ -177,6 +195,11 @@ def fill_resilient(self, page, selector, text_val, target_description, strategy=
 def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None, strict=False) -> bool
 ```
 - Abre dropdown customizado e clica no elemento de opção correspondente.
+
+```python
+def click_chained(self, page, parent: dict, child: dict, target_description: str, timeout=5000, original_coords=None, step_id=None, strict=False) -> bool
+```
+- Resolve `parent` (locator de contexto, ex. `.mat-row` com `has_text`) e clica em `child` dentro dele — usado para opções de painéis/menus/linhas de grid. Extrai automaticamente o texto literal do `has_text` do `child` (`_extract_has_text_literal`) e o repassa como `live_text` para o Nível 3 (Geometria DOM ao Vivo, Seção 2.A) quando a cadeia normal falha.
 
 ---
 

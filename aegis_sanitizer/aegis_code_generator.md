@@ -74,7 +74,7 @@ O Code Generator é executado de forma standalone ou orquestrado pelo **Aegis Co
 O comportamento do gerador é controlado pela classe `CodeGeneratorService`. Ele possui os seguintes modos e algoritmos de execução:
 
 ### A. Fluxo de Geração Nova (`_generate_new_code`)
-Invocado quando o robô (`bot_producao.py`) não existe ou quando o projeto requer uma compilação do absoluto zero. A LLM recebe o playbook completo, o plano de execução, os metadados do dicionário e a telemetria, sintetizando a lógica linear das interações na função `execute_scenario_default`.
+Invocado quando o robô (`bot_producao.py`) não existe ou quando o projeto requer uma compilação do absoluto zero. Desde 2026-07 este fluxo é **híbrido por padrão** (`AEGIS_CODEGEN_HYBRID=true`) — ver Seção 3.5. A LLM só recebe o playbook completo, o plano de execução inteiro e a telemetria no caminho **full-LLM legado** (flag desligada, projeto com `skills_used`, plano ausente, ou fallback de tentativa); no caminho híbrido, ela só vê os *slots cognitivos* (Seção 3.5), nunca o arquivo inteiro.
 
 ### B. Fluxo de Correção Cirúrgica (`_surgical_correct`)
 Quando o robô já existe e o sistema detecta que há correções pendentes (`correcoes_acumuladas.json`), o gerador ativa o modo de correção localizada.
@@ -90,6 +90,70 @@ Se a gravação original (`gravacao.json`) contiver eventos com a ação `call_s
 2. Lê seu `skill.json` (metadados e assinatura de parâmetros), `relatorio.md` e `dicionario.json`.
 3. Invoca a LLM para compilar uma função Python independente com a assinatura `run_skill_<slug>(page, parameters..., runner)`.
 4. Grava-a na biblioteca compartilhada `skills_lib.py` e injeta as regras de importação no prompt do robô principal.
+
+---
+
+## 🧬 3.5 Geração Híbrida (Determinística + Cognitiva) — default desde 2026-07
+
+A LLM é o gargalo de custo/latência/alucinação da Fase 4 mesmo em passos 100% mecânicos (um `click` cujo seletor, tipo e binding de dataset já são deriváveis sem ambiguidade do próprio plano). O motor híbrido inverte a relação entre validador e gerador: em vez de a LLM escrever tudo e o `step_validator.py` cobrar o padrão depois, um novo módulo — `aegis_sanitizer/deterministic_emitter.py` — **emite** o padrão diretamente a partir do plano, e a LLM só é chamada para os passos onde resta julgamento real.
+
+### A. Classificação por passo — linha de corte C1-C10 (`classify_step`)
+
+Para cada step emitível do plano, `classify_step` decide `deterministic`, `cognitive` ou `omit` (`sup_`/`skip`, nunca vira código) aplicando dez condições conservadoras, na ordem:
+
+| # | Condição | Efeito se disparar |
+|---|---|---|
+| C1 | Tipo de step fora de `{click, fill, select, select_native}` | `cognitive` |
+| C2 | `execution_hint == "skip"` → `omit`; `execution_hint == "optional"` → decisão de emitir é da LLM | `omit` / `cognitive` |
+| C3 | Padrão Q — `parent.has_text_original` presente ou `sanitization_notes` cita Padrão Q/`has_text` | `cognitive` |
+| C4 | Binding ambíguo — `fill`/`select_native` sem exatamente 1 casamento de chave no dicionário via `selector`/`selector_original`; `select` sem exatamente 1 via `trigger_selector` | `cognitive` |
+| C5 | `weak_selector: true` sem seletor encadeado/`has_text` para ancorar | `cognitive` |
+| C6 | Padrão N — seletor de menu suspenso a dividir em `Pai >> Filho` | `cognitive` |
+| C7 | Projeto tem `skills_used` não vazio — condição **global**, decidida pelo chamador (`_generate_new_code`) antes de invocar `build_skeleton`, não por `classify_step` | rota inteira cai para full-LLM |
+| C8 | Step é alvo de `pending_corrections` (direto ou via `required_reopen.after_step_id`) | `cognitive` |
+| C9 | `fill` cujo próximo step emitível é um `click` em painel de autocomplete (lookahead calculado pelo chamador, nunca pelo `classify_step`) | `cognitive` |
+| C10 | Valor de negócio (`observed_value` do dicionário) embutido literalmente no seletor/`has_text` — anti-hardcode | `cognitive` |
+
+Um step `deterministic` é escrito diretamente por `emit_step_block` (sem chamada de LLM); um `cognitive` vira um placeholder no arquivo:
+```python
+# [PASSO N] <descrição do passo>
+# AEGIS_COGNITIVE_SLOT step_id="st_014" motivo="<razão da classificação>"
+pass
+```
+`build_skeleton` monta o arquivo inteiro (todos os blocos determinísticos + placeholders) e o manifest de proveniência (Seção 3.6). A LLM recebe, numa única chamada, **só** os slots cognitivos da geração atual (`_render_hybrid_slots_context`), e responde no formato delimitado `# BEGIN_STEP st_XXX` / `# END_STEP st_XXX` — um par por `step_id` alvo, splicado de volta no esqueleto.
+
+`AEGIS_CODEGEN_FORCE_LLM_STEPS` (CSV de `step_id`s) permite rebaixar manualmente qualquer step para cognitivo mesmo que `classify_step` o classificasse como determinístico — útil para depuração pontual sem mexer no plano.
+
+### B. Padrão Q dinâmico (C3) — a regra anti-hardcode mais violada na prática
+
+Quando um step cai em C3, o prompt do slot **prescreve** (não sugere) composição dinâmica: se o literal residual de `has_text` contém um ou mais `observed_value` do dicionário, a LLM DEVE compor via f-string com `row.get("<chave>", "")` para cada chave casada, preservando o texto estático residual (ex.: `"FIPE"`) como literal na mesma f-string — nunca reemitir o literal gravado tal como está. `step_validator.py` reforça isso com um erro dedicado: `HARDCODED_PARENT_HAS_TEXT` (distinto de `MISSING_PARENT_HAS_TEXT` — modo de falha oposto) dispara quando `parent.has_text_original` está presente e o `has_text` do plano contém um `observed_value` como substring, mas o código emitido usa o literal (match exato ou embutido no seletor) em vez de `row.get(...)` dinâmico. O `detail` do erro nomeia as chaves candidatas derivadas ou degrada para uma mensagem genérica quando o match é ambíguo (dois `observed_value` iguais, ex. `'2026'` podendo ser `ano_modelo` ou `ano_fabricacao`) ou vazio.
+
+### C. Manifest de proveniência (`code/generation_manifest.json`)
+
+Toda geração bem-sucedida (híbrida ou full-LLM) grava `code/generation_manifest.json` ao lado do bot:
+
+```json
+{
+  "generator_version": "hybrid-1",
+  "plan_checksum": "sha1...",
+  "steps": {
+    "st_010": {"provenance": "deterministic", "reason": "C1-C9 nenhuma disparou", "block_sha1": "..."},
+    "st_062": {"provenance": "cognitive", "reason": "C3: Padrão Q"},
+    "st_023": {"provenance": "cognitive_patched", "reason": "correção QA cirúrgica aplicada sobre bloco originalmente deterministic"}
+  }
+}
+```
+
+* `generator_version`: `"hybrid-1"` ou `"full-llm"` — a rota full-LLM **sempre sobrescreve** o manifest com `steps: {}`, então um manifest híbrido obsoleto nunca sobrevive a uma regeneração não-híbrida.
+* `plan_checksum`: sha1 do plano usado nesta geração — uma re-sanitização que renumera `step_id`s degrada qualquer lógica dirigida por manifest a um no-op em vez de misfire contra um mapa obsoleto.
+* `provenance` por step: `deterministic`, `cognitive`, ou `cognitive_patched` (quando uma correção cirúrgica QA posterior toca um bloco originalmente emitido determinístico).
+* `CognitiveGateway.is_active()` continua exigido no início de toda geração, mesmo quando o plano vai resolver para zero slots cognitivos — o híbrido economiza chamadas de LLM, não a exigência de API key/gateway.
+
+### D. Política anti-drift no Ralph Loop (`_restore_deterministic_blocks`)
+
+Dentro de cada tentativa do Ralph Loop, blocos `deterministic` que caem **fora** do escopo da correção/reflection atual são re-splicados na sua forma canônica (`_restore_deterministic_blocks` + `_compute_restore_target_scope`) antes de revalidar — isso impede que uma reflection full-file "melhore" (ou corrompa) silenciosamente um bloco que já estava correto por construção. Falhas de conteúdo em um bloco recém-restaurado são fail-fast; falhas de ordem/contagem (`STEP_ID_MISMATCH` etc.) não interrompem a restauração.
+
+**Guard de `lineno` órfão:** se um erro do diff atual tem `lineno`/`linenos` mas nenhum bloco `# [PASSO N]` conhecido cobre essa linha (ex.: erro na assinatura de `execute_scenario_default`, que fica fora de qualquer bloco de passo), o cálculo de escopo sinaliza `scope_incomplete=True` e força fallback de **arquivo inteiro** nessa tentativa — em vez de ficar preso reenviando só os `step_id`s conhecidos para sempre sem nunca corrigir o erro real (achado durante o gate H8, retry 3 do backlog híbrido).
 
 ---
 
@@ -189,6 +253,7 @@ Determinadas correções mecânicas não requerem uma nova iteração da LLM, o 
 * **Correção de Métodos Alucinados:** Se a LLM chamar um método inexistente no runner (ex: `runner.select_native_resilient`), mas houver apenas um candidato próximo no SDK (ex: `runner.select_option_native_resilient`), o gerador substitui a chamada diretamente usando análise de similaridade (`difflib.get_close_matches`).
 * **Instanciações Espúrias:** Se a LLM instanciar múltiplos `TransactionRunner` dentro do escopo de funções (o que geraria erro de inicialização), o método `_strip_stray_transaction_runner_calls` varre a AST e remove os nós duplicados.
 * **Reordenação de Passos:** Se os passos gerados possuírem os IDs corretos, mas estiverem fora da sequência do plano de execução, o método `reorder_steps_to_match_plan` reordena as instruções no nível da AST.
+* **Assinatura de `execute_scenario_default`:** Se `_validate_scenario_function_signature` reportar `INVALID_SCENARIO_SIGNATURE`/`WRONG_SCENARIO_PARAM_ORDER` e os nomes de parâmetro da LLM forem exatamente `{page, row, runner}` (só a ordem errada, sem `*args`/`**kwargs`/defaults), `_rewrite_scenario_signature_to_canonical` reescreve a assinatura via AST para `(page, row, runner)` sem nova chamada de LLM. Nomes alienígenas (a LLM inventou outro nome) não disparam o autofix — cai para o fluxo normal de correção.
 
 ---
 
@@ -247,6 +312,8 @@ O gerador de código requer as seguintes variáveis configuradas no ambiente do 
 * `AEGIS_COGNITIVE_CODER_MODEL` (Opcional): Modelo focado especificamente na escrita de código.
 * `AEGIS_CODEGEN_MAX_RETRIES` (Opcional): Limite de tentativas no Ralph Loop (padrão `5`).
 * `AEGIS_DEBUG_DUMP_BOT` (Opcional): Caminho do arquivo para salvar dumps de depuração durante tentativas falhas.
+* `AEGIS_CODEGEN_HYBRID` (Opcional, padrão `true`): ativa a geração híbrida determinística+cognitiva (Seção 3.5). `false` força o fluxo full-LLM legado (arquivo inteiro sempre por LLM).
+* `AEGIS_CODEGEN_FORCE_LLM_STEPS` (Opcional): CSV de `step_id`s a rebaixar manualmente para cognitivo mesmo que `classify_step` os classificasse como determinísticos.
 
 ### Interface de Linha de Comando (CLI)
 Para compilar o código de um robô manualmente pelo terminal, execute:
@@ -269,3 +336,5 @@ A tabela abaixo compila as principais falhas identificadas no processo de geraç
 | **`FAIL: MISSING_REQUIRED_WAIT`** | A LLM removeu um `time.sleep` ou espera explícita requerida por uma correção pendente anterior. | O gerador injetará o erro no próximo prompt do Ralph Loop e o modo cirúrgico atuará diretamente no passo falho para reinserir a espera. |
 | **`ValueError: time data ... does not match format`** | A LLM inventou uma formatação ou parse de data sem evidência. | O playbook enforça o uso do `observed_value` bruto sem conversões. Certifique-se de que os dados do dataset correspondem ao formato do formulário. |
 | **`FAIL: EXTRA_STEPS`** | A LLM adicionou interações extras baseando-se em colunas extras do dataset. | Delete o bloco extra. O gerador proíbe a criação de passos não mapeados originalmente no `plano_execucao.json`. |
+| **`FAIL: HARDCODED_PARENT_HAS_TEXT`** | Um step de Padrão Q (C3) foi emitido com o literal gravado em `parent.has_text` em vez de composição dinâmica `row.get(...)` — regride para valor de negócio fixo (mesmo bug em qualquer regeneração com dataset de 2+ linhas). | O `detail` do erro nomeia as chaves candidatas; a correção cirúrgica reenvia o slot com a prescrição Q-a (Seção 3.5-B). |
+| **`EXTRA_STEPS` inesperado num ciclo cirúrgico após um `required_reopen` já resolvido** | A tolerância de `EXTRA_STEPS` a um step `*_reopen` (`step_validator.py`, `planned_set_for_reopen`) só vale enquanto a correção `required_reopen` que o originou está em `pending_corrections`. Assim que ela é marcada `applied`/`resolved`, o bloco reopen sai da lista de exceções e qualquer ciclo QA subsequente mirando OUTRO step falha imediatamente. Gap conhecido, fora do escopo do gerador híbrido (achado no gate H8, retry8). | Evitar rodar ciclo cirúrgico QA com um reopen `applied` ainda no arquivo; ou re-derivar a tolerância a partir dos blocos de fato presentes no bot em vez do status da correção (correção estrutural não implementada). |

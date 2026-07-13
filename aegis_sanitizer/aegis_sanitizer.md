@@ -34,6 +34,10 @@ O **Aegis Sanitizer** consome a telemetria bruta gravada pelo BlackBox (`gravaca
 * **Compilador tem a palavra final sobre reintroduzir um step suprimido (D3/D6).** Um gesto físico julgado redundante ou ruído de gravação não é apagado — vira `step_role`/`suppression_reason` num `sup_NNN`. Se uma correção acumulada ou o próprio fluxo exigir, o Code Generator (Fase 4) pode reintroduzi-lo reusando o `step_id` já existente, nunca inventando um novo.
 * **Duas camadas de supressão, duas causas diferentes.** Nível-evento (`sanitizer_class`, regras R1-R4 em `_classify_raw_events`) cobre ruído de captura (duplicação/overlay). Nível-step (`step_role`/`sup_NNN`, produzido dentro de `_write_execution_plan`) cobre correções feitas durante a própria gravação (o usuário reabriu um dropdown e escolheu outra opção) e cliques fantasmas de bubbling. As duas são independentes e podem ambas aparecer no mesmo `relatorio.md`.
 
+### Gap conhecido: fidelidade em autocompletes dependentes (achado no gate H8 do gerador híbrido, 2026-07-13)
+
+Uma cadeia de autocomplete Angular Material onde um campo (ex. "Versão") só popula depois que campos anteriores ("Marca", "Modelo") já foram selecionados (`main.js:1852-1856` do Portal Segura de referência) expõe um gap real de fidelidade: o Sanitizer emite todos os `fill`s do grupo e depois todos os `click`s de opção, na ordem física da gravação — não intercalados por dependência. Combinado com `fill_human_like` (`aegis_runner/runner.py`) disparando `blur` incondicional ao final da digitação (o que fecha o painel de autocomplete sempre que HUMAN_LIKE é a estratégia do campo que precede o clique), o `click` da opção seguinte pode falhar 100% das vezes com timeout — o painel nunca reabre sozinho. Workaround validado (fora do Sanitizer, via `correcoes_acumuladas.json`): `required_reopen` — re-disparar o campo anterior com `strategy="DIRECT"` (nunca HUMAN_LIKE) entre a seleção e o clique da opção. Correção estrutural real (não implementada): (1) emitir a ordem fiel intercalada fill→seleção→próximo campo para autocompletes dependentes; (2) emitir automaticamente um `required_reopen` antes do clique de opção quando o fill anterior puder ter usado HUMAN_LIKE. Ver `.specs/plano-codegen-hibrido-deterministico.md` Seção 8 ("Fora de escopo") para a investigação completa.
+
 ---
 
 ## 🏗️ 2. Arquitetura de Dados e Integração
@@ -261,6 +265,8 @@ def _source_indices(step: dict) -> list:
 4. **`COUNT_MISMATCH`**: compara só o subconjunto `required` — ids `optional`/`skip` não emitidos não contam como "faltando".
 
 Um plano v1 (sem nenhum `execution_hint`) tem todos os ids implicitamente `required`, reduzindo este validador ao comportamento anterior — retrocompatibilidade total.
+
+**Caveat do `required_reopen` (gap conhecido, achado no gate H8 do gerador híbrido):** um step ad-hoc `*_reopen` (workaround do gap de autocompletes dependentes acima) é tolerado como não-`EXTRA_STEPS` só enquanto a correção `required_reopen` que o originou ainda está em `pending_corrections`. Assim que ela é marcada `applied`/`resolved`, o bloco reopen sai do conjunto de tolerância (`planned_set_for_reopen`) e passa a contar como `EXTRA_STEPS` — qualquer ciclo cirúrgico QA subsequente mirando outro step (sem relação com o reopen) falha imediatamente. Não corrigido; ver `aegis_code_generator.md` Seção 8.
 
 `validate_resilience_patterns` também é ciente de `execution_hint`: um step `optional`/`skip` que a LLM decidiu não emitir não é cobrado pelas checagens de padrão de resiliência (seletor encadeado, `weak_selector`, coordenadas físicas) — só steps efetivamente `required` são.
 
