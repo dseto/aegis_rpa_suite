@@ -32,6 +32,7 @@ Não mapeie cada dependência. Só localize os arquivos-chave que você vai ler:
 - `dicionario.json` (saída do Recorder/Sanitizer)
 - `dataset_inicial.json` (dados de entrada)
 - `plano_execucao.json` (saída do Sanitizer)
+- `code/generation_manifest.json` (saída do Code Generator híbrido, Fase 4 — só existe em bots gerados com `AEGIS_CODEGEN_HYBRID=true`; se ausente, o bot é full-LLM ou pré-híbrido, não é sintoma de erro)
 - `code/bot_producao.py` (saída do Code Generator)
 
 ### 2. Investigar — Cadeia de Artefatos
@@ -124,6 +125,29 @@ Siga esta ordem **exata** — ela reproduz a cadeia real do pipeline:
 
 **Nota — schema v2 (`plano_execucao.json` de alta fidelidade):** planos gerados pelo Sanitizer atual usam dois espaços de id disjuntos — `st_NNN` (steps emitíveis, `execution_hint` ausente/`"required"`/`"optional"`) e `sup_NNN` (steps suprimidos, `execution_hint: "skip"`, sempre com `step_role` + `suppression_reason`). Um `bot_producao.py` que referencia só `st_` é normal e esperado, não um sintoma de dessincronia — `sup_` ausente do código é o caso comum. Campos úteis para forense: `original_index` (posição no `gravacao.json` bruto, antes de qualquer merge/reordenação — rastreia um step até o(s) evento(s) físico(s) de origem), `merged_from`/`source_events` (lista de `original_index` absorvidos quando o step é resultado de um merge, ex.: cliques duplicados ou par abridor+opção de dropdown), e `sanitizer_class` (também presente nos eventos de `gravacao.json` em si — `role`/`keep`/`reason` — mostra por que um evento bruto foi classificado como ruído mesmo que nunca tenha sido fisicamente removido). Se o bot referencia um `step_id` que não existe no plano (nem como `st_` nem como `sup_`), isso é sempre um id alucinado pela LLM — não confundir com um `sup_` legitimamente suprimido.
 
+#### D.1. Manifest de Proveniência (`code/generation_manifest.json` — Saída do Code Generator híbrido, Fase 4)
+
+Elo novo na cadeia, entre `plano_execucao.json` e `code/bot_producao.py`. Só existe quando o bot foi gerado (ou regenerado) com `AEGIS_CODEGEN_HYBRID=true`; ausência não é sintoma — significa full-LLM ou bot pré-híbrido.
+
+**O que verificar:**
+- `generator_version`: `"hybrid-1"` (motor determinístico ativo) ou `"full-llm"` (rota legada — `steps` sempre vazio nesse caso).
+- `plan_checksum`: sha1 do `plano_execucao.json` usado NA geração que produziu este manifest.
+- `steps["<step_id>"].provenance`: `"deterministic"` (emitido mecanicamente por `deterministic_emitter.py`, zero LLM), `"cognitive"` (slot preenchido pela LLM), ou `"cognitive_patched"` (bloco originalmente `deterministic` que uma correção QA posterior tocou).
+
+**Buscar:**
+```json
+{
+  "generator_version": "hybrid-1",
+  "plan_checksum": "a1b2c3...",
+  "steps": {
+    "st_010": {"provenance": "deterministic", "reason": "C1-C10 todas satisfeitas", "block_sha1": "..."},
+    "st_014": {"provenance": "cognitive", "reason": "C3: Padrão Q..."}
+  }
+}
+```
+
+**Por que importa para o diagnóstico:** `provenance` distingue duas classes de bug completamente diferentes quando um step do bot está errado — `"deterministic"` aponta para um bug no emissor (`deterministic_emitter.py`), mecânico e reprodutível em qualquer plano com a mesma forma; `"cognitive"`/`"cognitive_patched"` aponta para alucinação/julgamento da LLM naquela chamada específica, não necessariamente reprodutível. Também é o sinal mais barato de manifest **stale**: se `plan_checksum` não bate com o sha1 atual de `plano_execucao.json` (o projeto foi re-sanitizado depois da última geração — renumeração de `step_id`s é o caso comum, working agreement nº 4 do `CLAUDE.md`), o manifest em disco descreve uma geração anterior e não deve ser usado para atribuir culpa a um `step_id` específico sem antes confirmar que os ids ainda correspondem.
+
 #### E. Código Gerado (`code/bot_producao.py` — Saída do Code Generator, Fase 4)
 
 **O que verificar:**
@@ -157,7 +181,7 @@ runner.fill_resilient(
 
 ### 3. Comparações Cruzadas (a Cadeia)
 
-Agora que leu os 5 artefatos, faça estas comparações **na ordem**:
+Agora que leu os artefatos (5 sempre presentes + o manifest quando o bot for híbrido), faça estas comparações **na ordem**:
 
 1. **gravacao.json vs dicionario.json:**
    - Todos os seletores de `gravacao.json` estão em `dicionario.json`?
@@ -171,6 +195,11 @@ Agora que leu os 5 artefatos, faça estas comparações **na ordem**:
 3. **plano_execucao.json vs bot_producao.py:**
    - Todo `step_id` em `bot_producao.py` existe em `plano_execucao.json`?
    - Se não: plano é de uma geração anterior ou o bot foi editado manualmente.
+
+3.1. **plano_execucao.json vs generation_manifest.json vs bot_producao.py (só bots híbridos):**
+   - `plan_checksum` do manifest bate com o sha1 de `plano_execucao.json` atual? Se não, o manifest é de uma geração anterior a uma re-sanitização — trate qualquer `provenance` dele com cautela antes de atribuir culpa a um step.
+   - Para um step específico com defeito: confira `steps["<step_id>"].provenance` — `"deterministic"` direciona a investigação para `aegis_sanitizer/deterministic_emitter.py` (bug mecânico, reproduzível); `"cognitive"`/`"cognitive_patched"` direciona para o texto do slot que a LLM recebeu naquela chamada (julgamento pontual, não necessariamente reproduzível).
+   - Todo `step_id` de `steps` no manifest existe em `plano_execucao.json`? Se não, o manifest também está desatualizado.
 
 4. **dataset_inicial.json vs bot_producao.py:**
    - Todo `row.get("<chave>")` em `bot_producao.py` existe em `dataset_inicial.json`?
@@ -202,9 +231,10 @@ A cadeia está sincronizada? Onde quebrou?
 - [ ] dicionario.json
 - [ ] dataset_inicial.json
 - [ ] plano_execucao.json
+- [ ] code/generation_manifest.json (opcional — só presente em bots gerados com `AEGIS_CODEGEN_HYBRID=true`; ausência não é erro)
 - [ ] bot_producao.py
 
-Se algum está faltando, reporta agora qual fase não foi completada ainda.
+Se algum dos 5 primeiros está faltando, reporta agora qual fase não foi completada ainda. O manifest ausente só é reportado como achado se o bot APARENTAR ser híbrido (blocos determinísticos óbvios) sem manifest correspondente — nesse caso é sinal de geração/regeneração incompleta ou manifest apagado manualmente.
 
 #### Dessincronia Detectada (máx. 5, ordem de onde está a "falha")
 
@@ -235,8 +265,8 @@ A menor ação que resolve o mismatch sem refazer a cadeia inteira. Exemplos:
 
 - [ ] Usuário confirmou qual é o caminho do teste?
 - [ ] Usuário descreveu o sintoma concreto?
-- [ ] Leu os 5 artefatos (gravacao, dicionario, dataset, plano, bot)?
-- [ ] Fez as 5 comparações cruzadas em ordem?
+- [ ] Leu os artefatos (gravacao, dicionario, dataset, plano, manifest se existir, bot)?
+- [ ] Fez as comparações cruzadas em ordem, incluindo 3.1 (plano vs manifest vs bot) quando o manifest existir?
 - [ ] Considerou hipótese de ação recente (releu `.specs/licoes-aprendidas-melhorias-precisao.md`)?
 - [ ] Reportou com arquivo + linha + trecho concreto, não genérico?
 - [ ] Máx. 5 dessincronia reportadas, bem priorizadas?
