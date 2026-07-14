@@ -205,6 +205,18 @@ JS_MINIMAL_LISTENERS = """
                 }
             }
             if (!labelText) {
+                // Fix 3: procura label dentro do parent imediato (DIV wrapper case)
+                let parentDiv = el.parentElement;
+                if (parentDiv) {
+                    let labelInParent = parentDiv.querySelector('label');
+                    if (labelInParent) {
+                        labelText = labelInParent.innerText || labelInParent.textContent || "";
+                        selectorType = "parent-div-label";
+                        labelNode = labelInParent;
+                    }
+                }
+            }
+            if (!labelText) {
                 const formField = el.closest('mat-form-field');
                 if (formField) {
                     const labelEl = formField.querySelector('.mat-form-field-label');
@@ -245,6 +257,28 @@ JS_MINIMAL_LISTENERS = """
                     }
                     return `div:has-text('${cleanLabel}') ${tag}`;
                 }
+            }
+            return null;
+        },
+        // 4.5) Fix 1: input com tipo específico (range, color, etc) sem identidade textual
+        function typeSpecificInputStrategy(el) {
+            if (el.tagName !== 'INPUT') return null;
+            let inputType = el.getAttribute('type') || 'text';
+            if (['range', 'color', 'file', 'hidden'].includes(inputType)) {
+                // Tenta achar label no parent imediato (Fix 1)
+                let labelText = "";
+                let parentDiv = el.parentElement;
+                if (parentDiv) {
+                    let label = parentDiv.querySelector('label');
+                    if (label) {
+                        labelText = (label.innerText || label.textContent || "").trim();
+                    }
+                }
+                if (labelText && labelText.length < 45) {
+                    return `div:has(label:has-text('${labelText}')) input[type='${inputType}']`;
+                }
+                // Fallback: tipo é identidade única
+                return `input[type='${inputType}']`;
             }
             return null;
         },
@@ -350,10 +384,13 @@ JS_MINIMAL_LISTENERS = """
                 baseSelector = el.tagName.toLowerCase();
                 let textResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[2](el); // textStrategy
                 let formFieldResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[3](el); // formFieldStrategy
+                let typeSpecificResult = AEGIS_SELECTOR_STRATEGY_PROVIDERS[4](el); // typeSpecificInputStrategy (Fix 1)
                 if (textResult) {
                     baseSelector = textResult;
                 } else if (formFieldResult) {
                     baseSelector = formFieldResult;
+                } else if (typeSpecificResult) {
+                    baseSelector = typeSpecificResult;
                 }
                 // Se nenhuma estratégia específica se aplicou, mantém o fallback de tag (5).
             }
