@@ -232,3 +232,44 @@ Todas as 3 execuções deste gate — **usando o bot de referência ORIGINAL, nu
 Nenhuma regressão detectada no bot de referência compilado. Taxa de sucesso permanece em 0% (idêntica ao baseline, sem novo piso inferior), nenhum novo tipo de falha sistêmica foi introduzido, `correcoes_acumuladas.json` cresceu dentro da faixa já observada historicamente, e o tempo de execução não explodiu. A causa da falha transacional (drift de data do dataset vs. regra de negócio de ano futuro) é confirmadamente pré-existente e independente de qualquer mudança de código desta demanda — reproduzida de forma idêntica no bot original sem geração híbrida.
 
 **Ressalva formal (herdada):** M3 (fallback_selectors) e M5 (weak_selector) continuam não exercitados neste bot compilado. Inalterado por este gate.
+
+---
+
+# Gate pós-redução-parent-has_text (camada determinística em click_chained/fill_chained)
+
+**Data da execução do gate:** 2026-07-14
+**Motivo:** Mudança no runner (`aegis_runner/runner.py`): nova camada determinística `_reduce_parent_has_text`/`_retry_chained_with_reduced_parent` — quando `parent.filter(has_text=...)` de um gesto encadeado dá 0 match (literal gravado cruza fronteira de elemento — achado do piloto fimm_billing 2026-07-14), corta tokens do fim exigindo CHILD único antes de escalar pra cognitivo/coordenada; inclui fallback de digitação via teclado para `fill()` rejeitado com `Malformed value` (ex.: `input[type=date]`).
+**Commit no momento do gate:** `f7bba19` + mudanças não commitadas desta sessão (runner + sanitizer/emitter/code_generator design-time).
+**Bot regenerado?** **NÃO.** `code/bot_producao.py` e `plano_execucao.json` do projeto de referência intocados nesta sessão.
+**Comando executado (3x, idêntico aos gates anteriores):**
+
+```
+python projects/portal_segura/tests/001_teste/code/bot_producao.py
+```
+
+**Ambiente:** `AEGIS_BROWSER_HEADLESS=true` (igual ao gate H8), `AEGIS_COGNITIVE_ENABLED=true`, provider `openrouter`. Site alvo `http://localhost:5173/` confirmado no ar (HTTP 200) antes de iniciar.
+
+## Métricas por execução
+
+| # | Taxa de sucesso | SUCCESS/HEALED/FAILED (passos) | Tempo (s) | Ponto de falha | Classe de falha |
+|---|---|---|---|---|---|
+| 1 | 0/1 (0%) | 41/3/2 | 158.6 | `st_038` (CEP de Pernoite) | mesma família BUSINESS_VALIDATION/self-healing do gate H8 |
+| 2 | 0/1 (0%) | 41/3/2 | 158.9 | `st_038` — idêntico | idêntica |
+| 3 | 0/1 (0%) | 41/3/2 | 157.4 | `st_038` — idêntico | idêntica |
+
+### Média e comparação
+
+- **Taxa de sucesso:** 0/1 (0%) — idêntica ao baseline e a todos os gates (sem piso inferior).
+- **Perfil de passos:** 41/3/2 em TODAS as execuções — byte-idêntico ao gate H8 (2026-07-13), mesmos 3 passos HEALED (`st_024`, `st_025`, `st_037`, todos `visual_ai`) e mesmo ponto de falha (`st_038`).
+- **Camada nova NÃO disparou** (0 ocorrências de "filtro reduzido"/"Retentativa com parent reduzido" nos 3 logs) — o bot de referência não tem gesto encadeado com `parent.has_text` de 0 match; delta comportamental zero, como esperado.
+- **Nenhum novo tipo de falha:** 0 Tracebacks/ImportError/AttributeError/NameError nos 3 logs.
+- **`correcoes_acumuladas.json`:** estável em 26 entradas / 3 `needs_review` (crescimento zero).
+- **Tempo médio:** 158.3s vs 151.35s do gate H8 (+4.6%, muito abaixo do limite de +50%).
+
+## Veredito
+
+### ✅ APROVADO
+
+Zero regressão: perfil de execução (taxa, passos, healings, ponto de falha, correções) idêntico ao gate H8; a camada nova é comprovadamente inerte quando o `parent.has_text` gravado casa normalmente (só ativa no cenário de 0 match, validado à parte no piloto fimm_billing com recuperação determinística do `st_014`). Tempo dentro da faixa.
+
+**Ressalva formal (herdada):** M3/M5 continuam não exercitados neste bot compilado. Inalterado.

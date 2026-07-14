@@ -12,6 +12,14 @@ if PROJECT_ROOT not in sys.path:
 
 sys.stdout.reconfigure(encoding='utf-8')
 
+# Tags de container estrutural que só aparecem como seletor quando o
+# tagStrategy do recorder (recorder.py:252) não achou nada melhor — clique em
+# área "morta" da página. Usado pela regra container_click (ver
+# build_step_from_event) pra rebaixar esses cliques a execution_hint='optional'.
+_GENERIC_CONTAINER_CLICK_TAGS = frozenset(
+    {"nav", "main", "body", "html", "header", "footer", "aside", "section"}
+)
+
 def evaluate_selector_reliability(selector):
     """Calcula o score de confiabilidade do seletor e retorna (score, tipo)."""
     if not selector:
@@ -1430,6 +1438,28 @@ class SanitizerService:
             confidence = ev.get("confidence")
             if confidence is not None and confidence < 70:
                 step["weak_selector"] = True
+            # Clique em container genérico (selector == tag pura, produto do
+            # tagStrategy do recorder quando o clique cai em área "morta" —
+            # padding do sidebar, fundo do main) com confidence baixa é quase
+            # sempre ruído de navegação sem efeito de negócio: o innerText
+            # capturado é do container inteiro (multi-linha, truncado em 50
+            # chars), inviável como âncora, e o passo escala pra self-healing
+            # caro em toda execução (medido live, piloto fimm_billing
+            # 2026-07-14: 2×5s timeout + ~60s de visão LLM por passo). Rebaixa
+            # pra execution_hint='optional' — continua st_NNN (numeração
+            # intacta), a decisão de emitir passa a ser do slot cognitivo
+            # (contrato D6) e o validador aceita presença OU ausência.
+            if (
+                ev_type == "click"
+                and confidence is not None
+                and confidence < 70
+                and selector in _GENERIC_CONTAINER_CLICK_TAGS
+            ):
+                step["execution_hint"] = "optional"
+                step.setdefault("sanitization_notes", []).append(
+                    f"container_click: clique em container genérico '{selector}' com "
+                    f"confidence {confidence} — rebaixado para execution_hint='optional'"
+                )
             # Propaga fallback_selectors do evento (gravados pelo recorder como
             # candidatos alternativos únicos) pro step do plano, aplicando as
             # mesmas sanitizações do seletor primário: remoção de token

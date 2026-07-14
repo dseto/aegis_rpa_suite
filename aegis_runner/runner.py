@@ -1754,6 +1754,124 @@ class TransactionRunner:
 
         return child_clean
 
+    def _reduce_parent_has_text(self, page, parent_selector: str, has_text: str, child_selector: str):
+        """
+        Recuperação determinística pra `parent.has_text` gravado com texto que
+        cruza fronteira de elemento (recorder captura o innerText do container
+        já colapsado em espaços e truncado em 40 chars — ex.:
+        "Valor de Liquidação (R$) BRL Vencimento ", onde "(R$)", "BRL" e
+        "Vencimento" são elementos irmãos): Playwright `filter(has_text=...)`
+        nunca casa esse literal (0 match por construção, verificado live no
+        piloto fimm_billing 2026-07-14), derrubando click_chained/fill_chained
+        pra self-healing cognitivo em toda execução.
+
+        Corta tokens do FIM do literal, um a um, e retorna o primeiro prefixo
+        cujo CHILD resolvido através dos parents filtrados é EXATAMENTE 1
+        elemento. A unicidade é exigida no ALVO (child), não no parent:
+        containers aninhados da mesma classe (ex.: `.grid` dentro de `.grid`)
+        fazem o mesmo texto casar 2+ parents ancestrais legitimamente (medido
+        live: 2 parents, child único), enquanto a ambiguidade PERIGOSA — duas
+        linhas irmãs com o mesmo prefixo, cada uma com seu child — aparece
+        como child_count > 1 e aborta na hora em vez de arriscar a linha
+        errada. Retorna None quando nenhuma redução com alvo único existe (a
+        cadeia de fallback segue idêntica ao comportamento anterior).
+        """
+        tokens = (has_text or "").split()
+        if len(tokens) < 2:
+            return None
+        for cut in range(1, len(tokens)):
+            candidate = " ".join(tokens[:-cut])
+            if len(candidate) < 3:
+                return None
+            try:
+                child_count = int(
+                    page.locator(parent_selector)
+                    .filter(has_text=candidate)
+                    .locator(child_selector)
+                    .count()
+                )
+            except Exception:
+                return None
+            if child_count == 1:
+                return candidate
+            if child_count > 1:
+                # Alvo ambíguo — prefixo mais curto só fica MAIS ambíguo. Aborta.
+                return None
+        return None
+
+    def _retry_chained_with_reduced_parent(self, page, parent: dict, child_sel_clean: str,
+                                           action: str, timeout: int, text_val: str = None,
+                                           strategy: str = "DIRECT", delay_ms: int = 60) -> bool:
+        """
+        Retenta UMA vez o gesto encadeado (click ou fill) com o parent
+        re-filtrado pelo has_text reduzido por `_reduce_parent_has_text`.
+        Camada determinística — roda ANTES do self-healing cognitivo (e é
+        permitida mesmo sob strict, mesma regra dos fallback_selectors: não é
+        palpite, é o mesmo parent com filtro validado único no DOM ao vivo).
+        Retorna True se o gesto completou; False devolve o fluxo pra cadeia
+        de fallback existente, intacta.
+        """
+        reduced = self._reduce_parent_has_text(
+            page, parent.get("selector", ""), parent.get("has_text"), child_sel_clean
+        )
+        if not reduced:
+            return False
+        print(
+            f"[AEGIS RUNNER] Parent has_text '{parent.get('has_text')}' sem match "
+            f"(texto cruza elementos?). Retentando com filtro reduzido único: '{reduced}'..."
+        )
+        try:
+            # O child é resolvido pela UNIÃO dos parents filtrados (nunca
+            # parent.first): containers aninhados fazem o prefixo casar 2+
+            # parents ancestrais e o child pode não estar sob o PRIMEIRO da
+            # lista — a unicidade já foi validada no child pelo redutor.
+            target = (
+                page.locator(parent["selector"])
+                .filter(has_text=reduced)
+                .locator(child_sel_clean)
+                .first
+            )
+            if action == "click":
+                target.wait_for(state="visible", timeout=timeout)
+                target.scroll_into_view_if_needed(timeout=timeout)
+                target.click(timeout=timeout, force=True)
+                return True
+            # fill
+            if strategy == "HUMAN_LIKE":
+                target.click(timeout=timeout)
+                target.press("Control+A")
+                target.press("Backspace")
+                time.sleep(0.1)
+                for char in (text_val or ""):
+                    page.keyboard.type(char)
+                    time.sleep(delay_ms / 1000.0)
+                page.evaluate("""() => {
+                    const el = document.activeElement;
+                    if (el) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""")
+            else:
+                try:
+                    target.fill(text_val or "", timeout=timeout)
+                except Exception as fill_err:
+                    if "Malformed value" not in str(fill_err):
+                        raise
+                    # Input nativo com formato interno estrito (ex.:
+                    # type="date" exige ISO no fill(), mas a UI localizada
+                    # aceita dd/mm/aaaa digitado): preenche via teclado, do
+                    # mesmo jeito que o gesto humano gravado fez.
+                    print(f"[AEGIS RUNNER] fill() rejeitou o valor ({fill_err}). Digitando via teclado no mesmo alvo...")
+                    target.click(timeout=timeout)
+                    target.press("Control+A")
+                    target.press("Backspace")
+                    page.keyboard.type(text_val or "", delay=30)
+            return True
+        except Exception as retry_err:
+            print(f"[AEGIS RUNNER] Retentativa com parent reduzido também falhou: {retry_err}")
+            return False
+
     def click_chained(self, page, parent: dict, child: dict, target_description: str,
                       timeout: int = 5000, original_coords: tuple = None, step_id=None, strict: bool = False) -> bool:
         """
@@ -1813,6 +1931,18 @@ class TransactionRunner:
             except Exception as e:
                 print(f"[AEGIS RUNNER] Tentativa {attempt} falhou para click_chained: {e}")
                 if attempt == 2:
+                    # Camada determinística: parent.has_text gravado com texto
+                    # cruzando elementos (0 match por construção) — tenta o
+                    # filtro reduzido único antes de escalar pra cadeia de
+                    # falha (que termina em cognitivo/coordenada).
+                    if parent.get("has_text") and self._retry_chained_with_reduced_parent(
+                        page, parent, child_sel_clean, "click", timeout
+                    ):
+                        self._log_step(step_id=step_id, action="click_chained", selector=selector_full,
+                                       target_description=target_description, status="HEALED",
+                                       healing_method="parent_has_text_reduced")
+                        self._register_healing_for_review(step_id, selector_full, "click", "parent_has_text_reduced")
+                        return True
                     return self._handle_click_failure(
                         page,
                         query_selector,
@@ -1907,6 +2037,18 @@ class TransactionRunner:
 
         except Exception as e:
             print(f"[AEGIS RUNNER] Falha no fill_chained: {e}")
+            # Camada determinística (antes de strict/cognitivo — mesma regra
+            # dos fallback_selectors): parent.has_text cruzando elementos →
+            # retenta com filtro reduzido validado único no DOM.
+            if parent.get("has_text") and self._retry_chained_with_reduced_parent(
+                page, parent, child_sel_clean, "fill", timeout,
+                text_val=text_val, strategy=strategy, delay_ms=delay_ms
+            ):
+                self._log_step(step_id=step_id, action="fill_chained", selector=selector_full,
+                               target_description=target_description, status="HEALED",
+                               healing_method="parent_has_text_reduced")
+                self._register_healing_for_review(step_id, selector_full, "fill", "parent_has_text_reduced")
+                return True
             is_flaky_step = self.flaky_step_ids.get(step_id, False)
             flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
             if (strict or is_flaky_step) and not flaky_healing_unlocked:

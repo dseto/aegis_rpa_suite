@@ -433,5 +433,81 @@ class TestWriteExecutionPlanV2ChainSuppression(unittest.TestCase):
         self.assertEqual(sts[0]["source_events"], [0, 1])
 
 
+class TestWriteExecutionPlanV2ContainerClickOptional(unittest.TestCase):
+    """
+    Regra container_click (achado do piloto fimm_billing, 2026-07-14):
+    clique cujo seletor é tag pura de container estrutural (produto do
+    tagStrategy do recorder) com confidence < 70 é ruído de navegação —
+    rebaixado a execution_hint='optional' (continua st_NNN, numeração
+    intacta; a decisão de emitir passa ao slot cognitivo via C2).
+    """
+
+    def setUp(self):
+        self.telemetry_dir = tempfile.mkdtemp(prefix="aegis_sanitizer_test_")
+        self.service = SanitizerService(telemetry_dir=self.telemetry_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.telemetry_dir, ignore_errors=True)
+
+    def test_low_confidence_container_click_becomes_optional(self):
+        events = [
+            {"type": "click", "selector": "#btn-login", "text": "Entrar", "confidence": 90},
+            {
+                "type": "click",
+                "selector": "nav",
+                "tag": "NAV",
+                "text": "TREASURY & LIQUIDITY\nCash Position\nWire Transfers\n",
+                "confidence": 40,
+            },
+            {"type": "click", "selector": "a:has-text('Billing Engine')", "text": "Billing Engine", "confidence": 75},
+        ]
+        plan = _classify_and_write(self.service, events)
+        sts = [s for s in plan["steps"] if s["step_id"].startswith("st_")]
+        self.assertEqual(len(sts), 3)
+
+        nav_step = next(s for s in sts if s["selector"] == "nav")
+        self.assertEqual(nav_step.get("execution_hint"), "optional")
+        self.assertTrue(nav_step.get("weak_selector"))
+        self.assertTrue(
+            any("container_click" in n for n in nav_step.get("sanitization_notes", [])),
+            "nota container_click ausente",
+        )
+        # Numeração st_ intacta — optional não vira sup_.
+        self.assertEqual([s["step_id"] for s in sts], ["st_001", "st_002", "st_003"])
+        self.assertEqual(plan["fidelity_summary"]["steps_optional"], 1)
+        self.assertEqual(plan["fidelity_summary"]["steps_required"], 2)
+
+        # Os outros cliques não recebem hint.
+        for s in sts:
+            if s["selector"] != "nav":
+                self.assertNotIn("execution_hint", s)
+
+    def test_container_click_without_confidence_field_is_untouched(self):
+        # Retrocompatibilidade: gravação antiga (sem campo confidence) nunca
+        # recebe o rebaixamento — mesma política do weak_selector.
+        events = [{"type": "click", "selector": "main", "tag": "MAIN", "text": "Painel"}]
+        plan = _classify_and_write(self.service, events)
+        sts = [s for s in plan["steps"] if s["step_id"].startswith("st_")]
+        self.assertEqual(len(sts), 1)
+        self.assertNotIn("execution_hint", sts[0])
+
+    def test_high_confidence_container_selector_is_untouched(self):
+        events = [{"type": "click", "selector": "nav", "tag": "NAV", "text": "Menu", "confidence": 80}]
+        plan = _classify_and_write(self.service, events)
+        sts = [s for s in plan["steps"] if s["step_id"].startswith("st_")]
+        self.assertEqual(len(sts), 1)
+        self.assertNotIn("execution_hint", sts[0])
+
+    def test_non_container_low_confidence_click_is_untouched(self):
+        # weak_selector sim, optional não — tag genérica fora da lista de
+        # containers estruturais (ex.: 'label') não é ruído de navegação.
+        events = [{"type": "click", "selector": "label", "tag": "LABEL", "text": "Aceito", "confidence": 40}]
+        plan = _classify_and_write(self.service, events)
+        sts = [s for s in plan["steps"] if s["step_id"].startswith("st_")]
+        self.assertEqual(len(sts), 1)
+        self.assertTrue(sts[0].get("weak_selector"))
+        self.assertNotIn("execution_hint", sts[0])
+
+
 if __name__ == "__main__":
     unittest.main()

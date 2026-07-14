@@ -139,6 +139,96 @@ class TestEmitClick(unittest.TestCase):
         code = _emit_click(step)
         self.assertNotIn(":has-text(", code)
 
+    def test_multiline_text_anchors_only_first_line(self):
+        # Caso real (fimm_billing st_006, 2026-07-14): innerText de container
+        # multi-linha. :has-text() do Playwright não casa texto que cruza
+        # fronteira de elemento — a âncora deve usar SÓ a primeira linha.
+        step = {
+            "step_id": "st_006",
+            "type": "click",
+            "selector": "nav",
+            "description": "Navegar pelo menu de Tesouraria e Liquidez",
+            "weak_selector": True,
+            "text": "TREASURY & LIQUIDITY\nCash Position\nWire Transfers\n",
+        }
+        code = _emit_click(step)
+        self.assertIn(":has-text('TREASURY & LIQUIDITY')", code)
+        self.assertNotIn("Cash Position", code.split("target_description")[0])
+
+    def test_truncated_single_line_text_drops_last_token(self):
+        # 50 chars exatos = assinatura do substring(0, 50) do recorder — o
+        # último token pode estar cortado no meio de uma palavra.
+        text = "Painel de Controle Financeiro Corporativo Configur"
+        self.assertEqual(len(text), 50)
+        step = {
+            "step_id": "st_008",
+            "type": "click",
+            "selector": "main",
+            "description": "Visualizar painel",
+            "weak_selector": True,
+            "text": text,
+        }
+        code = _emit_click(step)
+        self.assertIn(":has-text('Painel de Controle Financeiro Corporativo')", code)
+        self.assertNotIn("Configur", code.split("target_description")[0])
+
+    def test_truncated_multiline_uses_intact_first_line(self):
+        # Truncamento só afeta a ÚLTIMA linha — a primeira permanece íntegra.
+        text = "Gerenciamento de Acesso e Perfis (RBAC)\n\nConfigure"
+        self.assertEqual(len(text), 50)
+        step = {
+            "step_id": "st_008",
+            "type": "click",
+            "selector": "main",
+            "description": "Visualizar a tela de RBAC",
+            "weak_selector": True,
+            "text": text,
+        }
+        code = _emit_click(step)
+        self.assertIn(":has-text('Gerenciamento de Acesso e Perfis (RBAC)')", code)
+
+    def test_unviable_text_emits_no_anchor(self):
+        # Linha única truncada com 1 token só: nada viável sobra -> sem âncora.
+        step = {
+            "step_id": "st_009",
+            "type": "click",
+            "selector": "div",
+            "description": "Clique em token único truncado",
+            "weak_selector": True,
+            "text": "a" * 50,
+        }
+        code = _emit_click(step)
+        self.assertNotIn(":has-text(", code)
+
+    def test_classify_c5_rejects_unviable_text_material(self):
+        # C5 usa o mesmo juízo de viabilidade: weak_selector cujo único
+        # material é texto inviável cai pro slot cognitivo (nunca emitir
+        # deterministicamente um seletor sem âncora possível).
+        step = {
+            "step_id": "st_009",
+            "type": "click",
+            "selector": "div",
+            "description": "Clique em token único truncado",
+            "weak_selector": True,
+            "text": "a" * 50,
+        }
+        decision = classify_step(step)
+        self.assertEqual(decision.kind, "cognitive")
+        self.assertIn("C5", decision.reason)
+
+    def test_classify_c5_accepts_multiline_text_material(self):
+        # Multi-linha TEM material viável (primeira linha) -> não reprova em C5.
+        step = {
+            "step_id": "st_006",
+            "type": "click",
+            "selector": "nav",
+            "description": "Navegar pelo menu",
+            "weak_selector": True,
+            "text": "TREASURY & LIQUIDITY\nCash Position\nWire Transfers\n",
+        }
+        decision = classify_step(step)
+        self.assertEqual(decision.kind, "deterministic")
+
     def test_weak_selector_with_parent_has_text_does_not_double_anchor_child(self):
         step = {
             "step_id": "st_050",
@@ -672,7 +762,15 @@ def _force_classify_where_possible(step, dicionario=None, pending_corrections=No
     selector = step.get("selector") or ""
     text = step.get("text")
     if step.get("weak_selector"):
-        has_material = bool(parent.get("has_text")) or bool(text) or (":has-text(" in selector)
+        # Espelha o C5 real: material de texto só conta se sobrevive ao juízo
+        # de viabilidade (_viable_has_text_literal) — multi-linha/truncado não
+        # pode ser forçado a deterministic (emitiria sem âncora e reprovaria
+        # em WEAK_SELECTOR_WITHOUT_ANCHOR).
+        has_material = (
+            bool(parent.get("has_text"))
+            or bool(_de_module._viable_has_text_literal(text))
+            or (":has-text(" in selector)
+        )
         if not has_material:
             return EmissionDecision("cognitive", "forced-test: C5 sem material de ancoragem (genuinamente impossível)")
 

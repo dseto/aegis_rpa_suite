@@ -39,6 +39,7 @@ from aegis_code_generator.deterministic_emitter import (
     _plan_checksum as _deterministic_plan_checksum,
     _STEP_ANCHOR_RENUMBER_RE as _DETERMINISTIC_ANCHOR_RENUMBER_RE,
     build_skeleton as _build_hybrid_skeleton,
+    _indent_block as _indent_lines,
 )
 
 
@@ -1550,6 +1551,12 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
             "except Exception as _opt_err:\n"
             "    print(f\"[BOT] Passo opcional st_XXX pulado (não-fatal): {_opt_err}\")\n"
             "```\n"
+            "Default de decisão: um passo optional cujo `sanitization_notes` contenha "
+            "'container_click' é clique de navegação capturado em área morta da página "
+            "(seletor = tag pura de container como 'nav'/'main') — clicar nele não tem efeito "
+            "de negócio e só dispara o sensor CLICK_NO_EFFECT + self-healing caro em toda "
+            "execução. Para esses, NÃO EMITA, a menos que uma correção pendente exija "
+            "explicitamente o passo.\n\n"
             "Se decidir NÃO EMITIR (o elemento não é necessário neste fluxo), retorne o bloco-vazio "
             "EXATAMENTE assim — preservando o comentário 'AEGIS_COGNITIVE_SLOT' com o `step_id` "
             "original, ajustando SOMENTE o `motivo=` para justificar a omissão:\n"
@@ -1896,6 +1903,13 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         INCONDICIONAL (sem comparar `block_sha1`; `emit_step_block` é
         determinístico, então re-splicear é idempotente).
 
+        Também cobre slots cognitivos com `reason == "optional_omitted"`
+        (decisão de omissão tomada na chamada de slots da geração híbrida):
+        se um rewrite full-file posterior reintroduziu código real no lugar
+        do bloco-vazio, o bloco-vazio canônico é restaurado — a decisão de
+        NÃO emitir um passo optional é tão protegida contra drift quanto a
+        forma canônica de um bloco deterministic.
+
         Guardas de no-op (Seção 2.4 do plano): `manifest` ausente, `steps`
         vazio, ou `plan_checksum` do manifest divergente do checksum do
         `plan` atual (cobre re-sanitização que renumera step_ids) — em
@@ -1936,7 +1950,11 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
         restored = []
 
         for step_id, entry in manifest.get("steps", {}).items():
-            if entry.get("provenance") != "deterministic":
+            provenance = entry.get("provenance")
+            optional_omitted = (
+                provenance == "cognitive" and entry.get("reason") == "optional_omitted"
+            )
+            if provenance != "deterministic" and not optional_omitted:
                 continue
             if step_id in target_scope:
                 continue
@@ -1951,6 +1969,31 @@ Sua tarefa é gerar o código de automação completo para o arquivo `bot_produc
                 # Step não existe mais no plano atual. plan_checksum já
                 # deveria ter degradado pra no-op antes disso — defesa extra:
                 # sem o step, não há como regenerar o canônico.
+                continue
+
+            if optional_omitted:
+                # Slot 'optional' que a LLM decidiu NÃO emitir na decisão de
+                # slot (manifest reason 'optional_omitted'): um rewrite
+                # full-file de reflection posterior tende a "ajudar"
+                # reintroduzindo o passo-ruído (visto live no piloto
+                # fimm_billing, 2026-07-14 — container_click omitido na
+                # tentativa 1 voltou como clique real na tentativa 4). A
+                # decisão de omissão é restaurada aqui na mesma política
+                # anti-drift dos blocos deterministic: bloco-vazio canônico
+                # (mesma forma do placeholder de build_skeleton + convenção
+                # de bloco-vazio, sempre parseável pelo _STEP_ID_IN_BLOCK_RE).
+                if "AEGIS_COGNITIVE_SLOT" in current_block["text"]:
+                    continue  # ainda é bloco-vazio — nada a restaurar
+                description = step.get("description", "")
+                canonical = _indent_lines(
+                    f"# [PASSO {current_block['label']}] {description}\n"
+                    f'# AEGIS_COGNITIVE_SLOT step_id="{step_id}" '
+                    f'motivo="optional não emitido: decisão de omissão restaurada (anti-drift)"\n'
+                    f"pass",
+                    4,
+                )
+                pending_splices.append((current_block["start"], current_block["end"], canonical))
+                restored.append(step_id)
                 continue
 
             canonical_raw = _emit_deterministic_step_block(step, dicionario)
@@ -2461,6 +2504,28 @@ Não inclua os blocos de contexto na resposta. Não dê explicações.
         new_lines = list(lines)
         for b in sorted(target_blocks, key=lambda b: b["start"], reverse=True):
             new_block_lines = found[b["step_id"]].strip("\n").split("\n")
+            # Normaliza a indentação da resposta pra base do bloco ORIGINAL:
+            # a LLM às vezes devolve o bloco em coluna 0 (visto live no piloto
+            # fimm_billing, 2026-07-14 — slots cognitivos da geração híbrida
+            # nova voltaram desindentados e o splice verbatim tirava o código
+            # de dentro de execute_scenario_default, quebrando com "unexpected
+            # indent" na linha seguinte e abortando a geração inteira). O
+            # shift é uniforme (preserva a indentação relativa interna do
+            # bloco, ex.: try/except do wrapper opcional); resposta já na
+            # base certa tem delta 0 e sai byte-idêntica ao comportamento
+            # anterior.
+            original_first = lines[b["start"]]
+            target_indent = len(original_first) - len(original_first.lstrip())
+            non_empty = [ln for ln in new_block_lines if ln.strip()]
+            if non_empty:
+                base_indent = min(len(ln) - len(ln.lstrip()) for ln in non_empty)
+                delta = target_indent - base_indent
+                if delta > 0:
+                    pad = " " * delta
+                    new_block_lines = [pad + ln if ln.strip() else ln for ln in new_block_lines]
+                elif delta < 0:
+                    cut = -delta
+                    new_block_lines = [ln[cut:] if ln.strip() else ln for ln in new_block_lines]
             new_lines[b["start"]:b["end"]] = new_block_lines
 
         return "\n".join(new_lines)

@@ -102,13 +102,57 @@ def _indent_block(text: str, spaces: int) -> str:
     return "\n".join((prefix + line) if line.strip() else line for line in text.split("\n"))
 
 
+# recorder.py:836 corta o innerText do alvo em substring(0, 50) — um `text`
+# com exatamente esse comprimento é assinatura de truncamento (o último token
+# pode estar cortado no meio de uma palavra).
+_RECORDER_TEXT_TRUNC_LEN = 50
+
+
+def _viable_has_text_literal(text: Optional[str]) -> Optional[str]:
+    """
+    Reduz o campo `text` gravado a um literal que PODE existir na página como
+    alvo de `:has-text(...)`. Dois defeitos de captura tornam o texto cru
+    inviável como âncora (medido live contra site real, 2026-07-14 — piloto
+    fimm_billing/003_teste_novo):
+
+    - multi-linha: innerText de container junta filhos com '\\n', e o
+      `:has-text()` do Playwright NÃO casa texto que cruza fronteira de
+      elemento — colapsar '\\n' em espaço fabrica uma string que dá 0 match
+      por construção (seletor morto, sempre escala pra healing).
+    - truncamento: o corte em 50 chars do recorder pode cair no meio do
+      último token ("Configure" de "Configure a matriz...").
+
+    Regra: usa só a PRIMEIRA linha não vazia; se o texto cru tem a assinatura
+    de truncamento E é linha única, descarta o último token. Retorna None
+    quando nada viável sobra (o chamador então NÃO ancora — e classify_step
+    C5 usa o mesmo juízo pra rotear o step pro slot cognitivo).
+    """
+    if not text:
+        return None
+    raw = str(text)
+    truncated = len(raw) >= _RECORDER_TEXT_TRUNC_LEN
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+    literal = " ".join(lines[0].split())
+    if truncated and len(lines) == 1:
+        tokens = literal.split()
+        if len(tokens) < 2:
+            return None
+        literal = " ".join(tokens[:-1])
+    if len(literal) < 3:
+        return None
+    return literal
+
+
 def _apply_has_text_anchor(selector: str, text: Optional[str]) -> str:
     """
     Compõe `selector:has-text('texto')` — a forma de ancoragem mecânica que
     `WEAK_SELECTOR_WITHOUT_ANCHOR` aceita (step_validator.py:1048,
-    verificado contra test_weak_selector_enforcement.py). O texto é
-    normalizado (espaços/quebras de linha colapsados) e aspas simples
-    internas são escapadas para não fechar o `:has-text(...)` prematuramente.
+    verificado contra test_weak_selector_enforcement.py). O texto deve vir
+    de `_viable_has_text_literal` (linha única, sem resíduo de truncamento);
+    aqui só se colapsa espaço e escapa aspas simples internas para não fechar
+    o `:has-text(...)` prematuramente.
     """
     normalized = " ".join(str(text or "").split())
     escaped = normalized.replace("'", "\\'")
@@ -180,11 +224,13 @@ def _emit_click(step: Dict[str, Any]) -> str:
     weak_selector = bool(step.get("weak_selector"))
     text = step.get("text")
 
+    anchor_literal = _viable_has_text_literal(text)
+
     if parent:
         parent_has_text = parent.get("has_text")
         child_selector = selector
-        if weak_selector and not parent_has_text and text and ":has-text(" not in child_selector:
-            child_selector = _apply_has_text_anchor(child_selector, text)
+        if weak_selector and not parent_has_text and anchor_literal and ":has-text(" not in child_selector:
+            child_selector = _apply_has_text_anchor(child_selector, anchor_literal)
 
         lines = [
             "runner.click_chained(",
@@ -200,8 +246,8 @@ def _emit_click(step: Dict[str, Any]) -> str:
         return "\n".join(lines)
 
     final_selector = selector
-    if weak_selector and text and ":has-text(" not in final_selector:
-        final_selector = _apply_has_text_anchor(final_selector, text)
+    if weak_selector and anchor_literal and ":has-text(" not in final_selector:
+        final_selector = _apply_has_text_anchor(final_selector, anchor_literal)
 
     lines = [
         "runner.click_resilient(",
@@ -597,12 +643,21 @@ def classify_step(
 
     # C5 — weak_selector exige material de ancoragem mecânica.
     if step.get("weak_selector"):
-        has_material = bool(parent.get("has_text")) or bool(text) or (":has-text(" in selector)
+        # Mesmo juízo de viabilidade usado por _emit_click: texto multi-linha
+        # vira só a primeira linha, truncamento descarta o último token — se
+        # nada viável sobra, o campo 'text' NÃO conta como material de âncora
+        # (senão o passo seria emitido com :has-text impossível de casar).
+        has_material = (
+            bool(parent.get("has_text"))
+            or bool(_viable_has_text_literal(text))
+            or (":has-text(" in selector)
+        )
         if not has_material:
             return EmissionDecision(
                 "cognitive",
-                "C5: weak_selector sem material de ancoragem mecânica "
-                "(parent.has_text ausente, campo text ausente, seletor sem :has-text(...))",
+                "C5: weak_selector sem material de ancoragem mecânica viável "
+                "(parent.has_text ausente, campo text ausente/inviável como âncora, "
+                "seletor sem :has-text(...))",
             )
 
     # C6 — Padrão N (menu suspenso).

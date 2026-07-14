@@ -1724,6 +1724,8 @@ class _FakeRunner:
         return True
     def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None):
         return True
+    def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None, strict=False):
+        return True
     def click_chained(self, page, parent, child, target_description, timeout=5000, original_coords=None, step_id=None):
         return True
     def fill_chained(self, page, parent, child, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None):
@@ -1863,6 +1865,8 @@ print("DRYRUN_OK")
             hint = " Assinatura correta: runner.fill_resilient(page, selector, text_val, target_description, strategy=\"DIRECT\", delay_ms=60, timeout=5000, step_id=None). Nao existe 'original_coords_selector' nem 'original_coords' neste metodo."
         elif "unexpected keyword argument" in exc_msg and "click_resilient" in exc_msg:
             hint = " Assinatura correta: runner.click_resilient(page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None)."
+        elif "unexpected keyword argument" in exc_msg and "select_option_native_resilient" in exc_msg:
+            hint = " Assinatura correta: runner.select_option_native_resilient(page, selector, option_text, target_description, timeout=5000, step_id=None). O parametro e 'option_text' — nao existe 'option_val'."
         elif "unexpected keyword argument" in exc_msg and "select_option_resilient" in exc_msg:
             hint = " Assinatura correta: runner.select_option_resilient(page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None)."
 
