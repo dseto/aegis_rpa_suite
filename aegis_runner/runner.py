@@ -963,6 +963,12 @@ class TransactionRunner:
                 candidate_locators = prioritized_locators if prioritized_locators else anchor_locators
                 initial_url = page.url
                 clicked = False
+                # A3 (.specs/plano-cauda-longa-verificada.md Seção 4.A3): só é
+                # ambiguidade REAL quando o seletor casou mais de um elemento
+                # candidato — um único candidato segue o caminho de sempre
+                # (identity tier), sem custo extra de verificação de efeito.
+                real_ambiguity = len(candidate_locators) > 1
+                ambiguous_candidate_verified = False
 
                 for idx, loc in enumerate(candidate_locators):
                     try:
@@ -972,6 +978,19 @@ class TransactionRunner:
                         print(f"[AEGIS RUNNER] Tentando clique físico no elemento {idx+1}/{len(candidate_locators)} de '{selector}'...")
                         loc.scroll_into_view_if_needed(timeout=1000)
                         time.sleep(0.2)
+
+                        # A3: captura o snapshot ANTES do clique do candidato
+                        # escolhido quando há ambiguidade real, para verificar
+                        # o efeito depois em vez de aceitar SUCCESS silencioso
+                        # na troca de alvo (bug real confirmado ao vivo:
+                        # seletor ambíguo casando múltiplos botões dentro de
+                        # um painel de autocomplete — clicava em ALGUM botão,
+                        # o painel permanecia aberto, e o passo era logado
+                        # como HEALED mesmo assim).
+                        candidate_before_snapshot = None
+                        if real_ambiguity and not validate_navigation:
+                            candidate_before_snapshot = self._capture_click_effect_snapshot(page, selector)
+
                         # Item B: mesma ideia do branch acima — tenta sem
                         # force primeiro (timeout curto), só força se falhar.
                         try:
@@ -979,7 +998,7 @@ class TransactionRunner:
                         except Exception:
                             loc.click(timeout=3000, force=True)
                         clicked = True
-                        
+
                         if validate_navigation:
                             time.sleep(3.0)
                             if page.url == initial_url:
@@ -997,6 +1016,17 @@ class TransactionRunner:
                                     print(f"[AEGIS RUNNER] Clique no candidato {idx+1} não resultou em navegação (URL inalterada). Tentando próximo candidato...")
                                     clicked = False
                                     continue
+                        elif real_ambiguity:
+                            # A3: heurística multi-candidato só aceita o
+                            # candidato clicado quando um efeito real é
+                            # confirmado — nunca mais SUCCESS silencioso ao
+                            # escolher entre elementos ambíguos.
+                            if self._verify_action_effect(page, candidate_before_snapshot):
+                                ambiguous_candidate_verified = True
+                                break
+                            print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique no candidato ambíguo {idx+1}/{len(candidate_locators)} de '{selector}' não confirmado por efeito real. Tentando próximo candidato...")
+                            clicked = False
+                            continue
                         break
                     except Exception as e:
                         # Nível 1: Elemento desprendido (Stale/Detached)
@@ -1022,6 +1052,16 @@ class TransactionRunner:
                         target_enabled = self._recover_via_recent_fills(page, selector, step_id)
                         enable_timeout_recovered = target_enabled
                     if target_enabled:
+                        if ambiguous_candidate_verified:
+                            # A3: o efeito já foi verificado no candidato
+                            # específico que foi clicado — fecha direto como
+                            # HEALED, sem passar por _finalize_click_success
+                            # (cujo sensor CLICK_NO_EFFECT reconsultaria o
+                            # snapshot genérico capturado ANTES do loop de
+                            # candidatos, não o do candidato que de fato foi
+                            # clicado).
+                            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
+                            return True
                         finalize_result = self._finalize_click_success(
                             page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot
                         )
@@ -1558,13 +1598,20 @@ class TransactionRunner:
         # mais silencioso que o de self-healing por IA. identity_scoped=True
         # pula esses níveis quando o pai tem filtro de identidade (has_text).
         if not identity_scoped:
-            # Nível 1.5: Se for erro de múltiplos elementos (strict mode)
+            # Nível 1.5: Se for erro de múltiplos elementos (strict mode).
+            # A3 (.specs/plano-cauda-longa-verificada.md Seção 4.A3): o
+            # fallback pra '.first' também entra na doutrina de verificação —
+            # só fecha como HEALED quando um efeito real é confirmado, nunca
+            # mais SUCCESS silencioso na troca de alvo ambíguo.
             if "strict mode violation" in str(e) or "resolved to" in str(e):
                 try:
                     print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
+                    t2_before_snapshot = self._capture_click_effect_snapshot(page, selector)
                     page.locator(selector).first.click(timeout=timeout)
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
-                    return True
+                    if self._verify_action_effect(page, t2_before_snapshot):
+                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique em fallback '.first' de '{selector}' não confirmado por efeito real. Prosseguindo para a cadeia de recuperação existente...")
                 except Exception as inner_e:
                     e = inner_e
 
@@ -2570,12 +2617,19 @@ class TransactionRunner:
             self._recent_fills.append({'selector': selector, 'text_val': text_val, 'strategy': strategy, 'step_id': step_id, 'target_description': target_description})
             return True
         except Exception as e:
+            # A3 (.specs/plano-cauda-longa-verificada.md Seção 4.A3): mesma
+            # doutrina de verificação do click — o fallback pra '.first' só
+            # fecha como HEALED quando o valor lido do campo confirma o
+            # preenchimento, nunca mais SUCCESS silencioso na troca de alvo.
             if "strict mode violation" in str(e) or "resolved to" in str(e):
                 try:
                     print(f"[AEGIS RUNNER] Múltiplos elementos encontrados para '{selector}'. Tentando preencher o primeiro...")
-                    page.locator(selector).first.fill(text_val, timeout=timeout)
-                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="SUCCESS")
-                    return True
+                    t2_fill_locator = page.locator(selector).first
+                    t2_fill_locator.fill(text_val, timeout=timeout)
+                    if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "locator": t2_fill_locator}):
+                        self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento em fallback '.first' de '{selector}' não confirmado pelo valor lido do campo. Prosseguindo para a cadeia de recuperação existente...")
                 except Exception as inner_e:
                     e = inner_e
 
