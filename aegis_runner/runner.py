@@ -612,8 +612,9 @@ class TransactionRunner:
             PRIMÁRIO (Fase 2 do plano alimenta isto a partir de
             expected_effect gravado; hoje quem popula é o próprio chamador,
             por tipo de gesto). Chaves reconhecidas:
-            - "kind": "fill" | "select" | "trigger_open" | "navigation" --
-              ausente/não reconhecido cai nos sinais genéricos (ver abaixo).
+            - "kind": "fill" | "select" | "trigger_open" | "navigation" |
+              "closed_shadow_click" -- ausente/não reconhecido cai nos sinais
+              genéricos (ver abaixo).
             - fill: "expected_value" (obrigatório), e o valor realmente
               digitado via "actual_value" (string já lida pelo chamador) OU
               "locator" (objeto Playwright do ALVO QUE DE FATO recebeu a
@@ -634,6 +635,14 @@ class TransactionRunner:
               (page.locator(panel_selector).count() > 0).
             - navigation: URL mudou em relação a before_snapshot["url"] (ou
               bate exatamente com "url", se informado).
+            - closed_shadow_click: aprova incondicionalmente -- reservado pra
+              quando o chamador já confirmou no pré-clique, via
+              _is_closed_shadow_target, que o alvo é o host de um Shadow DOM
+              fechado (childElementCount == 0, textContent == '' no DOM claro
+              apesar de área visível não-trivial). Sinais genéricos nunca
+              conseguem observar o efeito real nesse caso (confirmado ao vivo,
+              não é suposição) -- a confirmação pré-clique + a execução física
+              do gesto É a pós-condição nesse caminho.
             - "panel_selector": override do seletor de painel/overlay usado
               por "select"/"trigger_open" (default _OPEN_PANEL_SELECTOR).
             - Sem "kind" reconhecido: "after_snapshot" (dict pronto, evita
@@ -669,6 +678,9 @@ class TransactionRunner:
             return self._verify_panel_opened(page, expected)
         if kind == "navigation":
             return self._verify_navigation_effect(page, before_snapshot, expected)
+        if kind == "closed_shadow_click":
+            print("[AEGIS RUNNER] [VERIFY] Alvo em host de Shadow DOM fechado confirmado no pré-clique (_is_closed_shadow_target) -- sinais genéricos são estruturalmente cegos aqui (documento claro não muda mesmo com sucesso real dentro do shadow); aprovando com base na confirmação pré-clique + execução física do gesto.")
+            return True
 
         return self._verify_generic_effect(page, before_snapshot, expected)
 
@@ -835,6 +847,53 @@ class TransactionRunner:
             return current_url == target_url
         return before_url is not None and before_url != current_url
 
+    def _is_closed_shadow_target(self, page, x, y, target_description="") -> bool:
+        """Heurística pura (sem clique) pra reconhecer o HOST de um Shadow DOM
+        FECHADO (shadowrootmode="closed") sob (x, y). Confirmado ao vivo contra
+        o Portal Segura (2026-07-15, st_054/.specs/plano-cauda-longa-verificada.
+        backlog.pending.md): nenhuma técnica programática alcança o conteúdo
+        interno a partir de fora de um shadow fechado -- document.
+        elementFromPoint() sempre retorna o próprio host (nunca o filho, mesma
+        ressalva já documentada em _hit_test_plausible), composedPath() de um
+        clique físico REAL também para no host (testado ao vivo, não é apenas
+        teórico), e host.shadowRoot é sempre null pra JS externo. Do ponto de
+        vista do DOM claro, o host não tem filhos nem texto
+        (childElementCount == 0, textContent == '') apesar de ocupar uma área
+        visível não-trivial -- o conteúdo real é pintado pelo shadow root,
+        invisível a qualquer query JS/Playwright. Um clique físico por
+        coordenada na posição correta FUNCIONA (confirmado visualmente: botão
+        muda de estado, painel avança) mas o efeito é estruturalmente invisível
+        aos sinais genéricos de _click_effect_signals_changed (contagem de nós
+        do documento claro e textContent do host, ambos inalterados mesmo com
+        sucesso real dentro do shadow) -- não há ajuste de sinal que resolva
+        isso, é um limite de plataforma, não uma lacuna de implementação.
+
+        Exige "shadow" em target_description como trava extra -- evita
+        relaxar a verificação pra qualquer div vazia decorativa que por acaso
+        não tenha filhos.
+        """
+        if "shadow" not in (target_description or "").lower():
+            return False
+        try:
+            hit = page.evaluate(
+                "([x, y]) => { const el = document.elementFromPoint(x, y); "
+                "if (!el) return null; "
+                "const r = el.getBoundingClientRect(); "
+                "return { childCount: el.childElementCount, "
+                "text: (el.textContent || '').trim(), w: r.width, h: r.height }; }",
+                [x, y],
+            )
+        except Exception:
+            return False
+        if not hit:
+            return False
+        return (
+            hit.get("childCount") == 0
+            and hit.get("text") == ""
+            and hit.get("w", 0) > 0
+            and hit.get("h", 0) > 0
+        )
+
     def _hit_test_plausible(self, page, x, y, target_description, original_selector=None) -> bool:
         """Gate de plausibilidade PRÉ-clique (Fundação A4 -- .specs/plano-
         cauda-longa-verificada.md Seção 4.A4). Generaliza o hit-test já usado
@@ -872,7 +931,22 @@ class TransactionRunner:
         `original_selector` contém ' >> ', esta função APENAS loga a
         checagem e sempre retorna True (aprovado), deixando a verificação
         PÓS-clique (_verify_action_effect) como única linha de defesa nesse
-        caso. Não tenta shadowRoot.elementFromPoint -- fora de escopo aqui.
+        caso. Não tenta shadowRoot.elementFromPoint -- fora de escopo aqui
+        (shadowRoot é sempre null pra JS externo em modo fechado de qualquer
+        forma).
+
+        Ressalva de Shadow DOM FECHADO (st_054/Portal Segura, 2026-07-15,
+        testado ao vivo): ' >> ' pressupõe um seletor de piercing sancionado
+        (Padrão A), que só existe/funciona pra shadow root ABERTO -- pra
+        shadow FECHADO não existe sintaxe de piercing nenhuma, então nenhum
+        seletor pra esse alvo jamais vai carregar ' >> ', e o modo soft acima
+        nunca dispara. Quando o match de texto estrito falha, um segundo
+        caminho de aprovação soft entra em cena: _is_closed_shadow_target
+        reconhece o padrão do host (0 filhos, 0 texto no DOM claro, área
+        visível não-trivial) e, se target_description menciona "shadow",
+        aprova pelo mesmo motivo -- o elemento sob o ponto é plausivelmente o
+        host de um shadow fechado, e nem elementFromPoint nem composedPath()
+        de um clique real revelam o filho interno pra comparação de texto.
         """
         is_shadow_dom = bool(original_selector) and " >> " in str(original_selector)
 
@@ -915,10 +989,14 @@ class TransactionRunner:
 
         if plausible:
             print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) compatível com '{target_description}' (tag={tag_norm!r}, role={role_norm!r}, texto={text_norm!r}) -- plausível.")
-        else:
-            print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) incompatível com '{target_description}' (tag={tag_norm!r}, role={role_norm!r}, texto={text_norm!r}) -- implausível, clique descartado.")
+            return True
 
-        return plausible
+        if self._is_closed_shadow_target(page, x, y, target_description):
+            print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) parece host de Shadow DOM fechado (0 filhos, 0 texto, área não-trivial) e target_description menciona Shadow DOM -- aprovando em modo soft (_is_closed_shadow_target; verificação pós-clique não poderá confirmar por sinal genérico nesse caso).")
+            return True
+
+        print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) incompatível com '{target_description}' (tag={tag_norm!r}, role={role_norm!r}, texto={text_norm!r}) -- implausível, clique descartado.")
+        return False
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
@@ -1448,8 +1526,17 @@ class TransactionRunner:
                 y = int(viewport["height"] * original_coords[1])
                 print(f"[AEGIS RUNNER] Tentando coordenadas históricas da gravação (verificado): ({x}, {y})")
                 before_snapshot = self._capture_click_effect_snapshot(page, selector)
+                # Checagem PRÉ-clique (pura, sem efeito colateral) -- se o
+                # ponto gravado cai sobre o host de um Shadow DOM fechado
+                # (ver _is_closed_shadow_target), os sinais genéricos de
+                # _click_effect_signals_changed nunca vão enxergar o efeito
+                # real, mesmo que o clique funcione perfeitamente (confirmado
+                # ao vivo, st_054/Portal Segura). Relaxa só esse caso
+                # específico -- todo o resto continua exigindo sinal genérico.
+                closed_shadow = self._is_closed_shadow_target(page, x, y, target_description)
                 page.mouse.click(x, y)
-                if self._verify_action_effect(page, before_snapshot, expected=None):
+                verify_expected = {"kind": "closed_shadow_click"} if closed_shadow else None
+                if self._verify_action_effect(page, before_snapshot, expected=verify_expected):
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
                     return True
                 self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
@@ -1481,8 +1568,16 @@ class TransactionRunner:
                 )
                 if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
                     before_snapshot = self._capture_click_effect_snapshot(page, selector)
+                    # Mesma checagem PRÉ-clique do Nível 4 (ver
+                    # _is_closed_shadow_target) -- necessária aqui de novo
+                    # porque _hit_test_plausible pode ter aprovado a proposta
+                    # via match de texto normal (não necessariamente pelo
+                    # ramo de shadow fechado), e mesmo quando aprovou por
+                    # esse ramo o booleano sozinho não chega até aqui.
+                    closed_shadow = self._is_closed_shadow_target(page, proposal["x"], proposal["y"], target_description)
                     page.mouse.click(proposal["x"], proposal["y"])
-                    if self._verify_action_effect(page, before_snapshot, expected=None):
+                    verify_expected = {"kind": "closed_shadow_click"} if closed_shadow else None
+                    if self._verify_action_effect(page, before_snapshot, expected=verify_expected):
                         self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
                     self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
