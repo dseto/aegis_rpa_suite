@@ -244,94 +244,155 @@ class CognitiveGateway:
                 
         return result
 
-    def self_healing_click(self, page: Page, selector: str, target_description: str, original_coords: tuple = None) -> bool:
+    def self_healing_click(self, page: Page, selector: str, target_description: str, original_coords: tuple = None, expected_effect: str = None) -> dict:
         """
         Tenta localizar visualmente um elemento na tela após falha de seletor estático.
-        Salva uma captura temporária, envia à LLM e executa o clique se encontrado.
-        Se a IA falhar ou não encontrar, e houver original_coords, executa o clique de fallback na coordenada física.
+        Salva uma captura temporária e envia à LLM. NUNCA clica nem executa
+        nenhuma ação física — este método é uma PROPOSTA (contrato proposto→
+        verificado, .specs/plano-cauda-longa-verificada.md Seção 4.B1). Quem
+        decide se a proposta é plausível (gate pré-clique), clica de fato, e
+        verifica o efeito pós-clique é o RUNNER (aegis_runner/runner.py) —
+        coordenada é tier do runner, não do gateway.
+
+        Retorna {"x": int, "y": int, "reason": str, "confidence": float}
+        quando a IA avista o alvo, ou None quando o módulo está inativo, a IA
+        explicitamente não encontra o elemento (preserva a intenção original:
+        "não encontrei" nunca vira clique cego), ou ocorre qualquer erro/
+        timeout na chamada.
         """
         if not self.is_active():
             print(f"[COGNITIVE] Ignorando Self-Healing para '{selector}' (módulo desativado).")
-            # Se o módulo cognitivo estiver desativado mas temos coordenadas originais, aplica o fallback físico direto
-            if original_coords and len(original_coords) == 2:
-                try:
-                    viewport = page.viewport_size or {"width": 1280, "height": 720}
-                    x = int(viewport["width"] * original_coords[0])
-                    y = int(viewport["height"] * original_coords[1])
-                    print(f"[COGNITIVE WARNING] Módulo cognitivo inativo. Aplicando clique direto de fallback nas coordenadas gravadas: ({x}, {y})")
-                    page.mouse.click(x, y)
-                    return True
-                except Exception as coords_err:
-                    print(f"[COGNITIVE ERRO] Falha no clique de fallback por coordenadas: {coords_err}")
-            return False
+            return None
 
         print(f"[COGNITIVE] Iniciando Self-Healing para seletor falho: '{selector}'")
         temp_img = "temp_self_healing.png"
-        
+
         try:
             # Captura a tela atual da automação
             page.screenshot(path=temp_img)
-            
+
             coords_hint = ""
             if original_coords and len(original_coords) == 2:
                 coords_hint = f"\nDica de Posição Original: Durante a gravação manual, o elemento foi clicado nas coordenadas relativas: X = {original_coords[0]:.2%}, Y = {original_coords[1]:.2%}. Use isso como ponto de partida principal para localizar o elemento na screenshot!"
 
+            effect_hint = ""
+            if expected_effect:
+                effect_hint = f"\nEfeito Esperado Após a Ação: {expected_effect}"
+
             prompt = f"""
             Você é um motor cognitivo de resiliência de RPA.
             Análise a screenshot da página web e identifique as coordenadas exatas para interagir com o elemento descrito como: '{target_description}'.
-            
-            O seletor CSS que falhou foi: '{selector}'.{coords_hint}
+
+            O seletor CSS que falhou foi: '{selector}'.{coords_hint}{effect_hint}
             Use o contexto visual para achar onde este elemento se encontra na tela atual.
-            
+
             Retorne OBRIGATORIAMENTE um objeto JSON válido contendo:
             - "found": true ou false (se o elemento foi avistado e está clicável).
             - "x_percent": float entre 0.0 e 1.0 (coordenada horizontal centralizada no elemento, relativa à largura da tela).
             - "y_percent": float entre 0.0 e 1.0 (coordenada vertical centralizada no elemento, relativa à altura da tela).
+            - "confidence": float entre 0.0 e 1.0 (confiança de que esta é a coordenada correta).
             - "reason": Breve justificativa de como localizou o elemento ou por que não o encontrou.
-            
+
             Retorne EXCLUSIVAMENTE o JSON estruturado, sem texto antes ou depois.
             """
-            
+
             raw_response = self._call_llm_api(prompt, temp_img)
             result = self._clean_json_response(raw_response)
-            
+
             if result.get("found") and "x_percent" in result and "y_percent" in result:
                 # Calcula as coordenadas físicas com base no viewport atual do navegador
                 viewport = page.viewport_size
                 if not viewport:
                     # Viewport padrão caso não esteja definido no contexto
                     viewport = {"width": 1280, "height": 720}
-                
+
                 x = int(viewport["width"] * result["x_percent"])
                 y = int(viewport["height"] * result["y_percent"])
-                
-                print(f"[COGNITIVE SUCESSO] Elemento '{target_description}' localizado via IA em ({x}, {y}) [Justificativa: {result.get('reason')}].")
-                
-                # Executa o clique físico do mouse
-                page.mouse.click(x, y)
-                return True
+
+                print(f"[COGNITIVE PROPOSTA] Elemento '{target_description}' possivelmente localizado via IA em ({x}, {y}) [Justificativa: {result.get('reason')}]. Aguardando gate de plausibilidade e verificação do runner.")
+
+                return {"x": x, "y": y, "reason": result.get("reason"), "confidence": result.get("confidence")}
             else:
                 print(f"[COGNITIVE FALHA] IA não encontrou o elemento. Justificativa: {result.get('reason')}")
                 # Se a IA explicitamente determinou que o elemento não está presente na tela,
-                # não tentamos o clique cego por coordenadas, pois isso geraria falsos-positivos.
-                # Retornamos False para que o runner registre a falha real do fluxo.
-                return False
+                # não propomos nenhuma coordenada, pois isso geraria falsos-positivos.
+                # Retornamos None para que o runner registre a falha real do fluxo.
+                return None
 
         except Exception as e:
             print(f"[COGNITIVE ERRO] Falha no processo de Self-Healing: {e}")
-            
-            # Fallback de segurança definitivo se ocorrer erro/timeout na chamada de IA
-            if original_coords and len(original_coords) == 2:
+            return None
+        finally:
+            if os.path.exists(temp_img):
                 try:
-                    viewport = page.viewport_size or {"width": 1280, "height": 720}
-                    x = int(viewport["width"] * original_coords[0])
-                    y = int(viewport["height"] * original_coords[1])
-                    print(f"[COGNITIVE WARNING] Erro no Self-Healing. Aplicando clique direto de fallback nas coordenadas gravadas: ({x}, {y})")
-                    page.mouse.click(x, y)
-                    return True
-                except Exception as coords_err:
-                    print(f"[COGNITIVE ERRO] Falha no clique de fallback por coordenadas pós-exceção: {coords_err}")
-            return False
+                    os.remove(temp_img)
+                except Exception:
+                    pass
+
+    def propose_fill_target(self, page: Page, selector: str, target_description: str, expected_effect: str = None) -> dict:
+        """
+        Análogo a `self_healing_click`, mas para o alvo de PREENCHIMENTO
+        (fill). Localiza visualmente o campo de texto a preencher e retorna
+        a coordenada proposta para o RUNNER focar antes de digitar — NUNCA
+        clica, foca ou digita por conta própria (mesmo contrato proposto→
+        verificado do B1: proposta pura, decisão e ação são do runner).
+
+        Retorna {"x": int, "y": int, "reason": str, "confidence": float}
+        quando a IA avista o campo, ou None quando o módulo está inativo, a
+        IA não encontra o campo, ou ocorre qualquer erro/timeout na chamada.
+        """
+        if not self.is_active():
+            print(f"[COGNITIVE] Ignorando localização visual de preenchimento para '{selector}' (módulo desativado).")
+            return None
+
+        print(f"[COGNITIVE] Iniciando localização visual de campo para preenchimento: '{selector}'")
+        temp_img = "temp_propose_fill.png"
+
+        try:
+            page.screenshot(path=temp_img)
+
+            effect_hint = ""
+            if expected_effect:
+                effect_hint = f"\nEfeito Esperado Após o Preenchimento: {expected_effect}"
+
+            prompt = f"""
+            Você é um motor cognitivo de resiliência de RPA.
+            Análise a screenshot da página web e identifique as coordenadas exatas do CAMPO DE TEXTO a ser preenchido, descrito como: '{target_description}'.
+
+            O seletor CSS que falhou foi: '{selector}'.{effect_hint}
+            Use o contexto visual para achar onde este campo se encontra na tela atual.
+
+            Retorne OBRIGATORIAMENTE um objeto JSON válido contendo:
+            - "found": true ou false (se o campo foi avistado e está preenchível).
+            - "x_percent": float entre 0.0 e 1.0 (coordenada horizontal centralizada no campo, relativa à largura da tela).
+            - "y_percent": float entre 0.0 e 1.0 (coordenada vertical centralizada no campo, relativa à altura da tela).
+            - "confidence": float entre 0.0 e 1.0 (confiança de que esta é a coordenada correta).
+            - "reason": Breve justificativa de como localizou o campo ou por que não o encontrou.
+
+            Retorne EXCLUSIVAMENTE o JSON estruturado, sem texto antes ou depois.
+            """
+
+            raw_response = self._call_llm_api(prompt, temp_img)
+            result = self._clean_json_response(raw_response)
+
+            if result.get("found") and "x_percent" in result and "y_percent" in result:
+                viewport = page.viewport_size
+                if not viewport:
+                    viewport = {"width": 1280, "height": 720}
+
+                x = int(viewport["width"] * result["x_percent"])
+                y = int(viewport["height"] * result["y_percent"])
+
+                print(f"[COGNITIVE PROPOSTA] Campo '{target_description}' possivelmente localizado via IA em ({x}, {y}) [Justificativa: {result.get('reason')}]. Aguardando gate de plausibilidade e verificação do runner.")
+
+                return {"x": x, "y": y, "reason": result.get("reason"), "confidence": result.get("confidence")}
+            else:
+                print(f"[COGNITIVE FALHA] IA não encontrou o campo de preenchimento. Justificativa: {result.get('reason')}")
+                return None
+
+        except Exception as e:
+            print(f"[COGNITIVE ERRO] Falha no processo de localização de campo para preenchimento: {e}")
+            return None
         finally:
             if os.path.exists(temp_img):
                 try:

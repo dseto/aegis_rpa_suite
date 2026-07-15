@@ -1289,14 +1289,39 @@ class TransactionRunner:
         # Nível 3.5: Self-Healing Cognitivo por IA. Roda quando a geometria ao
         # vivo não resolveu (sem `live_text` extraível, ou
         # `_click_by_live_geometry` retornou False/lançou exceção acima).
+        #
+        # Contrato proposto→verificado (.specs/plano-cauda-longa-verificada.md
+        # Seção 4.B1/A4/A1): `self_healing_click` só PROPÕE {x, y, reason,
+        # confidence} (ou None) — nunca clica. O runner faz o gate de
+        # plausibilidade PRÉ-clique (`_hit_test_plausible`, A4); só uma
+        # proposta plausível é fisicamente clicada; o efeito é então
+        # verificado PÓS-clique (`_verify_action_effect`, A1) antes de virar
+        # HEALED. Proposta implausível ou efeito não verificado é
+        # VERIFY_REJECTED — cadeia segue pro próximo tier (coordenada), nunca
+        # aborta por proposta ruim.
         cognitive_attempt_failed = False
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
             try:
-                healed_by_ia = self.cognitive.self_healing_click(page, selector, target_description, original_coords)
-                if healed_by_ia:
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
-                    return True
+                proposal = self.cognitive.self_healing_click(
+                    page, selector, target_description, original_coords,
+                    expected_effect=(
+                        "Após o clique, a página deve reagir de forma perceptível "
+                        "(navegação, abertura/fechamento de painel, ou mudança visual no estado do elemento)."
+                    ),
+                )
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
+                    before_snapshot = self._capture_click_effect_snapshot(page, selector)
+                    page.mouse.click(proposal["x"], proposal["y"])
+                    if self._verify_action_effect(page, before_snapshot, expected=None):
+                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
+                    cognitive_attempt_failed = True
+                else:
+                    if proposal:
+                        print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
+                    cognitive_attempt_failed = True
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
                 cognitive_attempt_failed = True
@@ -1304,7 +1329,7 @@ class TransactionRunner:
             cognitive_attempt_failed = True
 
         # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
-        if not healed_by_ia and cognitive_attempt_failed and original_coords and len(original_coords) == 2:
+        if cognitive_attempt_failed and original_coords and len(original_coords) == 2:
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords[0])
@@ -1872,16 +1897,33 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{dropdown_label}' (self-healing desativado para este passo).")
         elif not option_clicked and self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha nas tentativas normais. Acionando Self-Healing Cognitivo para a opção...")
+            option_target_description = f"Opção {option_text} do dropdown {dropdown_label}"
+            option_selector_desc = f"[role='option']:has-text('{option_text}')"
             try:
-                # Tenta localizar visualmente o texto da opção na tela
-                option_clicked = self.cognitive.self_healing_click(
+                # Tenta localizar visualmente o texto da opção na tela — contrato
+                # proposto→verificado (.specs/plano-cauda-longa-verificada.md
+                # Seção 4.B1/A4/A1): propõe, gate de plausibilidade pré-clique,
+                # clica só se plausível, e verifica o efeito pós-clique antes de
+                # reportar HEALED.
+                proposal = self.cognitive.self_healing_click(
                     page,
-                    selector=f"[role='option']:has-text('{option_text}')",
-                    target_description=f"Opção {option_text} do dropdown {dropdown_label}",
-                    original_coords=original_coords_option
+                    selector=option_selector_desc,
+                    target_description=option_target_description,
+                    original_coords=original_coords_option,
+                    expected_effect=f"Após o clique, a opção '{option_text}' deve ser selecionada e o painel de opções deve fechar.",
                 )
-                if option_clicked:
-                    healed_via_fallback = "visual_ai"
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], option_target_description, original_selector=option_selector_desc):
+                    before_snapshot = self._capture_click_effect_snapshot(page)
+                    page.mouse.click(proposal["x"], proposal["y"])
+                    time.sleep(0.2)
+                    panel_closed = page.locator(self._OPEN_PANEL_SELECTOR).count() == 0
+                    if self._verify_action_effect(page, before_snapshot, expected={"panel_closed_confirmed": panel_closed}):
+                        option_clicked = True
+                        healed_via_fallback = "visual_ai"
+                    else:
+                        print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' não produziu efeito verificável (painel não fechou/valor não comitado).")
+                elif proposal:
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' rejeitada pelo gate de plausibilidade (pré-clique).")
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro no self-healing cognitivo para opção: {ia_err}")
 
@@ -1954,14 +1996,30 @@ class TransactionRunner:
                 raise e
             elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Falha padrão ao selecionar '{option_text}' em '{selector}'. Acionando localização visual por screenshot...")
-                clicked = self.cognitive.self_healing_click(page, selector, target_description)
-                if clicked:
+                # Contrato proposto→verificado: propõe, gate de plausibilidade
+                # pré-clique, clica só se plausível. A ação em si (o clique
+                # visual não seleciona nada) é apenas revelar/focar o <select>
+                # nativo — a verificação real é o próprio select_option()
+                # abaixo: se ele levantar, cai em FAILED limpo (degrada sem
+                # corromper, menor classe de risco entre os 6 call sites —
+                # .specs/plano-cauda-longa-verificada.md Seção 4.B3).
+                proposal = self.cognitive.self_healing_click(
+                    page, selector, target_description,
+                    expected_effect="O elemento <select> deve ficar visível/focado para permitir a seleção da opção.",
+                )
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
+                    try:
+                        page.mouse.click(proposal["x"], proposal["y"])
+                    except Exception:
+                        pass
                     try:
                         page.locator(selector).first.select_option(label=option_text, timeout=timeout)
                         self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
                     except Exception:
                         pass
+                elif proposal:
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
                 self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
                 raise e
             else:
@@ -2421,13 +2479,34 @@ class TransactionRunner:
                 print(f"[AEGIS RUNNER] [STRICT] Falha definitiva em '{selector_full}' (self-healing desativado para este passo, pai é identificado por has_text).")
             elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para fill_chained...")
-                clicked = self.cognitive.self_healing_click(page, child_sel_clean, target_description)
-                if clicked:
+                # fill usa `propose_fill_target` (método análogo de fill, não
+                # o de clique) — contrato proposto→verificado: propõe, gate
+                # de plausibilidade pré-clique, foca o alvo proposto (clique
+                # físico só pra garantir foco, não é o gesto verificado),
+                # digita, e só reporta HEALED se o valor lido do campo bater
+                # com o esperado (.specs/plano-cauda-longa-verificada.md
+                # Seção 4.B3 — sem isso, `if clicked:` digitaria em
+                # document.activeElement sem foco garantido, corrompendo o
+                # dado silenciosamente).
+                proposal = self.cognitive.propose_fill_target(
+                    page, child_sel_clean, target_description,
+                    expected_effect=f"O campo deve ficar focado e, após digitar, exibir o valor '{text_val}'.",
+                )
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=child_sel_clean):
+                    page.mouse.click(proposal["x"], proposal["y"])
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
-                    self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALED", healing_method="visual_ai")
-                    return True
+                    actual_value = page.evaluate(
+                        "() => { const active = document.activeElement; "
+                        "return active ? (active.value !== undefined ? active.value : active.textContent) : null; }"
+                    )
+                    if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
+                        self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALED", healing_method="visual_ai")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em fill_chained não confirmado pelo valor lido do campo.")
+                elif proposal:
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento (fill_chained) rejeitada pelo gate de plausibilidade (pré-clique).")
             self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
 
@@ -2531,14 +2610,32 @@ class TransactionRunner:
                 raise e
             elif self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Falha no preenchimento padrão de '{selector}'. Acionando localização visual por screenshot...")
-                clicked = self.cognitive.self_healing_click(page, selector, target_description)
-                if clicked:
+                # Contrato proposto→verificado (fill_resilient é a rota de
+                # fill DEFAULT — maior prioridade de risco, .specs/plano-
+                # cauda-longa-verificada.md Seção 4.B3): propõe via
+                # `propose_fill_target`, gate de plausibilidade pré-clique,
+                # foca o alvo proposto, digita, e só reporta HEALED se o
+                # valor lido do campo bater com o esperado.
+                proposal = self.cognitive.propose_fill_target(
+                    page, selector, target_description,
+                    expected_effect=f"O campo deve ficar focado e, após digitar, exibir o valor '{text_val}'.",
+                )
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
+                    page.mouse.click(proposal["x"], proposal["y"])
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
                     page.evaluate("() => { const active = document.activeElement; if (active) { active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
-                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
-                    return True
+                    actual_value = page.evaluate(
+                        "() => { const active = document.activeElement; "
+                        "return active ? (active.value !== undefined ? active.value : active.textContent) : null; }"
+                    )
+                    if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
+                        self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em '{selector}' não confirmado pelo valor lido do campo.")
+                elif proposal:
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg="IA self-healing failed")
                 raise e
             else:
@@ -2614,16 +2711,32 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] Falha em fill_human_like para '{selector}': {e}")
             if self.cognitive.is_active():
                 print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para HUMAN_LIKE em '{selector}'...")
-                clicked = self.cognitive.self_healing_click(page, selector, target_description)
-                if clicked:
+                # fill_human_like é a rota de digitação DEFAULT sob
+                # HUMAN_LIKE (não edge case) — mesma migração dos demais
+                # fills: propõe, gate de plausibilidade pré-clique, foca,
+                # digita, e só reporta HEALED com o valor verificado.
+                proposal = self.cognitive.propose_fill_target(
+                    page, selector, target_description,
+                    expected_effect=f"O campo deve ficar focado e, após digitar, exibir o valor '{text_val}'.",
+                )
+                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
                     import time as _t2
+                    page.mouse.click(proposal["x"], proposal["y"])
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     for char in str(text_val):
                         page.keyboard.press(char)
                         _t2.sleep(delay_ms / 1000.0)
-                    self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
-                    return True
+                    actual_value = page.evaluate(
+                        "() => { const active = document.activeElement; "
+                        "return active ? (active.value !== undefined ? active.value : active.textContent) : null; }"
+                    )
+                    if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
+                        self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                        return True
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo HUMAN_LIKE em '{selector}' não confirmado pelo valor lido do campo.")
+                elif proposal:
+                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento HUMAN_LIKE para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
             self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
 
