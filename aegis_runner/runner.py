@@ -737,6 +737,91 @@ class TransactionRunner:
             return current_url == target_url
         return before_url is not None and before_url != current_url
 
+    def _hit_test_plausible(self, page, x, y, target_description, original_selector=None) -> bool:
+        """Gate de plausibilidade PRÉ-clique (Fundação A4 -- .specs/plano-
+        cauda-longa-verificada.md Seção 4.A4). Generaliza o hit-test já usado
+        no fallback de coordenada de select_option_resilient
+        (document.elementFromPoint + comparação de texto) para qualquer
+        proposta de clique por coordenada: antes de fisicamente clicar,
+        inspeciona o que de fato está sob o ponto proposto e rejeita
+        propostas que não tenham nenhuma relação plausível com
+        `target_description`.
+
+        Método PURO: nunca clica, nunca muda o estado da página -- só lê via
+        page.evaluate(elementFromPoint) e decide True/False. Ainda não é
+        fiado em nenhum call site (essa é outra tarefa do backlog); esta
+        função existe isolada e é testável por si só.
+
+        Parâmetros:
+          page: página Playwright atual.
+          x, y: coordenadas (pixels) do ponto proposto para o clique.
+          target_description: descrição textual do alvo esperado (rótulo do
+            passo/dropdown/opção) -- comparada de forma tolerante (case-
+            insensitive, substring em qualquer direção) contra o
+            tagName/textContent/role do elemento encontrado sob o ponto.
+          original_selector: seletor original que originou esta proposta de
+            coordenada, quando disponível. Quando contém a substring ' >> '
+            (seletor de Shadow DOM sancionado, Padrão A), o gate roda em
+            MODO SOFT.
+
+        Ressalva de Shadow DOM (Rodada 2 do plan-critic, achado aplicado
+        neste documento): document.elementFromPoint() no nível do documento
+        sofre "event retargeting" -- para um ponto dentro de uma shadow tree,
+        ele retorna o shadow HOST, nunca o elemento interno, e o textContent
+        do host não atravessa a fronteira do Shadow DOM. Um gate rígido
+        rejeitaria sistematicamente propostas corretas nesses fluxos,
+        neutralizando o tier de coordenada. Por isso, quando
+        `original_selector` contém ' >> ', esta função APENAS loga a
+        checagem e sempre retorna True (aprovado), deixando a verificação
+        PÓS-clique (_verify_action_effect) como única linha de defesa nesse
+        caso. Não tenta shadowRoot.elementFromPoint -- fora de escopo aqui.
+        """
+        is_shadow_dom = bool(original_selector) and " >> " in str(original_selector)
+
+        try:
+            hit = page.evaluate(
+                "([x, y]) => { const el = document.elementFromPoint(x, y); "
+                "if (!el) return null; "
+                "return { tagName: el.tagName, textContent: el.textContent, "
+                "role: el.getAttribute('role') || '' }; }",
+                [x, y],
+            )
+        except Exception as e:
+            print(f"[AEGIS RUNNER] [HIT-TEST] Falha ao inspecionar ponto ({x}, {y}): {e}")
+            if is_shadow_dom:
+                print("[AEGIS RUNNER] [HIT-TEST] Seletor Shadow DOM (' >> ') -- modo soft, aprovando apesar da falha de inspeção.")
+                return True
+            return False
+
+        if is_shadow_dom:
+            print(f"[AEGIS RUNNER] [HIT-TEST] Seletor Shadow DOM (' >> ') -- modo soft: elemento sob ({x}, {y}) = {hit!r}, aprovando sem checar compatibilidade (textContent não atravessa a fronteira do shadow host).")
+            return True
+
+        if not hit:
+            print(f"[AEGIS RUNNER] [HIT-TEST] Nenhum elemento sob ({x}, {y}) -- proposta implausível para '{target_description}'.")
+            return False
+
+        target_norm = (target_description or "").strip().lower()
+        text_norm = (hit.get("textContent") or "").replace("\xa0", " ").strip().lower()
+        role_norm = (hit.get("role") or "").strip().lower()
+        tag_norm = (hit.get("tagName") or "").strip().lower()
+
+        plausible = bool(
+            target_norm
+            and (
+                (text_norm and (text_norm in target_norm or target_norm in text_norm))
+                or (role_norm and role_norm in target_norm)
+                or (tag_norm and tag_norm in target_norm)
+            )
+        )
+
+        if plausible:
+            print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) compatível com '{target_description}' (tag={tag_norm!r}, role={role_norm!r}, texto={text_norm!r}) -- plausível.")
+        else:
+            print(f"[AEGIS RUNNER] [HIT-TEST] Elemento sob ({x}, {y}) incompatível com '{target_description}' (tag={tag_norm!r}, role={role_norm!r}, texto={text_norm!r}) -- implausível, clique descartado.")
+
+        return plausible
+
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
         Executa um clique resiliente e inteligente.
