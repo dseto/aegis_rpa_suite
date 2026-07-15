@@ -36,13 +36,21 @@ JS_MINIMAL_LISTENERS = """
                 let textToFind = match[2];
                 textToFind = textToFind.replace(/\\\\'/g, "'");
                 let part2 = match[3].trim();
-                
+
                 let containers = (root.querySelectorAll) ? root.querySelectorAll(part1) : [];
                 let matchingContainers = [];
                 for (let i = 0; i < containers.length; i++) {
                     let el = containers[i];
                     let txt = el.innerText || el.textContent || "";
-                    if (txt.replace(/\\s+/g, ' ').trim().includes(textToFind)) {
+
+                    // Alinha semântica com Playwright :has-text e nova lógica do recorder:
+                    // extrai primeira linha não vazia (evita falso match com texto que cruza
+                    // fronteira de elemento). Se textToFind é primeira linha de um elemento
+                    // multi-linha, casa. Se textToFind é colapsado (.g. "A B C D"),
+                    // precisa estar completamente em uma linha única do elemento.
+                    let firstLine = txt.split('\\n').map(l => l.trim()).filter(l => l.length > 0)[0] || '';
+
+                    if (firstLine.includes(textToFind)) {
                         matchingContainers.push(el);
                     }
                 }
@@ -145,7 +153,24 @@ JS_MINIMAL_LISTENERS = """
             if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) &&
                 el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
 
-                let cleanText = el.innerText.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                // Extrai primeira linha não vazia (evita :has-text colapsando \n em espaço).
+                // Playwright :has-text nunca casa texto que cruza fronteira de elemento.
+                let lines = el.innerText.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
+                if (lines.length === 0) return null;
+                let firstLine = lines[0];
+
+                // Se truncado (len >= 50) e linha única, descarta último token.
+                let isTruncated = firstLine.length >= 50;
+                if (isTruncated && lines.length === 1) {
+                    let tokens = firstLine.split(/\\s+/);
+                    if (tokens.length < 2) return null;
+                    firstLine = tokens.slice(0, -1).join(' ');
+                }
+
+                // Normaliza espaços internos (colapsa múltiplos espaços) e escapa aspas simples.
+                let cleanText = firstLine.replace(/\\s+/g, ' ').trim().replace(/'/g, "\\\\'");
+                if (cleanText.length < 3) return null;
+
                 let tagPrefix = isInteractiveRole ? `[role='${elementRole}']` : el.tagName.toLowerCase();
                 return `${tagPrefix}:has-text('${cleanText}')`;
             }

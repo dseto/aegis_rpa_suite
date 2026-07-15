@@ -246,8 +246,23 @@ def _emit_click(step: Dict[str, Any]) -> str:
         return "\n".join(lines)
 
     final_selector = selector
-    if weak_selector and anchor_literal and ":has-text(" not in final_selector:
-        final_selector = _apply_has_text_anchor(final_selector, anchor_literal)
+    # Reancora em dois casos:
+    # 1. weak_selector sem :has-text (via C5)
+    # 2. Qualquer selector com :has-text inviável (C11 já detectou, mas determinístico pode
+    #    reescrever se tiver text viável — caso típico: recorder colapsou \n, agora text
+    #    é primeira linha válida). Só reescreve se há anchor_literal e o seletor atual
+    #    tem :has-text mas nenhum dos literais é viável (substituição segura).
+    if anchor_literal and ":has-text(" not in final_selector:
+        # Caso 1: sem :has-text, aplica se weak_selector ou se há text viável (conservador)
+        if weak_selector:
+            final_selector = _apply_has_text_anchor(final_selector, anchor_literal)
+    elif anchor_literal and ":has-text(" in final_selector:
+        # Caso 2: tem :has-text, valida se os literais presentes são viáveis
+        if not _validate_has_text_literals_viability(final_selector, text):
+            # Literais inviáveis, reescreve com viável
+            # Remove os :has-text existentes e reaplica com o literal viável
+            clean_selector = final_selector.split(":has-text")[0]  # Tira tudo a partir do primeiro :has-text
+            final_selector = _apply_has_text_anchor(clean_selector, anchor_literal)
 
     lines = [
         "runner.click_resilient(",
@@ -495,6 +510,47 @@ def _extract_has_text_literals(selector: Optional[str]) -> List[str]:
     return [m.group(1).replace("\\'", "'") for m in _HAS_TEXT_LITERAL_RE.finditer(selector)]
 
 
+def _validate_has_text_literals_viability(selector: Optional[str], text: Optional[str]) -> bool:
+    """
+    Valida se os literais de `:has-text(...)` presentes no seletor são viáveis
+    (podem casar no Playwright) baseado no campo `text` do step.
+
+    Se o seletor contém `:has-text(...)`, extrai o(s) literal(is) e verifica se
+    cada um É viável segundo `_viable_has_text_literal(text)`. Retorna True
+    (todos viáveis ou nenhum `:has-text`), False se algum literal não é viável
+    (ex.: literal colapsado de `\n`, literais truncados, etc.).
+
+    Achado: O recorder fabrica `:has-text('Itaú Unibanco São Paulo ITAUBRSPXXX | Brasil')`
+    (texto colapsado em espaço) a partir de `text = "Itaú Unibanco São Paulo\nITAUBRSPXXX | Brasil"`.
+    O Playwright nunca casa esse literal (texto que cruza fronteira de elemento).
+    _viable_has_text_literal reduziria a "Itaú Unibanco São Paulo" (primeira linha).
+    Esta função detecta que o literal presente no seletor ("ITAUBRSPXXX...") não
+    é viável e marca o step como candidato a cognitive.
+    """
+    if not selector or ":has-text(" not in selector:
+        return True  # Sem :has-text, sempre OK
+
+    if not text:
+        # Seletor tem :has-text mas não há text do step para validar — assume risco
+        return False
+
+    # Extrai todos os literais presentes no seletor
+    present_literals = _extract_has_text_literals(selector)
+    if not present_literals:
+        return True  # Nenhum literal extraído (parse falhou?), assume OK
+
+    # Computa o literal viável a partir do text do step
+    viable_literal = _viable_has_text_literal(text)
+
+    if viable_literal is None:
+        # Nenhum literal viável pode ser extraído do text — qualquer :has-text presente é morto
+        return False
+
+    # Verifica se ALGUM dos literais presentes é viável
+    # (permite que um literal presente case com o viável)
+    return any(lit == viable_literal for lit in present_literals)
+
+
 def _collect_observed_values(dicionario: Optional[Dict[str, Any]]) -> set:
     """Coleta o conjunto de `observed_value` de todos os fields do dicionário."""
     values = set()
@@ -708,7 +764,19 @@ def classify_step(
                 f"C10: campo 'text' do step ('{text}') casa observed_value do dicionário",
             )
 
-    return EmissionDecision("deterministic", "C1-C10 todas satisfeitas")
+    # C11 — viabilidade de literais em :has-text(...) do seletor (achado st_007).
+    # Recorder fabrica :has-text colapsando \n em espaço, criando seletores mortos
+    # (Playwright nunca casa texto que cruza fronteira de elemento). Exemplo:
+    # text="Itaú São Paulo\nITAUBRSPXXX" → seletor=button:has-text('Itaú... ITAUBRSPXXX | Brasil')
+    # Literal colapsado não é viável. Valida sem depender de weak_selector.
+    if not _validate_has_text_literals_viability(selector, text):
+        return EmissionDecision(
+            "cognitive",
+            "C11: seletor contém :has-text com literal(is) inviável(is) "
+            "(recorder colapsou \\n em espaço ou truncou — Playwright não casa texto cross-element)",
+        )
+
+    return EmissionDecision("deterministic", "C1-C11 todas satisfeitas")
 
 
 def _plan_checksum(plan: Dict[str, Any]) -> str:
