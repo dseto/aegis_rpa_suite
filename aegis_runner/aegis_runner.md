@@ -12,6 +12,8 @@ Para isso, o runner adota uma abordagem híbrida de resiliência baseada em duas
 1. **Camada Determinística (Offline):** Execução ágil baseada em Playwright, provida de algoritmos matemáticos e heurísticas estruturais locais (ex: análise de classe de irmãos, reposicionamento CDK, ordenação de âncoras locais, etc.).
 2. **Camada Cognitiva (Online - LLM):** Acionada dinamicamente como fallback quando a camada determinística falha, usando visão computacional multimodal para curar seletores e diagnosticar quebras funcionais.
 
+> **Doutrina "Cauda Longa Verificada" (2026-07-15, `.specs/plano-cauda-longa-verificada.md`):** a régua deixou de ser "LLM sim ou não" e passou a ser "**verificado** sim ou não". Nenhum tier de recuperação — determinístico, geometria, coordenada gravada ou LLM — pode reportar `HEALED`/`SUCCESS` sem uma **pós-condição observável** (`_verify_action_effect`) confirmando que a ação teve o efeito esperado. O self-healing cognitivo (`self_healing_click`/`propose_fill_target`) deixou de clicar/digitar diretamente — ele só **propõe** uma coordenada; o runner decide se age (gate de plausibilidade pré-clique, `_hit_test_plausible`) e se aceita o resultado (verificação pós-ação). Isso vale também para os tiers que antes trocavam de alvo silenciosamente (heurística multi-candidato, `.first` em erro de múltiplos elementos) e para a coordenada gravada, que agora é verificada e roda **antes** do LLM (é a mesma categoria de `fallback_selectors`: caminho alternativo pro mesmo alvo gravado, não adivinhação). Ver Seções 2 e 3 abaixo, e Seção 2.E para a telemetria que audita essa doutrina.
+
 ```mermaid
 graph TD
     A[Execução de Ação no Robô] --> B[Camada Determinística: Playwright]
@@ -21,14 +23,16 @@ graph TD
     D -->|Falha em Modo Strict ou Flaky < 4| E[Lança FlakyStepFailure / Exceção]
     D -->|Falha Geral / Flaky >= 4| G3[Nível 3: Geometria DOM ao Vivo por Texto]
     G3 -->|Sucesso| C
-    G3 -->|Não aplicável / Falha| F[Nível 3.5: Camada Cognitiva - Visual AI]
-    F -->|Sucesso via IA Visual| C
-    F -->|Falha de IA| G[Nível 4: Último Recurso - Coordenadas Físicas de Gravação]
-    G -->|Clique Físico| C
-    G -->|Erro de Posicionamento| H[Falha Crítica do Passo]
+    G3 -->|Não aplicável / Falha| G4[Nível 4: Coordenada Gravada + _verify_action_effect]
+    G4 -->|Verificado| C
+    G4 -->|VERIFY_REJECTED / strict=True| F[Nível 5: Camada Cognitiva - propõe, não age]
+    F -->|Proposta plausível &#40;_hit_test_plausible&#41;| F2[Clique/foco físico]
+    F -->|Implausível / strict=True| H[Falha Crítica do Passo]
+    F2 -->|_verify_action_effect confirma| C
+    F2 -->|VERIFY_REJECTED| H
 ```
 
-> **Nota de ordenação (2026-07-13):** a Geometria DOM ao Vivo por Texto (Nível 3) roda **antes** do Self-Healing Cognitivo (Nível 3.5) — não depois, como uma versão anterior deste fluxo sugeria. A ordem importa: contra o site real, o self-healing cognitivo já resolveu (de forma imprecisa, um falso-positivo) alguns casos que a geometria determinística resolveria corretamente, mascarando o tier novo. Ver Seção 2-D.
+> **Nota de ordenação (2026-07-15, revisa a nota de 2026-07-13):** a ordem final é geometria-ao-vivo (Nível 3) → **coordenada gravada verificada (Nível 4)** → **LLM proposto-e-verificado (Nível 5, antes "3.5")** → falha limpa. A coordenada gravada foi movida para ANTES do LLM porque, com verificação de efeito ativa, ela é um tier de identidade barato (mesmo alvo gravado, caminho alternativo) — não adivinhação — e só é insegura sem a ressalva de overlay do `_verify_action_effect` (uma coordenada obsoleta caindo no backdrop de um painel CDK muda os sinais genéricos "parecendo efeito real"; a ressalva exige pós-condição específica quando há painel aberto no snapshot anterior). Sob `strict=True`, a cadeia para no Nível 3 — nem coordenada nem LLM rodam (Seção 2.F).
 
 ### Arquitetura de Módulos e Componentes
 
@@ -48,14 +52,14 @@ A ação de clique físico padrão em automação é uma das maiores causas de q
 
 0. **Espera pré-clique por elemento conhecidamente desabilitado (sensor `ENABLE_TIMEOUT`):** antes de qualquer tentativa física, `_wait_for_known_disabled_button` espera (timeout configurável, default 15s) até que o seletor-alvo saia do estado `disabled` — cobre botões gated por validação assíncrona (ex.: submit que só habilita após uma consulta de CPF terminar). Ver subseção D.
 1. **Hover-to-Reveal Sequencial:** Se o seletor contiver o encadeamento de submenus (` >> `), o runner executa uma verificação rápida e realiza o `hover` recursivo em todos os elementos intermediários para garantir a expansão dinâmica dos submenus.
-2. **Priorização de Âncoras Reais (Heurística Estática):** Ao identificar múltiplos candidatos que batem com o seletor, o runner inspeciona o atributo `href`. Candidatos que não são âncoras locais (como `href="#"`) recebem prioridade sobre links meramente funcionais.
+2. **Priorização de Âncoras Reais + Verificação de Ambiguidade (Heurística Estática, T1):** Ao identificar múltiplos candidatos que batem com o seletor, o runner inspeciona o atributo `href` — candidatos que não são âncoras locais (`href="#"`) recebem prioridade. **Quando há ambiguidade real (2+ candidatos visíveis)**, cada clique de candidato é verificado (`_verify_action_effect`, com snapshot antes/depois) antes de ser aceito — um candidato clicado sem efeito observável é descartado e o próximo é tentado. Resolução por ambiguidade verificada loga `HEALED`/`healing_method="ambiguous_candidate_verified"` (não mais `SUCCESS` silencioso) e registra `needs_review` (Sensor F1, Seção 4.B) — trocar de alvo entre candidatos ambíguos é uma decisão do framework, não fidelidade pura ao seletor gravado. A mesma regra vale para o fallback de "strict mode violation"/"resolved to" → `.first` (T2), tanto no clique quanto no preenchimento: só aceita o `.first` se o efeito for verificado; senão, propaga a falha original para o próximo nível de recuperação.
 3. **Sensor de Falso-Sucesso (`CLICK_NO_EFFECT`):** Muitos portais capturam cliques através de overlays invisíveis, fazendo com que o Playwright reporte sucesso no clique físico, mas sem causar nenhuma alteração na tela. O runner resolve isso tirando um snapshot leve pré-clique (URL atual, tamanho do DOM, quantidade de overlays ativos e classe/atributos ARIA dos irmãos diretos do elemento) e comparando com o estado pós-clique. Se nada mudar em até 800ms, o clique é declarado sem efeito (`CLICK_NO_EFFECT`) e a mesma cadeia de recuperação determinística (Escape+retry → reposição CDK → `fallback_selectors`) é disparada **antes** de fechar o passo — só cai para cognitivo/coordenada se nenhuma delas produzir efeito real. Flag mestre `AEGIS_CLICK_EFFECT_SENSOR` (default `true`).
 4. **Resiliência por Escape reativo:** O runner envia a tecla `Escape` à página para descartar overlays, loaders ou modais abertos no meio da transação e retenta o clique mecânico.
 5. **Reposicionamento de Overlay CDK:** Se a falha for provocada por painéis flutuantes (como os overlays do Angular Material que estouram os limites do viewport), o runner injeta um script JavaScript no browser para reconfigurar as coordenadas de posicionamento de `.cdk-overlay-pane` (posicionando-o em local fixo e acessível) e injeta o clique através de um evento sintético.
 6. **Seletores de Fallback Determinísticos (`fallback_selectors`):** Derivados do plano de execução do robô (gravados sequencialmente durante o voo de telemetria), o runner tenta, um a um, seletores alternativos e estáveis que também foram registrados para o mesmo passo.
 7. **Nível 3 — Geometria DOM ao Vivo por Texto (`_click_by_live_geometry`):** quando o chamador fornece o texto vivo da opção-alvo (extraído do `has_text` literal do seletor via `click_chained`), o runner varre o DOM em tempo real procurando um elemento cujo texto bate, clicando pela geometria (`Bounding Rect`) atual — não pela coordenada gravada, que fica obsoleta assim que o painel reancora na posição viva do input. Roda **antes** do self-healing cognitivo (ver Nota de ordenação da Seção 1). Não se aplica a `click_resilient` puro (sem texto vivo disponível) — só a `click_chained`, cujo caso de uso são opções de painel/menu com texto conhecido.
-8. **Nível 3.5 — Self-Healing Cognitivo por IA:** se ativado e o passo não for restritivo, o runner captura um screenshot e delega à LLM (`self_healing_click`) a localização espacial do elemento baseada na sua descrição amigável (`target_description`).
-9. **Nível 4 — Clique por Coordenada Física (Último Recurso):** Clica na coordenada relativa em que o elemento foi gravado originalmente (`original_coords`).
+8. **Nível 4 — Coordenada Gravada Verificada:** clica na coordenada relativa em que o elemento foi gravado originalmente (`original_coords`), captura snapshot antes/depois e só aceita via `_verify_action_effect`. Rejeitado (`[VERIFY_REJECTED]`) → cai pro Nível 5, nunca aborta a cadeia por conta própria. Sob `strict=True`, este tier nem roda — ver Seção 2.F.
+9. **Nível 5 — Self-Healing Cognitivo por IA (propõe, não age):** último tier antes da falha. Se ativado e o passo não for restritivo, o runner captura um screenshot e delega à LLM (`self_healing_click`) a localização espacial do elemento — mas a LLM **só retorna uma proposta** (`{x, y, reason, confidence}` ou `None`, nunca clica). O runner então: (a) roda `_hit_test_plausible` (gate de plausibilidade pré-clique — `elementFromPoint` na coordenada proposta, compara com `target_description`; implausível → `VERIFY_REJECTED` pré-clique, **nenhuma ação física ocorre**, custo zero de efeito colateral); (b) se plausível, executa o clique/foco físico; (c) roda `_verify_action_effect` pós-ação; só então reporta `HEALED`/`healing_method="visual_ai"`. Ver Seção 3.B para o contrato completo do gateway.
 
 > [!NOTE]
 > **Shadow DOM Piercing:** O runner suporta cliques diretos dentro de Shadow Roots abertos usando o encadeamento nativo `>>`. Para Shadow Roots fechados (invisíveis ao DOM virtual), o runner disponibiliza o método [click_by_coordinates](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/runner.py#L1074), que executa um clique físico bruto diretamente do sistema operacional nas coordenadas relativas convertidas do viewport.
@@ -93,6 +97,19 @@ Alguns cliques dependem de um alvo que só fica habilitado depois que uma valida
 
 Se mesmo assim o alvo nunca habilitar, o fluxo cai para a mesma decisão terminal (`strict`/cognitivo/coordenada) de qualquer outra falha de clique. Uma recuperação bem-sucedida por este sensor registra `needs_review` com `healing_method="enable_timeout_recovered"` — mesmo hook (`_register_healing_for_review`) usado por qualquer outro tier de cura, independente de o sensor `CLICK_NO_EFFECT` também ter disparado para o mesmo passo.
 
+### E. Telemetria de Resolução por Tier
+
+Aditivo ao histórico de execução (`historico_passos.json`), sem alterar o schema existente:
+
+- **`resolver_tier`** por passo: reaproveita `healing_method` quando o passo curou (`"visual_ai"`, `"coordinate"`, `"ambiguous_candidate_verified"`, `"fallback_selector"`, `"parent_has_text_reduced"`, `"live_geometry_by_text"`, `"enable_timeout_recovered"`, `"click_no_effect_recovered"`); `"identity"` quando resolveu no seletor primário (`SUCCESS` direto); `None` quando não resolveu (`FAILED`/`STOPPED`).
+- **`verify_result`** por passo curado: resumo do que `_verify_action_effect` avaliou — `{"kind": ..., "specific": bool, "passed": bool}` (`kind="generic"`/`specific=False` quando caiu nos sinais genéricos; `kind` concreto — `"fill"`, `"select"`, `"trigger_open"`, `"navigation"` — quando avaliou pós-condição específica).
+- **`VERIFY_REJECTED` pré vs. pós-clique:** contagem separada por execução — pré-clique é rejeição do gate de plausibilidade (nenhuma ação física ocorreu, custo zero); pós-clique é rejeição de `_verify_action_effect` depois que a ação já aconteceu.
+- **`reports/telemetria_resolucao.json`** — gravado uma vez no fim do batch (`run()`): `tier_resolution_counts`/`tier_resolution_rate` (quanto da cauda longa cada tier realmente resolveu) e `verify_rejected_counts`/`verify_rejected_rate` (pré vs. pós). É o número que valida a adesão à doutrina — alta taxa de `identity` e baixa de `visual_ai`/coordenada indica que o caminho feliz determinístico está saudável; alta taxa de rejeição pós-clique indica que o self-healing está "quase acertando" mas a pós-condição não bate (vale investigar o `expected_effect` do prompt).
+
+### F. Semântica de `strict`
+
+`strict=False` é o default de produção em todos os métodos resilientes — a cadeia completa (identidade → geometria → coordenada verificada → LLM proposto-e-verificado) fica disponível. `strict=True` restringe a cadeia a **apenas os tiers 1-2** (seletor primário + identidade/geometria/`fallback_selectors`) — sem coordenada gravada, sem LLM. É o modo de homologação/replay-literal: falha rápido e limpo em vez de tentar adivinhar, útil pra validar que o seletor primário/gravado realmente resolve sem depender de nenhum tier de recuperação. Composição com a mecânica `flaky` (Seção 4.A) é preservada: o gate `(strict or is_flaky_step) and not flaky_healing_unlocked` é avaliado ANTES de qualquer tier de recuperação — um passo `flaky` na 4ª tentativa da linha ainda desbloqueia coordenada/LLM mesmo sob `strict=True` (a mecânica de retry por linha tem prioridade sobre o modo homologação).
+
 ---
 
 ## 3. A Camada Cognitiva
@@ -102,18 +119,23 @@ O [CognitiveGateway](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/cognitive_
 ### A. Integração com Provedores
 O gateway autocarrega chaves de API e configurações declaradas tanto na raiz do framework quanto isoladamente na pasta de execução do robô específico. Aceita os provedores `openrouter` (usando o endpoint de completions) ou qualquer provedor local compatível com a biblioteca LiteLLM (através de `http://localhost:4000/v1`).
 
-### B. Auto-Healing Visual ([self_healing_click](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/cognitive_fallback.py#L247))
-Quando um seletor estático falha por alteração técnica no código-fonte do portal, o runner tira um screenshot silencioso `temp_self_healing.png` e constrói um prompt contendo a descrição de negócio do elemento (`target_description`), o seletor original e as coordenadas históricas de gravação.
+### B. Auto-Healing Visual — Proposta, não Ação ([self_healing_click](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/cognitive_fallback.py#L247) / `propose_fill_target`)
+
+> **Contrato mudou em 2026-07-15 (doutrina "Cauda Longa Verificada"):** `self_healing_click` e o método análogo `propose_fill_target` (para preenchimento) **não clicam nem digitam mais**. Eles retornam uma PROPOSTA — `{'x': int, 'y': int, 'reason': str, 'confidence': float}` quando a IA avista o alvo, ou `None` quando não avista / módulo inativo / erro na chamada. Quem decide se o clique físico acontece (gate de plausibilidade, `_hit_test_plausible`) e se o resultado é aceito (`_verify_action_effect`) é o **runner**, não o gateway. Isso elimina uma classe de falso-positivo confirmada em produção: antes, qualquer coordenada proposta pela IA (inclusive uma claramente errada) era clicada às cegas e reportada como sucesso.
+
+Quando um seletor estático falha por alteração técnica no código-fonte do portal, o runner tira um screenshot silencioso (`temp_self_healing.png`/`temp_self_healing_fill.png`) e constrói um prompt contendo a descrição de negócio do elemento (`target_description`), o seletor original, as coordenadas históricas de gravação, e — novo — o **efeito esperado** (`expected_effect`, texto livre derivado do tipo de gesto: "após o clique, um painel de opções deve abrir" / "a URL deve mudar" / "o campo deve conter o valor X"). Dar contexto de intenção ao modelo (não só localização visual) reduz a taxa de proposta errada; o gate de plausibilidade e a verificação pós-ação pegam o que ainda errar.
+
 A LLM analisa o screenshot e retorna o objeto JSON estruturado:
 ```json
 {
   "found": true,
   "x_percent": 0.45,
   "y_percent": 0.62,
+  "confidence": 0.87,
   "reason": "Botão 'Confirmar Pagamento' identificado abaixo do formulário de faturamento."
 }
 ```
-O runner converte os percentuais com base nas dimensões atuais de viewport do Playwright e clica diretamente na tela de forma resiliente.
+O runner converte os percentuais com base nas dimensões atuais de viewport do Playwright — a partir daí, `self_healing_click`/`propose_fill_target` devolvem só `{x, y, reason, confidence}` (coordenadas físicas). Clique, foco e digitação são responsabilidade do runner (Seção 2, itens 9 e a rota equivalente de `fill_resilient`/`fill_chained`/`fill_human_like`), sempre atrás do gate de plausibilidade e da verificação de efeito.
 
 ### C. Triagem e Diagnóstico de Falhas ([diagnose_failure](file:///c:/Projetos/aegis_rpa_suite/aegis_runner/cognitive_fallback.py#L342))
 Quando uma transação quebra e entra no bloco de exceção global, o runner tira um screenshot e anexa o histórico de passos executados (`steps_history`) em formato texto. O prompt instrui a LLM a agir como um auditor de QA humano, verificando popups, loaders bloqueantes, alertas vermelhos de formulário ou campos obrigatórios não preenchidos de passos anteriores.
