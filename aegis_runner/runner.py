@@ -45,6 +45,20 @@ class _ClickTerminalFailure(Exception):
         self.original = original
 
 
+# Regex de chave semântica pra campos numéricos/mascarados (CPF/CNPJ/CEP) --
+# espelha aegis_code_generator/deterministic_emitter.py:_ASYNC_GUARD_KEY_RE,
+# mantido local ao runtime de propósito (aegis_runner não deve depender do
+# módulo design-time só por isto -- ver decoupling design-time/run-time no
+# CLAUDE.md). Usada por TransactionRunner._verify_fill_effect (Fundação A1,
+# .specs/plano-cauda-longa-verificada.md Seção 4.A1).
+_ASYNC_GUARD_KEY_RE = re.compile(r"cpf|cnpj|cep", re.IGNORECASE)
+
+# input[type] nativos tratados como numéricos/mascarados pela comparação
+# type-aware de _verify_action_effect -- "date" tem tratamento próprio
+# (tolerância de formato yyyy-mm-dd <-> dd/mm/yyyy), não entra aqui.
+_NUMERIC_MASKED_INPUT_TYPES = {"number", "tel"}
+
+
 class TransactionRunner:
     def __init__(self, project_dir, error_message_selector=".toast-error, .alert-danger, #angular-field-status-message", cognitive_gateway=None, initial_url=None, **kwargs):
         self.project_dir = os.path.abspath(project_dir)
@@ -458,6 +472,270 @@ class TransactionRunner:
         except Exception:
             # Falha no próprio sensor nunca deve impactar a execução do passo.
             return True
+
+    # Seletor genérico de painel/overlay aberto -- mesmo usado hoje em
+    # select_option_resilient (runner.py:1383/1409/1433). Reaproveitado pelas
+    # pós-condições específicas de select/trigger_open do verificador
+    # universal (_verify_action_effect) em vez de duplicar a string.
+    _OPEN_PANEL_SELECTOR = ".cdk-overlay-pane, .mat-select-panel, [role='listbox']"
+
+    # Padrões de data reconhecidos pela pós-condição type-aware de fill --
+    # mesmos formatos que fill_resilient/fill_human_like já convertem entre si
+    # (runner.py ~2100/2205: yyyy-mm-dd <-> dd/mm/yyyy).
+    _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    _BR_DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+
+    def _verify_action_effect(self, page, before_snapshot, expected=None) -> bool:
+        """
+        Verificador universal de efeito (Fundação A1 -- .specs/plano-cauda-longa-
+        verificada.md Seção 4.A1). Generaliza a verificação de efeito já
+        existente SEM substituí-la: reusa _click_effect_signals_changed como
+        base dos sinais genéricos (URL/domSize/overlays/siblingClassFingerprint),
+        a mesma primitiva que já alimenta o sensor CLICK_NO_EFFECT (M2,
+        _detect_click_no_effect, acima).
+
+        NÃO fiado em nenhum call site ainda -- fundação isolada e testável por
+        si só; o rewire dos tiers de decisão (click/select/fill) é outra tarefa
+        (Seção 4.A2 do plano).
+
+        Parâmetros:
+          page: página Playwright ATUAL (pós-gesto). Só é efetivamente
+            consultada quando `expected` não resolve tudo sozinho (painel
+            aberto/fechado via page.locator(...).count(), URL via page.url,
+            ou recaptura do snapshot genérico "depois" quando o chamador não
+            informou um pronto em expected["after_snapshot"]).
+          before_snapshot: dict no formato de _capture_click_effect_snapshot,
+            capturado ANTES do gesto. None/valor inválido é tratado como "sem
+            baseline" -- cai no comportamento conservador já existente de
+            _click_effect_signals_changed (retorna True; falha do próprio
+            sensor nunca bloqueia o passo).
+          expected: dict opcional descrevendo a pós-condição específica do
+            gesto -- quando presente e com "kind" reconhecido, é o critério
+            PRIMÁRIO (Fase 2 do plano alimenta isto a partir de
+            expected_effect gravado; hoje quem popula é o próprio chamador,
+            por tipo de gesto). Chaves reconhecidas:
+            - "kind": "fill" | "select" | "trigger_open" | "navigation" --
+              ausente/não reconhecido cai nos sinais genéricos (ver abaixo).
+            - fill: "expected_value" (obrigatório), e o valor realmente
+              digitado via "actual_value" (string já lida pelo chamador) OU
+              "locator" (objeto Playwright do ALVO QUE DE FATO recebeu a
+              digitação -- o curado/proposto, NUNCA o seletor original que já
+              falhou no ramo que invoca este verificador -- lido via
+              locator.input_value()). "input_type" (ex. "tel", "number") e/ou
+              "field_key" (ex. "cpf_titular", cruzado com _ASYNC_GUARD_KEY_RE)
+              decidem comparação só-dígitos pra campos numéricos/mascarados;
+              sem eles, comparação de texto livre (whitespace normalizado,
+              nunca pontuação). Datas (ambos os lados em yyyy-mm-dd ou
+              dd/mm/yyyy) são sempre comparadas com tolerância de formato.
+            - select: "expected_text" (obrigatório) + "actual_trigger_text"
+              (texto já lido pelo chamador) OU "trigger_locator" (lido via
+              .inner_text()); painel precisa estar fechado
+              (page.locator(panel_selector).count() == 0) E expected_text
+              precisa aparecer em actual_trigger_text.
+            - trigger_open: confirma que um painel abriu
+              (page.locator(panel_selector).count() > 0).
+            - navigation: URL mudou em relação a before_snapshot["url"] (ou
+              bate exatamente com "url", se informado).
+            - "panel_selector": override do seletor de painel/overlay usado
+              por "select"/"trigger_open" (default _OPEN_PANEL_SELECTOR).
+            - Sem "kind" reconhecido: "after_snapshot" (dict pronto, evita
+              recapturar) e "panel_closed_confirmed" (bool) alimentam o
+              caminho genérico abaixo.
+
+        Regras (Seção 4.A1 do plano):
+          1. Sinais genéricos são sempre a base quando não há pós-condição
+             específica reconhecida (_click_effect_signals_changed).
+          2. Ressalva de overlay (DEPENDÊNCIA DURA, não cosmética --
+             runner.py:894-901 documenta que fechar um painel via clique no
+             backdrop CDK muda os MESMOS sinais genéricos sem confirmar o
+             clique certo): quando before_snapshot indica que havia painel/
+             overlay aberto ANTES do gesto (`overlays` > 0, ou `panel_open`
+             explícito), sinais genéricos SOZINHOS nunca aprovam no caminho
+             genérico -- só aprovam se o chamador confirmar explicitamente
+             via expected["panel_closed_confirmed"] (a própria confirmação É
+             a pós-condição específica nesse caminho).
+          3. Pós-condição específica por gesto (quando expected["kind"] é
+             reconhecido) satisfaz sozinha o requisito -- não depende dos
+             sinais genéricos, então a ressalva de overlay do item 2 fica
+             automaticamente respeitada nesse caminho.
+          4. Gesto não reconhecido (ou expected ausente) cai pros sinais
+             genéricos, sujeitos à ressalva de overlay do item 2.
+        """
+        kind = expected.get("kind") if isinstance(expected, dict) else None
+
+        if kind == "fill":
+            return self._verify_fill_effect(page, expected)
+        if kind == "select":
+            return self._verify_select_effect(page, expected)
+        if kind == "trigger_open":
+            return self._verify_panel_opened(page, expected)
+        if kind == "navigation":
+            return self._verify_navigation_effect(page, before_snapshot, expected)
+
+        return self._verify_generic_effect(page, before_snapshot, expected)
+
+    def _verify_generic_effect(self, page, before_snapshot, expected) -> bool:
+        """Caminho sem pós-condição específica reconhecida: sinais genéricos
+        (URL/domSize/overlays/siblingClassFingerprint via
+        _click_effect_signals_changed), com a ressalva obrigatória de overlay
+        (regra 2 de _verify_action_effect)."""
+        has_expected = isinstance(expected, dict)
+
+        if has_expected and "after_snapshot" in expected:
+            after_snapshot = expected["after_snapshot"]
+        else:
+            after_snapshot = self._capture_click_effect_snapshot(page)
+        generic_changed = self._click_effect_signals_changed(before_snapshot, after_snapshot)
+
+        before_had_overlay = isinstance(before_snapshot, dict) and (
+            int(before_snapshot.get("overlays", 0) or 0) > 0
+            or bool(before_snapshot.get("panel_open"))
+        )
+        if before_had_overlay:
+            # Contexto de painel: sinais genéricos sozinhos nunca aprovam
+            # (falso-positivo documentado de fechar painel via backdrop,
+            # runner.py:894-901) -- só aprova com confirmação explícita do
+            # chamador, que É a pós-condição específica nesse caminho.
+            return bool(has_expected and expected.get("panel_closed_confirmed"))
+
+        return generic_changed
+
+    @classmethod
+    def _looks_like_date(cls, value: str) -> bool:
+        return bool(cls._ISO_DATE_RE.match(value) or cls._BR_DATE_RE.match(value))
+
+    @staticmethod
+    def _dates_equivalent(actual: str, expected_value: str) -> bool:
+        """Tolera a mesma conversão de formato que fill_resilient/fill_human_like
+        já aplicam pra campos que não são input nativo type=date (yyyy-mm-dd ->
+        dd/mm/yyyy, runner.py ~2100/2205). Normaliza os dois lados pro formato
+        ISO antes de comparar."""
+        def to_iso(s):
+            s = (s or "").strip()
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+                return s
+            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", s)
+            if m:
+                dd, mm, yyyy = m.groups()
+                return f"{yyyy}-{mm}-{dd}"
+            return s
+        return to_iso(actual) == to_iso(expected_value)
+
+    def _verify_fill_effect(self, page, expected) -> bool:
+        """Pós-condição de fill: compara o valor esperado com o valor QUE DE
+        FATO foi lido do alvo que recebeu a digitação (expected["locator"] --
+        o elemento curado/proposto, NUNCA o seletor original que já falhou no
+        ramo que invoca este verificador -- ou expected["actual_value"] já
+        lido pelo chamador).
+
+        Comparação type-aware (achado da Rodada 2 do plan-critic, Seção 4.A1):
+        - Datas (ambos os lados reconhecíveis como yyyy-mm-dd ou dd/mm/yyyy):
+          tolera a conversão de formato que fill_resilient/fill_human_like já
+          fazem -- compara por equivalência, não por formato.
+        - Campo numérico/mascarado (input_type em _NUMERIC_MASKED_INPUT_TYPES,
+          ou field_key batendo com _ASYNC_GUARD_KEY_RE -- CPF/CNPJ/CEP):
+          compara só dígitos (máscara pode diferir entre gravação e runtime).
+        - Texto livre (nome, endereço, etc.): normaliza só whitespace (trim +
+          colapsa espaços múltiplos) e compara exato -- NUNCA remove
+          pontuação, pra não mascarar um fill genuinamente errado em nomes
+          como "José D'Ávila" ou endereços como "Rua X, 123"."""
+        if not isinstance(expected, dict):
+            return False
+        expected_value = expected.get("expected_value")
+        if expected_value is None:
+            return False
+
+        actual_value = expected.get("actual_value")
+        if actual_value is None:
+            locator = expected.get("locator")
+            if locator is None:
+                return False
+            try:
+                actual_value = locator.input_value()
+            except Exception:
+                return False
+        if actual_value is None:
+            return False
+
+        expected_str = str(expected_value)
+        actual_str = str(actual_value)
+
+        if self._looks_like_date(expected_str) and self._looks_like_date(actual_str):
+            return self._dates_equivalent(actual_str, expected_str)
+
+        input_type = (expected.get("input_type") or "").lower()
+        field_key = expected.get("field_key") or ""
+        is_numeric_masked = (
+            input_type in _NUMERIC_MASKED_INPUT_TYPES
+            or bool(_ASYNC_GUARD_KEY_RE.search(str(field_key)))
+        )
+        if is_numeric_masked:
+            actual_digits = re.sub(r"\D", "", actual_str)
+            expected_digits = re.sub(r"\D", "", expected_str)
+            return actual_digits != "" and actual_digits == expected_digits
+
+        actual_norm = re.sub(r"\s+", " ", actual_str).strip()
+        expected_norm = re.sub(r"\s+", " ", expected_str).strip()
+        return actual_norm == expected_norm
+
+    def _verify_select_effect(self, page, expected) -> bool:
+        """Pós-condição de select: painel fechou E o valor esperado apareceu no
+        trigger. Sem como confirmar o valor no trigger (nem
+        "actual_trigger_text" nem "trigger_locator" informados), não há como
+        distinguir 'fechou porque comitou o valor certo' de 'fechou porque
+        cancelou no backdrop' (falso-positivo documentado, runner.py:894-901)
+        -- retorna False (não verificado); nunca aprova por omissão de dado."""
+        if not isinstance(expected, dict):
+            return False
+        expected_text = expected.get("expected_text")
+        if expected_text is None:
+            return False
+
+        panel_selector = expected.get("panel_selector") or self._OPEN_PANEL_SELECTOR
+        try:
+            panel_open = page.locator(panel_selector).count() > 0
+        except Exception:
+            return False
+        if panel_open:
+            return False
+
+        actual_trigger_text = expected.get("actual_trigger_text")
+        if actual_trigger_text is None:
+            trigger_locator = expected.get("trigger_locator")
+            if trigger_locator is None:
+                return False
+            try:
+                actual_trigger_text = trigger_locator.inner_text()
+            except Exception:
+                return False
+        if actual_trigger_text is None:
+            return False
+
+        return str(expected_text) in str(actual_trigger_text)
+
+    def _verify_panel_opened(self, page, expected) -> bool:
+        """Pós-condição de clique de trigger: um painel de opções abriu (mesma
+        primitiva já usada em select_option_resilient, runner.py:1383/1409/1433,
+        generalizada aqui)."""
+        panel_selector = (expected or {}).get("panel_selector") or self._OPEN_PANEL_SELECTOR
+        try:
+            return page.locator(panel_selector).count() > 0
+        except Exception:
+            return False
+
+    def _verify_navigation_effect(self, page, before_snapshot, expected) -> bool:
+        """Pós-condição de navegação: a URL mudou (mesma checagem já usada via
+        validate_navigation em click_resilient, generalizada aqui)."""
+        try:
+            current_url = page.url
+        except Exception:
+            # Falha do próprio sensor nunca deve bloquear o passo.
+            return True
+        before_url = before_snapshot.get("url") if isinstance(before_snapshot, dict) else None
+        target_url = (expected or {}).get("url")
+        if target_url:
+            return current_url == target_url
+        return before_url is not None and before_url != current_url
 
     def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False) -> bool:
         """
