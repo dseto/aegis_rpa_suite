@@ -1870,7 +1870,13 @@ class TransactionRunner:
         # opções — sem essa checagem, um clique cego "no vazio" era aceito
         # como sucesso e o dropdown seguia com o valor antigo (causa raiz de
         # falhas em cascata como o st_052 do cenário 001).
-        if not trigger_clicked and original_coords_trigger and len(original_coords_trigger) == 2:
+        # Re-semantização de `strict` (A5): este é o tier 3 (coordenada
+        # gravada) — sob strict=True a cadeia deve parar nos tiers 1-2
+        # (seletores determinísticos + geometria ao vivo), sem tentar
+        # coordenada nem cognitivo. Antes desta guarda, `strict` não era
+        # consultado aqui, contradizendo o contrato já aplicado em
+        # click_resilient/fill_resilient.
+        if not trigger_clicked and not strict and original_coords_trigger and len(original_coords_trigger) == 2:
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords_trigger[0])
@@ -1929,7 +1935,11 @@ class TransactionRunner:
         # a coordenada gravada estivesse obsoleta, o robô "selecionava" o
         # vazio e seguia reportando SUCCESS com o valor antigo inalterado
         # (causa raiz confirmada da falha em cascata do st_052/cenário 001).
-        if not option_clicked and original_coords_option and len(original_coords_option) == 2 and not (is_flaky_step and self.current_row_flaky_attempt <= 3):
+        # Re-semantização de `strict` (A5): tier 3 (coordenada gravada) —
+        # bloqueado sob strict=True, mesmo contrato do fallback do trigger
+        # acima. A mecânica flaky (`not (is_flaky_step and attempt <= 3)`)
+        # continua intocada, avaliada em paralelo (não substituída).
+        if not option_clicked and not strict and original_coords_option and len(original_coords_option) == 2 and not (is_flaky_step and self.current_row_flaky_attempt <= 3):
             try:
                 viewport = page.viewport_size or {"width": 1280, "height": 720}
                 x = int(viewport["width"] * original_coords_option[0])
