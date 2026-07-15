@@ -1221,9 +1221,11 @@ class TransactionRunner:
         Decide o desfecho final de um clique que NENHUMA camada determinística
         conseguiu resolver: aplica a mesma regra de strict/flaky, tenta a
         Geometria DOM ao Vivo por texto (Nível 3, só quando o chamador
-        extraiu `live_text` do seletor), o Self-Healing Cognitivo por IA
-        (Nível 3.5, quando a geometria não resolveu) e o Fallback Físico de
-        Coordenadas de Gravação (Nível 4) quando permitido, e por fim loga
+        extraiu `live_text` do seletor), o Fallback Físico de Coordenadas de
+        Gravação, agora COM verificação de efeito pós-clique (Nível 4,
+        `.specs/plano-cauda-longa-verificada.md` Seção 3/4.A2 — reordenado
+        pra ANTES do cognitivo) e o Self-Healing Cognitivo por IA (Nível 5,
+        quando a coordenada não resolveu) quando permitido, e por fim loga
         FAILED e relança a exceção `e`.
 
         Compartilhado entre _handle_click_failure (falha por exceção do
@@ -1263,16 +1265,16 @@ class TransactionRunner:
         # fechar o painel via backdrop MUDA overlays/domSize, parecendo efeito
         # real. Reaproveita _click_by_live_geometry (mesma primitiva já usada
         # por select_option_resilient): resolve a opção por TEXTO e clica no
-        # centro do bounding rect ATUAL. Roda ANTES do Self-Healing Cognitivo
-        # (Nível 3.5) porque este último não tem verificação de pós-condição
-        # — `self_healing_click` clica onde a IA de visão aponta e retorna
-        # True sem confirmar que o clique realmente comitou o valor no
-        # estado do app (ex.: confundir o texto já digitado no campo de
-        # busca com a opção do dropdown, "clicando" no próprio input e
-        # retornando sucesso falso). A geometria ao vivo é determinística e
-        # verificável, então tem prioridade sempre que há `live_text`
-        # disponível; qualquer exceção aqui cai para o Nível 3.5, nunca
-        # propaga.
+        # centro do bounding rect ATUAL. Roda ANTES da coordenada gravada
+        # (Nível 4) e do Self-Healing Cognitivo (Nível 5) porque nenhum dos
+        # dois tem a mesma garantia de identidade — a coordenada gravada
+        # pode ter ficado obsoleta e a IA de visão clica onde aponta sem
+        # confirmar que o clique realmente comitou o valor no estado do app
+        # (ex.: confundir o texto já digitado no campo de busca com a opção
+        # do dropdown, "clicando" no próprio input e retornando sucesso
+        # falso). A geometria ao vivo é determinística e verificável, então
+        # tem prioridade sempre que há `live_text` disponível; qualquer
+        # exceção aqui cai para o Nível 4, nunca propaga.
         healed_by_ia = False
         if live_text:
             try:
@@ -1286,9 +1288,39 @@ class TransactionRunner:
             except Exception as geo_err:
                 print(f"[AEGIS RUNNER] Falha no tier de geometria ao vivo por texto: {geo_err}")
 
-        # Nível 3.5: Self-Healing Cognitivo por IA. Roda quando a geometria ao
-        # vivo não resolveu (sem `live_text` extraível, ou
-        # `_click_by_live_geometry` retornou False/lançou exceção acima).
+        # Nível 4: Fallback Físico de Coordenadas de Gravação, agora ANTES do
+        # Self-Healing Cognitivo e COM verificação de efeito pós-clique
+        # (.specs/plano-cauda-longa-verificada.md Seção 3/4.A2). Antes desta
+        # reordenação, a coordenada gravada era o "Último Recurso" depois do
+        # cognitivo e era aceita às cegas (sem verificação alguma) — se
+        # estivesse obsoleta e caísse no backdrop transparente de um overlay
+        # CDK, o clique "funcionava" mecanicamente (fecha o overlay, muda
+        # DOM/overlays) mas não commitava nenhum valor de negócio, um
+        # falso-positivo silencioso. Promover a coordenada pra antes do
+        # cognitivo só é seguro PORQUE `_verify_action_effect` (SUB01) já tem
+        # a ressalva de overlay que detecta exatamente esse caso — sem ela,
+        # esta reordenação teria introduzido o falso-positivo genérico em vez
+        # de eliminá-lo. Proposta (clique físico) rejeitada pela verificação
+        # é VERIFY_REJECTED — cadeia segue pro próximo tier (cognitivo), nunca
+        # aborta por uma coordenada obsoleta.
+        if original_coords and len(original_coords) == 2:
+            try:
+                viewport = page.viewport_size or {"width": 1280, "height": 720}
+                x = int(viewport["width"] * original_coords[0])
+                y = int(viewport["height"] * original_coords[1])
+                print(f"[AEGIS RUNNER] Tentando coordenadas históricas da gravação (verificado): ({x}, {y})")
+                before_snapshot = self._capture_click_effect_snapshot(page, selector)
+                page.mouse.click(x, y)
+                if self._verify_action_effect(page, before_snapshot, expected=None):
+                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
+                    return True
+                print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
+            except Exception as coords_err:
+                print(f"[AEGIS RUNNER] Falha ao tentar clique por coordenadas de fallback: {coords_err}")
+
+        # Nível 5: Self-Healing Cognitivo por IA. Roda quando a geometria ao
+        # vivo (Nível 3) e a coordenada gravada verificada (Nível 4) não
+        # resolveram.
         #
         # Contrato proposto→verificado (.specs/plano-cauda-longa-verificada.md
         # Seção 4.B1/A4/A1): `self_healing_click` só PROPÕE {x, y, reason,
@@ -1297,9 +1329,8 @@ class TransactionRunner:
         # proposta plausível é fisicamente clicada; o efeito é então
         # verificado PÓS-clique (`_verify_action_effect`, A1) antes de virar
         # HEALED. Proposta implausível ou efeito não verificado é
-        # VERIFY_REJECTED — cadeia segue pro próximo tier (coordenada), nunca
-        # aborta por proposta ruim.
-        cognitive_attempt_failed = False
+        # VERIFY_REJECTED — cadeia segue pro esgotamento final, nunca aborta
+        # por proposta ruim.
         if self.cognitive.is_active():
             print(f"[AEGIS RUNNER] Falha no clique padrão de '{selector}'. Acionando Self-Healing cognitivo via IA...")
             try:
@@ -1317,29 +1348,11 @@ class TransactionRunner:
                         self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
                     print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
-                    cognitive_attempt_failed = True
                 else:
                     if proposal:
                         print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
-                    cognitive_attempt_failed = True
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
-                cognitive_attempt_failed = True
-        else:
-            cognitive_attempt_failed = True
-
-        # Nível 4: Fallback Físico de Coordenadas de Gravação (Último Recurso)
-        if cognitive_attempt_failed and original_coords and len(original_coords) == 2:
-            try:
-                viewport = page.viewport_size or {"width": 1280, "height": 720}
-                x = int(viewport["width"] * original_coords[0])
-                y = int(viewport["height"] * original_coords[1])
-                print(f"[AEGIS RUNNER] [FALLBACK ÚLTIMO RECURSO] Clicando em coordenadas históricas da gravação: ({x}, {y})")
-                page.mouse.click(x, y)
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
-                return True
-            except Exception as coords_err:
-                print(f"[AEGIS RUNNER] Falha crítica no clique por coordenadas de fallback: {coords_err}")
 
         print(f"[AEGIS RUNNER] Falha definitiva ao clicar em '{selector}'.")
         self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
