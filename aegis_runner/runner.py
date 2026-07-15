@@ -127,13 +127,35 @@ class TransactionRunner:
         self.steps_history = []
         self._recent_fills = collections.deque(maxlen=30)
 
+        # E: telemetria/observabilidade (.specs/plano-cauda-longa-verificada.md
+        # Seção 4.E). Agregados por EXECUÇÃO (instância do runner) — nunca
+        # resetados pelo reset de steps_history por linha/transação dentro de
+        # run(), senão a métrica final só refletiria a última linha.
+        self._tier_resolution_counts = collections.Counter()
+        self._verify_rejected_counts = {"pre_click": 0, "post_click": 0}
+
     def register_scenario(self, scenario_name, callback):
         """Registra a rotina de preenchimento de formulário para um cenário lógico."""
         self.scenarios[scenario_name] = callback
         print(f"[AEGIS RUNNER] Cenário '{scenario_name}' registrado com sucesso.")
 
-    def _log_step(self, step_id, action, selector, target_description, status, error_msg="", healing_method=None):
+    def _log_step(self, step_id, action, selector, target_description, status, error_msg="", healing_method=None, resolver_tier=None, verify_result=None):
         """Registra um passo no histórico interno da execução com atualização in-place por step_id."""
+        # E: telemetria/observabilidade. `resolver_tier` identifica QUAL tier
+        # resolveu o passo — reaproveita os valores já usados em
+        # `healing_method` (não inventa taxonomia nova) quando presente;
+        # "identity" para sucesso direto sem healing; None para FAILED (nenhum
+        # tier resolveu). Um `resolver_tier` explícito do chamador sempre
+        # vence a derivação automática.
+        if resolver_tier is None:
+            if status == "HEALED":
+                resolver_tier = healing_method or "healed"
+            elif status == "SUCCESS":
+                resolver_tier = "identity"
+            else:
+                resolver_tier = None
+        if resolver_tier is not None:
+            self._tier_resolution_counts[resolver_tier] += 1
         # Captura screenshot se SUCCESS/HEALED e step_screenshots ativo
         screenshot_filename = ""
         row_id = getattr(self, "current_row_id", "1")
@@ -174,6 +196,8 @@ class TransactionRunner:
                     step["screenshot"] = screenshot_filename or None
                     step["row_id"] = row_id
                     step["timestamp"] = timestamp_iso
+                    step["resolver_tier"] = resolver_tier
+                    step["verify_result"] = verify_result
                     updated = True
                     break
 
@@ -191,7 +215,9 @@ class TransactionRunner:
                 "usedHealing": status == "HEALED",
                 "screenshot": screenshot_filename or None,
                 "row_id": row_id,
-                "timestamp": timestamp_iso
+                "timestamp": timestamp_iso,
+                "resolver_tier": resolver_tier,
+                "verify_result": verify_result
             })
             if step_id:
                 print(f"[AEGIS RUNNER] step_id '{step_id}' não encontrado no plano; registrado como novo passo.")
@@ -226,6 +252,78 @@ class TransactionRunner:
                 pass
         except Exception:
             pass  # Falha silenciosa - não interrompe execução
+
+    def _note_verify_rejected(self, phase, message):
+        """E: telemetria/observabilidade. Contabiliza uma ocorrência de
+        [VERIFY_REJECTED] separando PRÉ-clique (`phase="pre"` — gate de
+        plausibilidade `_hit_test_plausible`, nenhuma ação física ocorreu)
+        de PÓS-clique/PÓS-preenchimento (`phase="post"` —
+        `_verify_action_effect` reprovou depois da ação física). Imprime a
+        mensagem original sem alterá-la (mesmo comportamento visível de
+        antes desta instrumentação)."""
+        key = "pre_click" if phase == "pre" else "post_click"
+        self._verify_rejected_counts[key] = self._verify_rejected_counts.get(key, 0) + 1
+        print(message)
+
+    def _summarize_verify_result(self, expected, passed):
+        """E: telemetria/observabilidade. Resume o que `_verify_action_effect`
+        avaliou para um passo, pra registro em `historico_passos.json` via
+        `_log_step(verify_result=...)`. `expected=None` (verificação
+        genérica de "algo mudou na página") produz um resumo `generic`;
+        `expected` com `kind` (ex.: {"kind": "fill", ...}) produz um resumo
+        específico daquele tipo de verificação."""
+        kind = "generic"
+        specific = False
+        if expected and expected.get("kind"):
+            kind = expected["kind"]
+            specific = True
+        return {"kind": kind, "specific": specific, "passed": bool(passed)}
+
+    def _write_resolution_telemetry(self):
+        """E: telemetria/observabilidade. Métrica agregada por EXECUÇÃO: taxa
+        de resolução por tier + taxa de rejeição pré vs. pós-clique, escrita
+        em reports/telemetria_resolucao.json ao final do batch (mesma pasta
+        onde historico_passos.json/relatorio_execucao.csv já são gravados).
+        Não-fatal por design; nunca lança para não derrubar o fechamento da
+        execução."""
+        try:
+            tier_counts = dict(self._tier_resolution_counts)
+            total_resolved = sum(tier_counts.values())
+            tier_rate = {}
+            if total_resolved > 0:
+                tier_rate = {tier: count / total_resolved for tier, count in tier_counts.items()}
+
+            pre_click = self._verify_rejected_counts.get("pre_click", 0)
+            post_click = self._verify_rejected_counts.get("post_click", 0)
+            total_rejected = pre_click + post_click
+            if total_rejected > 0:
+                pre_pct = pre_click / total_rejected
+                post_pct = post_click / total_rejected
+            else:
+                pre_pct = 0.0
+                post_pct = 0.0
+
+            summary = {
+                "total_steps_resolved": total_resolved,
+                "tier_resolution_counts": tier_counts,
+                "tier_resolution_rate": tier_rate,
+                "verify_rejected_counts": {
+                    "pre_click": pre_click,
+                    "post_click": post_click,
+                    "total": total_rejected,
+                },
+                "verify_rejected_rate": {
+                    "pre_click_pct": pre_pct,
+                    "post_click_pct": post_pct,
+                },
+            }
+
+            telemetry_path = os.path.join(self.output_dir, "reports", "telemetria_resolucao.json")
+            with open(telemetry_path, "w", encoding="utf-8") as tf:
+                json.dump(summary, tf, indent=4, ensure_ascii=False)
+            print(f"[AEGIS RUNNER] Telemetria de resolução gravada em: {telemetry_path}")
+        except Exception as e:
+            print(f"[WARNING] Falha ao gravar telemetria_resolucao.json: {e}")
 
     def _with_file_lock(self, file_handle):
         """Context manager simples de lock exclusivo de arquivo (Windows via msvcrt)."""
@@ -1024,7 +1122,7 @@ class TransactionRunner:
                             if self._verify_action_effect(page, candidate_before_snapshot):
                                 ambiguous_candidate_verified = True
                                 break
-                            print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique no candidato ambíguo {idx+1}/{len(candidate_locators)} de '{selector}' não confirmado por efeito real. Tentando próximo candidato...")
+                            self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique no candidato ambíguo {idx+1}/{len(candidate_locators)} de '{selector}' não confirmado por efeito real. Tentando próximo candidato...")
                             clicked = False
                             continue
                         break
@@ -1354,7 +1452,7 @@ class TransactionRunner:
                 if self._verify_action_effect(page, before_snapshot, expected=None):
                     self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
                     return True
-                print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
+                self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
             except Exception as coords_err:
                 print(f"[AEGIS RUNNER] Falha ao tentar clique por coordenadas de fallback: {coords_err}")
 
@@ -1387,10 +1485,10 @@ class TransactionRunner:
                     if self._verify_action_effect(page, before_snapshot, expected=None):
                         self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
                 else:
                     if proposal:
-                        print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
+                        self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
 
@@ -1611,7 +1709,7 @@ class TransactionRunner:
                     if self._verify_action_effect(page, t2_before_snapshot):
                         self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique em fallback '.first' de '{selector}' não confirmado por efeito real. Prosseguindo para a cadeia de recuperação existente...")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique em fallback '.first' de '{selector}' não confirmado por efeito real. Prosseguindo para a cadeia de recuperação existente...")
                 except Exception as inner_e:
                     e = inner_e
 
@@ -1991,9 +2089,9 @@ class TransactionRunner:
                         option_clicked = True
                         healed_via_fallback = "visual_ai"
                     else:
-                        print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' não produziu efeito verificável (painel não fechou/valor não comitado).")
+                        self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' não produziu efeito verificável (painel não fechou/valor não comitado).")
                 elif proposal:
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' rejeitada pelo gate de plausibilidade (pré-clique).")
+                    self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para a opção '{option_text}' rejeitada pelo gate de plausibilidade (pré-clique).")
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro no self-healing cognitivo para opção: {ia_err}")
 
@@ -2089,7 +2187,7 @@ class TransactionRunner:
                     except Exception:
                         pass
                 elif proposal:
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
+                    self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
                 self._log_step(step_id=step_id, action="select_native", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
                 raise e
             else:
@@ -2574,9 +2672,9 @@ class TransactionRunner:
                     if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
                         self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em fill_chained não confirmado pelo valor lido do campo.")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em fill_chained não confirmado pelo valor lido do campo.")
                 elif proposal:
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento (fill_chained) rejeitada pelo gate de plausibilidade (pré-clique).")
+                    self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento (fill_chained) rejeitada pelo gate de plausibilidade (pré-clique).")
             self._log_step(step_id=step_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
 
@@ -2639,7 +2737,7 @@ class TransactionRunner:
                     if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "locator": t2_fill_locator}):
                         self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento em fallback '.first' de '{selector}' não confirmado pelo valor lido do campo. Prosseguindo para a cadeia de recuperação existente...")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento em fallback '.first' de '{selector}' não confirmado pelo valor lido do campo. Prosseguindo para a cadeia de recuperação existente...")
                 except Exception as inner_e:
                     e = inner_e
 
@@ -2710,9 +2808,9 @@ class TransactionRunner:
                     if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
                         self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em '{selector}' não confirmado pelo valor lido do campo.")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em '{selector}' não confirmado pelo valor lido do campo.")
                 elif proposal:
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
+                    self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
                 self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg="IA self-healing failed")
                 raise e
             else:
@@ -2811,9 +2909,9 @@ class TransactionRunner:
                     if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
                         self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
                         return True
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo HUMAN_LIKE em '{selector}' não confirmado pelo valor lido do campo.")
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo HUMAN_LIKE em '{selector}' não confirmado pelo valor lido do campo.")
                 elif proposal:
-                    print(f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento HUMAN_LIKE para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
+                    self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento HUMAN_LIKE para '{selector}' rejeitada pelo gate de plausibilidade (pré-clique).")
             self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="FAILED", error_msg=str(e))
             raise e
 
@@ -3310,7 +3408,11 @@ class TransactionRunner:
                     json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
             except Exception as j_err:
                 print(f"[WARNING] Falha ao atualizar historico_passos.json na raiz do cenário: {j_err}")
-                
+
+            # E: telemetria/observabilidade agregada por execução (taxa de
+            # resolução por tier + taxa de rejeição pré/pós-clique).
+            self._write_resolution_telemetry()
+
             self._write_index_file()
                 
             if page:
