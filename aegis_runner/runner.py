@@ -635,14 +635,16 @@ class TransactionRunner:
               (page.locator(panel_selector).count() > 0).
             - navigation: URL mudou em relação a before_snapshot["url"] (ou
               bate exatamente com "url", se informado).
-            - closed_shadow_click: aprova incondicionalmente -- reservado pra
-              quando o chamador já confirmou no pré-clique, via
-              _is_closed_shadow_target, que o alvo é o host de um Shadow DOM
-              fechado (childElementCount == 0, textContent == '' no DOM claro
-              apesar de área visível não-trivial). Sinais genéricos nunca
-              conseguem observar o efeito real nesse caso (confirmado ao vivo,
-              não é suposição) -- a confirmação pré-clique + a execução física
-              do gesto É a pós-condição nesse caminho.
+            - closed_shadow_click: polling genérico ESTENDIDO
+              (_poll_generic_effect_extended, ~6s) -- pra alvo em host de
+              Shadow DOM fechado (confirmado no pré-clique via
+              _is_closed_shadow_target). O efeito real É observável em light
+              DOM (o app reflete o estado interno fora do shadow), mas com
+              latência de segundos, acima da janela padrão. Sem mudança de
+              sinal dentro da janela estendida, REJEITA -- nunca aprova
+              incondicionalmente (a versão que aprovava produziu HEALED falso
+              confirmado ao vivo: clique no centro do host caiu numa div
+              interna inerte, efeito zero, passo marcado curado).
             - "panel_selector": override do seletor de painel/overlay usado
               por "select"/"trigger_open" (default _OPEN_PANEL_SELECTOR).
             - Sem "kind" reconhecido: "after_snapshot" (dict pronto, evita
@@ -679,10 +681,98 @@ class TransactionRunner:
         if kind == "navigation":
             return self._verify_navigation_effect(page, before_snapshot, expected)
         if kind == "closed_shadow_click":
-            print("[AEGIS RUNNER] [VERIFY] Alvo em host de Shadow DOM fechado confirmado no pré-clique (_is_closed_shadow_target) -- sinais genéricos são estruturalmente cegos aqui (documento claro não muda mesmo com sucesso real dentro do shadow); aprovando com base na confirmação pré-clique + execução física do gesto.")
-            return True
+            # NUNCA aprova incondicionalmente (a versão anterior aprovava e
+            # produziu HEALED falso confirmado ao vivo -- clique no centro do
+            # host caiu numa div de status inerte dentro do shadow, efeito
+            # ZERO, passo marcado como curado). O efeito real de um clique
+            # correto dentro de shadow fechado É observável em light DOM
+            # (verificado ao vivo: o app injeta modal/conteúdo, domSize muda
+            # 43->53) -- só que com LATÊNCIA de segundos (o componente processa
+            # internamente antes de refletir fora), acima da janela padrão de
+            # _detect_click_no_effect (100/300/800ms). A pós-condição aqui é
+            # polling genérico ESTENDIDO: sem mudança de sinal dentro da
+            # janela, o clique é rejeitado como qualquer outro.
+            return self._poll_generic_effect_extended(page, before_snapshot)
 
         return self._verify_generic_effect(page, before_snapshot, expected)
+
+    def _poll_generic_effect_extended(self, page, before_snapshot, waits_ms=(300, 700, 1000, 1500, 2500)) -> bool:
+        """Polling genérico estendido (~6s total) para efeitos com latência de
+        segundos entre o gesto e o reflexo em light DOM -- caso confirmado ao
+        vivo: clique em botão dentro de Shadow DOM fechado (Portal Segura,
+        st_054), onde o estado interno muda na hora ("Assinando...") mas o
+        modal em light DOM só aparece ~3-4s depois. Early-exit no primeiro
+        sinal alterado. before_snapshot ausente segue a convenção conservadora
+        de _click_effect_signals_changed (True). Diferente do caminho
+        genérico de _verify_generic_effect, NÃO aplica a ressalva de overlay
+        -- quem chama este método já estabeleceu a pós-condição específica
+        (padrão de shadow fechado confirmado no pré-clique)."""
+        if not before_snapshot:
+            return True
+        try:
+            for wait_ms in waits_ms:
+                page.wait_for_timeout(wait_ms)
+                after_snapshot = self._capture_click_effect_snapshot(page)
+                if self._click_effect_signals_changed(before_snapshot, after_snapshot):
+                    return True
+            return False
+        except Exception:
+            return True
+
+    def _probe_closed_shadow_click(self, page, x, y, selector, target_description) -> bool:
+        """Sondagem multi-ponto VERIFICADA para clique em host de Shadow DOM
+        fechado. Motivação (ao vivo, Portal Segura st_054, 2026-07-15): o
+        conteúdo interno do host é invisível a qualquer query externa, então
+        não dá pra saber ONDE dentro do host o botão real está -- e o centro
+        geométrico do bbox pode cair num elemento interno inerte (confirmado:
+        centro = div de status, efeito zero; banda a 75% da altura = botão
+        real, efeito imediato em light DOM). Em vez de apostar num ponto
+        único, sonda uma sequência de bandas verticais do bbox REAL do host
+        (medido ao vivo), clicando e verificando cada candidata via polling
+        genérico estendido (_poll_generic_effect_extended); retorna True no
+        primeiro clique com efeito verificado, False se nenhuma banda
+        produzir efeito. Cliques em bandas inertes não têm efeito colateral
+        por definição (é exatamente por não terem efeito que a sondagem
+        continua). Só é chamado depois de _is_closed_shadow_target/_snap_to_
+        closed_shadow_host confirmarem o padrão de host fechado sob (x, y).
+        """
+        try:
+            rect = page.evaluate(
+                "([x, y]) => { const el = document.elementFromPoint(x, y); "
+                "if (!el) return null; const r = el.getBoundingClientRect(); "
+                "return { left: r.left, top: r.top, width: r.width, height: r.height }; }",
+                [x, y],
+            )
+        except Exception:
+            rect = None
+        if not rect or rect.get("width", 0) <= 0 or rect.get("height", 0) <= 0:
+            return False
+
+        cx = rect["left"] + rect["width"] / 2
+        # Ponto originalmente proposto primeiro (pode já estar certo), depois
+        # bandas de baixo pra cima -- botões de ação ficam mais comumente na
+        # parte inferior de um painel (confirmado no caso real).
+        candidates = [(x, y)]
+        for frac in (0.75, 0.5, 0.25, 0.875):
+            candidates.append((cx, rect["top"] + rect["height"] * frac))
+        seen = set()
+        for px, py in candidates:
+            key = (round(px), round(py))
+            if key in seen:
+                continue
+            seen.add(key)
+            before_snapshot = self._capture_click_effect_snapshot(page, selector)
+            print(f"[AEGIS RUNNER] [SHADOW-PROBE] Sondando clique em ({key[0]}, {key[1]}) dentro do host de Shadow DOM fechado para '{target_description}'...")
+            try:
+                page.mouse.click(px, py)
+            except Exception as probe_err:
+                print(f"[AEGIS RUNNER] [SHADOW-PROBE] Falha física no ponto ({key[0]}, {key[1]}): {probe_err}")
+                continue
+            if self._poll_generic_effect_extended(page, before_snapshot):
+                print(f"[AEGIS RUNNER] [SHADOW-PROBE] Efeito verificado em light DOM após clique em ({key[0]}, {key[1]}).")
+                return True
+            print(f"[AEGIS RUNNER] [SHADOW-PROBE] Nenhum efeito verificável em ({key[0]}, {key[1]}) -- próxima banda.")
+        return False
 
     def _verify_generic_effect(self, page, before_snapshot, expected) -> bool:
         """Caminho sem pós-condição específica reconhecida: sinais genéricos
@@ -893,6 +983,56 @@ class TransactionRunner:
             and hit.get("w", 0) > 0
             and hit.get("h", 0) > 0
         )
+
+    def _snap_to_closed_shadow_host(self, page, x, y, target_description="", max_dx=90, max_dy=170, step=15):
+        """Corrige uma coordenada de clique (gravada ou proposta por IA de
+        visão) que erra o host de um Shadow DOM fechado por uma margem
+        pequena. Achado ao vivo (Portal Segura, st_054, 2026-07-15): a IA de
+        visão propôs (808, 440) em duas execuções separadas, consistentemente
+        ~50px abaixo/à direita do host real -- não é ruído aleatório, é viés
+        sistemático da estimativa de pixel do modelo, e a coordenada gravada
+        (809, 321) erra pra cima por uma margem ainda maior, nas duas vezes.
+        _is_closed_shadow_target sozinho só aprova um acerto exato; esta
+        função busca num raio limitado ao redor de (x, y) por um elemento que
+        bate no mesmo padrão (childElementCount == 0, textContent == '', área
+        visível não-trivial) e retorna o CENTRO da bounding box REAL desse
+        host (calculada ao vivo via getBoundingClientRect, não a partir da
+        fração de viewport gravada nem do palpite de pixel da IA). Pontos são
+        testados em ordem de distância crescente até (x, y) -- o primeiro
+        achado é sempre o mais próximo da proposta original, nunca um host
+        arbitrário mais distante.
+
+        Retorna (host_x, host_y) ou None se nada compatível for achado no
+        raio, ou se "shadow" não aparece em target_description (mesma trava
+        de segurança de _is_closed_shadow_target -- esta função não busca
+        nada sem ela, pra não "corrigir" cliques que não têm nada a ver com
+        Shadow DOM). Método PURO: só lê via page.evaluate, nunca clica.
+        """
+        if "shadow" not in (target_description or "").lower():
+            return None
+        offsets = sorted(
+            {(dx, dy) for dx in range(-max_dx, max_dx + 1, step) for dy in range(-max_dy, max_dy + 1, step)},
+            key=lambda o: o[0] ** 2 + o[1] ** 2,
+        )
+        try:
+            result = page.evaluate(
+                "([cx, cy, offsets]) => { "
+                "for (const [dx, dy] of offsets) { "
+                "const px = cx + dx, py = cy + dy; "
+                "const el = document.elementFromPoint(px, py); "
+                "if (!el) continue; "
+                "if (el.childElementCount === 0 && (el.textContent || '').trim() === '') { "
+                "const r = el.getBoundingClientRect(); "
+                "if (r.width > 0 && r.height > 0) { "
+                "return [r.left + r.width / 2, r.top + r.height / 2]; "
+                "} } } return null; }",
+                [x, y, offsets],
+            )
+        except Exception:
+            return None
+        if not result:
+            return None
+        return (result[0], result[1])
 
     def _hit_test_plausible(self, page, x, y, target_description, original_selector=None) -> bool:
         """Gate de plausibilidade PRÉ-clique (Fundação A4 -- .specs/plano-
@@ -1534,12 +1674,31 @@ class TransactionRunner:
                 # ao vivo, st_054/Portal Segura). Relaxa só esse caso
                 # específico -- todo o resto continua exigindo sinal genérico.
                 closed_shadow = self._is_closed_shadow_target(page, x, y, target_description)
-                page.mouse.click(x, y)
-                verify_expected = {"kind": "closed_shadow_click"} if closed_shadow else None
-                if self._verify_action_effect(page, before_snapshot, expected=verify_expected):
-                    self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
-                    return True
-                self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
+                if not closed_shadow:
+                    # A coordenada gravada pode errar o host por uma margem
+                    # pequena (confirmado ao vivo -- ver _snap_to_closed_shadow_host);
+                    # busca num raio limitado antes de desistir do tier.
+                    snapped = self._snap_to_closed_shadow_host(page, x, y, target_description)
+                    if snapped:
+                        x, y = snapped
+                        closed_shadow = True
+                        print(f"[AEGIS RUNNER] [SHADOW-SNAP] Coordenada gravada corrigida para o host real do Shadow DOM fechado: ({x}, {y}).")
+                if closed_shadow:
+                    # Host de shadow fechado: sondagem multi-ponto VERIFICADA
+                    # (o botão real pode estar em qualquer banda vertical do
+                    # host e o conteúdo interno é invisível a query externa;
+                    # cada candidata só é aceita com efeito confirmado em
+                    # light DOM -- ver _probe_closed_shadow_click).
+                    if self._probe_closed_shadow_click(page, x, y, selector, target_description):
+                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
+                        return True
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Nenhuma banda do host de Shadow DOM fechado em ({x}, {y}) produziu efeito verificável para '{target_description}'.")
+                else:
+                    page.mouse.click(x, y)
+                    if self._verify_action_effect(page, before_snapshot, expected=None):
+                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", error_msg="Fallback coords used", healing_method="coordinate")
+                        return True
+                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Coordenada gravada ({x}, {y}) não produziu efeito verificável para '{target_description}'.")
             except Exception as coords_err:
                 print(f"[AEGIS RUNNER] Falha ao tentar clique por coordenadas de fallback: {coords_err}")
 
@@ -1566,24 +1725,37 @@ class TransactionRunner:
                         "(navegação, abertura/fechamento de painel, ou mudança visual no estado do elemento)."
                     ),
                 )
-                if proposal and self._hit_test_plausible(page, proposal["x"], proposal["y"], target_description, original_selector=selector):
-                    before_snapshot = self._capture_click_effect_snapshot(page, selector)
-                    # Mesma checagem PRÉ-clique do Nível 4 (ver
-                    # _is_closed_shadow_target) -- necessária aqui de novo
-                    # porque _hit_test_plausible pode ter aprovado a proposta
-                    # via match de texto normal (não necessariamente pelo
-                    # ramo de shadow fechado), e mesmo quando aprovou por
-                    # esse ramo o booleano sozinho não chega até aqui.
-                    closed_shadow = self._is_closed_shadow_target(page, proposal["x"], proposal["y"], target_description)
-                    page.mouse.click(proposal["x"], proposal["y"])
-                    verify_expected = {"kind": "closed_shadow_click"} if closed_shadow else None
-                    if self._verify_action_effect(page, before_snapshot, expected=verify_expected):
-                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
-                        return True
-                    self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) não produziu efeito verificável para '{target_description}'.")
-                else:
-                    if proposal:
-                        self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({proposal['x']}, {proposal['y']}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
+                if proposal:
+                    click_x, click_y = proposal["x"], proposal["y"]
+                    # Checa o padrão de Shadow DOM fechado ANTES do gate de
+                    # texto normal (_hit_test_plausible): se a proposta errou
+                    # o host por uma margem pequena -- observado ao vivo com
+                    # a IA de visão propondo consistentemente ~50px fora do
+                    # host real (ver _snap_to_closed_shadow_host) -- corrige
+                    # pra o host de verdade antes de decidir.
+                    closed_shadow = self._is_closed_shadow_target(page, click_x, click_y, target_description)
+                    if not closed_shadow:
+                        snapped = self._snap_to_closed_shadow_host(page, click_x, click_y, target_description)
+                        if snapped:
+                            click_x, click_y = snapped
+                            closed_shadow = True
+                            print(f"[AEGIS RUNNER] [SHADOW-SNAP] Proposta cognitiva corrigida para o host real do Shadow DOM fechado: ({click_x}, {click_y}).")
+                    if closed_shadow:
+                        # Sondagem multi-ponto verificada -- mesma lógica e
+                        # justificativa do Nível 4 (ver _probe_closed_shadow_click).
+                        if self._probe_closed_shadow_click(page, click_x, click_y, selector, target_description):
+                            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                            return True
+                        self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Nenhuma banda do host de Shadow DOM fechado em ({click_x}, {click_y}) produziu efeito verificável para '{target_description}'.")
+                    elif self._hit_test_plausible(page, click_x, click_y, target_description, original_selector=selector):
+                        before_snapshot = self._capture_click_effect_snapshot(page, selector)
+                        page.mouse.click(click_x, click_y)
+                        if self._verify_action_effect(page, before_snapshot, expected=None):
+                            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="visual_ai")
+                            return True
+                        self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({click_x}, {click_y}) não produziu efeito verificável para '{target_description}'.")
+                    else:
+                        self._note_verify_rejected("pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva em ({click_x}, {click_y}) rejeitada pelo gate de plausibilidade (pré-clique) para '{target_description}'.")
             except Exception as ia_err:
                 print(f"[COGNITIVE WARNING] Erro durante chamada do Self-Healing de IA: {ia_err}")
 
