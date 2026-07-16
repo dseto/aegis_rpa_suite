@@ -474,7 +474,18 @@ class TransactionRunner:
         do próprio evaluate (ex.: página navegando) retorna None - tratado como
         "efeito detectado" pelo chamador, nunca como erro.
 
-        4º sinal (siblingClassFingerprint): cobre o caso de troca de estado
+        4º sinal (siblingClassFingerprint): inclui `aria-valuenow` e `value`
+        além de className/aria-selected/current/pressed. Sem o par valor, uma
+        interação que só muda VALOR (clique/arraste em `input[type=range]` —
+        st_043/st_045 do bot de referência Portal Segura) é invisível a TODOS
+        os sinais: url igual, domSize igual, overlays igual, className igual.
+        Antes isso passava por acidente (o `after` era recapturado sem seletor,
+        fingerprint "" != "x", o sinal disparava sempre e aprovava qualquer
+        coisa — carimbo, não detecção); corrigido o carimbo, o slider virava
+        falso-negativo e quebrava o fluxo. Capturar o valor é o que torna o
+        sinal capaz de ver de verdade o que ele já fingia ver.
+
+        Cobre também o caso de troca de estado
         "só-CSS" — ex. abas React/Tailwind que só alternam className entre
         elementos JÁ existentes (sem adicionar/remover nós, sem navegação, sem
         overlay). Achado real no piloto do site novo (.specs/relatorio-piloto-site-novo.md):
@@ -519,13 +530,24 @@ class TransactionRunner:
                     "(el) => {"
                     "  const parent = el.parentElement;"
                     "  const scope = parent ? Array.from(parent.children) : [el];"
-                    "  return scope.map(c => (c.className || '') + '|' + (c.getAttribute('aria-selected')||'') + (c.getAttribute('aria-current')||'') + (c.getAttribute('aria-pressed')||'')).join(';;');"
+                    "  return scope.map(c => (c.className || '') + '|' + (c.getAttribute('aria-selected')||'') + (c.getAttribute('aria-current')||'') + (c.getAttribute('aria-pressed')||'') + '|' + (c.getAttribute('aria-valuenow')||'') + (typeof c.value === 'string' ? c.value : '')).join(';;');"
                     "}",
                     timeout=1000
                 )
             except Exception:
                 fingerprint = ""
         base["siblingClassFingerprint"] = fingerprint
+        # Registra COM QUAL seletor o fingerprint foi tirado. Sem isso, comparar
+        # um snapshot capturado com seletor (fingerprint preenchido) contra um
+        # capturado sem (fingerprint "") faz o 4º sinal disparar SEMPRE — o
+        # comparador lia "btn active|..." != "" como "mudou". Era o caso de todo
+        # chamador de _verify_action_effect(expected=None): o `before` vinha com
+        # seletor e a recaptura interna de _verify_generic_effect era sem, então
+        # o verificador aprovava QUALQUER coisa (sem overlay aberto). Isso
+        # esvaziava os tiers ditos "verificados" (candidato ambíguo A3, `.first`,
+        # coordenada, cognitivo) — um verificador que estruturalmente não
+        # rejeitava. Ver _click_effect_signals_changed.
+        base["fingerprintSelector"] = selector or None
         return base
 
     def _click_effect_signals_changed(self, before, after) -> bool:
@@ -541,8 +563,15 @@ class TransactionRunner:
                 return True
             if int(after.get("overlays", 0)) != int(before.get("overlays", 0)):
                 return True
-            if (before.get("siblingClassFingerprint") or "") != (after.get("siblingClassFingerprint") or ""):
-                return True
+            # 4º sinal só é comparável quando os DOIS lados foram capturados com
+            # o MESMO seletor — fingerprint de grupos de irmãos diferentes (ou de
+            # um lado capturado sem seletor, fingerprint "") não é sinal de
+            # efeito, é ruído de captura. Comparar mesmo assim fazia o sinal
+            # disparar sempre e o verificador aprovar qualquer coisa. Quando não
+            # são comparáveis, o sinal é omitido (url/domSize/overlays decidem).
+            if before.get("fingerprintSelector") == after.get("fingerprintSelector"):
+                if (before.get("siblingClassFingerprint") or "") != (after.get("siblingClassFingerprint") or ""):
+                    return True
             return False
         except Exception:
             return True
@@ -784,7 +813,17 @@ class TransactionRunner:
         if has_expected and "after_snapshot" in expected:
             after_snapshot = expected["after_snapshot"]
         else:
-            after_snapshot = self._capture_click_effect_snapshot(page)
+            # Recaptura com o MESMO seletor usado no `before` (o snapshot carrega
+            # `fingerprintSelector`). Recapturar SEM seletor deixava o fingerprint
+            # do `after` vazio e o 4º sinal comparava "btn active|..." vs "" ->
+            # disparava SEMPRE -> o verificador aprovava qualquer coisa (era o
+            # carimbo que esvaziava os tiers ditos "verificados"). Já ignorar o
+            # 4º sinal quando incomparável é o erro oposto: mata o único sinal
+            # capaz de ver mudança só-CSS/estado (ex.: clique em slider não muda
+            # url/domSize/overlays) e vira falso-negativo. Usar o mesmo seletor
+            # nos dois lados é o que torna o sinal legítimo.
+            fp_sel = before_snapshot.get("fingerprintSelector") if isinstance(before_snapshot, dict) else None
+            after_snapshot = self._capture_click_effect_snapshot(page, fp_sel)
         generic_changed = self._click_effect_signals_changed(before_snapshot, after_snapshot)
 
         before_had_overlay = isinstance(before_snapshot, dict) and (
@@ -1194,13 +1233,11 @@ class TransactionRunner:
         # _recover_via_recent_fills), que trata o caso de falso-sucesso
         # específico de botão que nunca habilita — não faz sentido também
         # ficar de fora do sensor geral.
-        click_effect_before_snapshot = None
-        if (
+        click_effect_sensor_applicable = (
             self._click_effect_sensor_enabled()
             and not validate_navigation
             and selector not in self._CLICK_EFFECT_EXCLUDED_SELECTORS
-        ):
-            click_effect_before_snapshot = self._capture_click_effect_snapshot(page, selector)
+        )
 
         # 2. Loop de retentativas com Auto-Healing de UI
         last_exception = None
@@ -1217,6 +1254,21 @@ class TransactionRunner:
                     page.wait_for_selector(selector, state="visible", timeout=2000)
                 except Exception:
                     pass
+
+                # Sensor M2 (CLICK_NO_EFFECT): baseline capturado POR TENTATIVA,
+                # imediatamente antes do clique desta tentativa — nunca uma única
+                # vez fora do loop. Um baseline capturado antes do attempt 1 fica
+                # estagnado/contaminado pelos efeitos colaterais das tentativas
+                # falhas (spinner/toast, Escape do [RETRY 2], churn da cadeia de
+                # recuperação): no attempt 2 esse delta incidental cruzava a
+                # tolerância de +/-2 e o sensor "confirmava efeito" de um clique
+                # que continuava sem efeito real — SUCCESS falso reproduzido ao
+                # vivo (overlay ainda interceptando, ação nunca realizada).
+                # Recapturar aqui mede o efeito DESTA tentativa, e é o que torna
+                # seguro o retry retentável de _finalize_click_success(attempt<2).
+                click_effect_before_snapshot = None
+                if click_effect_sensor_applicable:
+                    click_effect_before_snapshot = self._capture_click_effect_snapshot(page, selector)
 
                 locators = page.locator(selector).all()
                 if not locators:
@@ -1239,9 +1291,32 @@ class TransactionRunner:
                         target_enabled = self._recover_via_recent_fills(page, selector, step_id)
                         enable_timeout_recovered = target_enabled
                     if target_enabled:
-                        finalize_result = self._finalize_click_success(
-                            page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot
-                        )
+                        try:
+                            finalize_result = self._finalize_click_success(
+                                page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot,
+                                attempt=attempt
+                            )
+                        except Exception as exc:
+                            if attempt < 2:
+                                # Ainda há tentativa barata restante: _finalize_click_success
+                                # (attempt<2) levanta CLICK_NO_EFFECT como RETENTÁVEL, sem ter
+                                # tomado decisão terminal alguma. Propaga cru para o except
+                                # genérico do loop, que refaz o passo do zero (Escape + espera
+                                # de visibilidade + re-enumeração de candidatos + despriorização
+                                # de âncora morta + verificação A3) — capacidades que a cadeia
+                                # determinística não tem. Embrulhar aqui mataria justamente o
+                                # retry que se quer preservar.
+                                raise
+                            # Última tentativa: a decisão de _finalize_click_success
+                            # (CLICK_NO_EFFECT + recuperação esgotados -> _handle_unrecoverable_click)
+                            # é FINAL — propaga como terminal, igual ao caminho ENABLE_TIMEOUT
+                            # logo abaixo. Sem esta guarda, a exceção estrita caía no except
+                            # genérico do loop e o passo era retentado; na 2ª tentativa um delta
+                            # de DOM incidental (spinner/toast das tentativas falhas) enganava o
+                            # sensor genérico contra a baseline estagnada e o passo fechava como
+                            # SUCCESS falso (repro ao vivo: overlay ainda interceptando, ação
+                            # nunca realizada).
+                            raise _ClickTerminalFailure(exc) from exc
                         if enable_timeout_recovered:
                             self._register_healing_for_review(step_id, selector, "click", "enable_timeout_recovered")
                         return finalize_result
@@ -1378,9 +1453,32 @@ class TransactionRunner:
                             # clicado).
                             self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
                             return True
-                        finalize_result = self._finalize_click_success(
-                            page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot
-                        )
+                        try:
+                            finalize_result = self._finalize_click_success(
+                                page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot,
+                                attempt=attempt
+                            )
+                        except Exception as exc:
+                            if attempt < 2:
+                                # Ainda há tentativa barata restante: _finalize_click_success
+                                # (attempt<2) levanta CLICK_NO_EFFECT como RETENTÁVEL, sem ter
+                                # tomado decisão terminal alguma. Propaga cru para o except
+                                # genérico do loop, que refaz o passo do zero (Escape + espera
+                                # de visibilidade + re-enumeração de candidatos + despriorização
+                                # de âncora morta + verificação A3) — capacidades que a cadeia
+                                # determinística não tem. Embrulhar aqui mataria justamente o
+                                # retry que se quer preservar.
+                                raise
+                            # Última tentativa: a decisão de _finalize_click_success
+                            # (CLICK_NO_EFFECT + recuperação esgotados -> _handle_unrecoverable_click)
+                            # é FINAL — propaga como terminal, igual ao caminho ENABLE_TIMEOUT
+                            # logo abaixo. Sem esta guarda, a exceção estrita caía no except
+                            # genérico do loop e o passo era retentado; na 2ª tentativa um delta
+                            # de DOM incidental (spinner/toast das tentativas falhas) enganava o
+                            # sensor genérico contra a baseline estagnada e o passo fechava como
+                            # SUCCESS falso (repro ao vivo: overlay ainda interceptando, ação
+                            # nunca realizada).
+                            raise _ClickTerminalFailure(exc) from exc
                         if enable_timeout_recovered:
                             self._register_healing_for_review(step_id, selector, "click", "enable_timeout_recovered")
                         return finalize_result
@@ -1414,8 +1512,30 @@ class TransactionRunner:
                 if attempt == 2:
                     return self._handle_click_failure(page, selector, target_description, timeout, e, original_coords, step_id=step_id, strict=strict)
 
-    def _finalize_click_success(self, page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot) -> bool:
+    def _finalize_click_success(self, page, selector, target_description, step_id, strict, original_coords, click_effect_before_snapshot, attempt=2) -> bool:
         """
+        `attempt` (tentativa atual do loop externo de click_resilient, 1-based;
+        default 2 = "última", comportamento terminal): quando o sensor detecta
+        CLICK_NO_EFFECT e a cadeia determinística NÃO recupera, ainda existe
+        uma tentativa barata a fazer se `attempt < 2` — o attempt 2 do loop
+        externo faz `Escape` + `wait_for_selector(state="visible")` + **nova
+        enumeração de candidatos** + despriorização de âncora morta
+        (`href="#"`) + verificação A3 do candidato ambíguo. A cadeia
+        determinística acima NÃO faz nada disso (só tenta `.first`). Por isso,
+        em `attempt < 2` este método levanta a exceção de CLICK_NO_EFFECT como
+        **retentável** (cai no except genérico do loop, que retenta), em vez de
+        fechar a decisão terminal. Só em `attempt == 2` (nada barato restante)
+        delega a `_handle_unrecoverable_click`, cuja decisão é FINAL e é
+        embrulhada em `_ClickTerminalFailure` pelos call-sites.
+
+        Sem essa distinção, a guarda `_ClickTerminalFailure` (que existe para
+        impedir que uma decisão terminal já tomada seja retentada e vire
+        SUCCESS falso por delta de DOM incidental) tornaria o `for attempt in
+        range(1, 3)` código morto para todo o caminho CLICK_NO_EFFECT,
+        removendo uma capacidade real de recuperação (cenário: render lento —
+        attempt 1 só enxerga a âncora morta `href="#"`; o alvo real renderiza
+        300ms depois e só a re-enumeração do attempt 2 o encontra).
+
         Fecha um clique físico que executou sem lançar exceção. Quando o sensor
         CLICK_NO_EFFECT não está aplicável a este passo (click_effect_before_snapshot
         é None - sensor desativado, validate_navigation=True, ou seletor
@@ -1456,6 +1576,14 @@ class TransactionRunner:
             f"CLICK_NO_EFFECT: clique em '{selector}' não produziu nenhum efeito detectável na página, "
             f"mesmo após as camadas de recuperação determinística (Escape+retry, reposição de overlay CDK, fallback_selectors)."
         )
+        if attempt < 2:
+            # Ainda resta a tentativa barata do attempt 2 (Escape + espera de
+            # visibilidade + re-enumeração de candidatos + despriorização de
+            # âncora morta + verificação A3) — capacidades que a cadeia
+            # determinística acima não tem. Levanta como RETENTÁVEL: o except
+            # genérico do loop externo captura e refaz o passo do zero.
+            # Nada é logado como FAILED aqui: a decisão ainda não é final.
+            raise synthetic_exc
         return self._handle_unrecoverable_click(page, selector, target_description, synthetic_exc, original_coords, step_id, strict)
 
     def _attempt_deterministic_click_recovery(self, page, selector, step_id, identity_scoped=False, before_snapshot=None):
@@ -1491,11 +1619,45 @@ class TransactionRunner:
         quando o pai tinha filtro de identidade has_text). Nível 2.9 sempre
         roda, mesma decisão de design M5 já existente.
         """
-        def _effect_confirmed(used_selector):
+        def _tier_baseline(used_selector):
+            """Baseline FRESCO do tier, capturado imediatamente antes do clique
+            físico DAQUELE tier — nunca o `before_snapshot` compartilhado de
+            antes do clique original. Motivo (falso-HEALED confirmado ao vivo):
+            cada tier tem um gesto preparatório próprio (o 2.5 pressiona Escape;
+            o 2.75 reposiciona o `.cdk-overlay-pane` e dispara clique sintético)
+            que MUTA a página descrita pelo baseline compartilhado. Verificar
+            contra ele fazia o tier aprovar pelo delta que o gesto DELE MESMO
+            fabricou, independentemente de o clique ter acertado o alvo — e o
+            tier 2.9 confirmava com churn causado dois tiers antes. Capturar
+            aqui isola o efeito do clique deste tier."""
             if before_snapshot is None:
+                return None
+            return self._capture_click_effect_snapshot(page, used_selector)
+
+        def _effect_confirmed(used_selector, tier_before):
+            """Roteia a confirmação do tier pelo verificador universal em vez de
+            chamar `_click_effect_signals_changed` cru — assim a ressalva de
+            overlay de `_verify_generic_effect` passa a valer aqui (era o bypass
+            que produzia o falso-HEALED do Fimm st_007). `panel_closed_confirmed`
+            é derivado do MESMO métrico da ressalva (a contagem `overlays` do
+            snapshot, não `_OPEN_PANEL_SELECTOR` — vocabulários diferentes davam
+            aprovação trivial em modal Bootstrap e recuperação impossível em
+            mat-dialog): só conta como confirmado se a contagem de overlays
+            REDUZIU de fato após o clique deste tier. Sem baseline (caminho por
+            exceção, before_snapshot=None) mantém o contrato existente: o
+            primeiro clique sem exceção resolve."""
+            if tier_before is None:
                 return True
             after_snapshot = self._capture_click_effect_snapshot(page, used_selector)
-            return self._click_effect_signals_changed(before_snapshot, after_snapshot)
+            expected = {"after_snapshot": after_snapshot}
+            try:
+                before_ov = int((tier_before or {}).get("overlays", 0) or 0)
+                after_ov = int((after_snapshot or {}).get("overlays", 0) or 0)
+                if before_ov > 0 and after_ov < before_ov:
+                    expected["panel_closed_confirmed"] = True
+            except Exception:
+                pass
+            return self._verify_action_effect(page, tier_before, expected=expected)
 
         if not identity_scoped:
             # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
@@ -1503,8 +1665,13 @@ class TransactionRunner:
             try:
                 page.keyboard.press("Escape")
                 time.sleep(0.3)
+                # Baseline DEPOIS do Escape: o Escape é o gesto preparatório
+                # deste tier e fecha painel/overlay por construção. Capturar
+                # antes dele faria o próprio Escape fabricar o "efeito" que
+                # aprova o tier, tenha o clique acertado ou não.
+                tier_before = _tier_baseline(selector)
                 page.locator(selector).first.click(timeout=3000)
-                if _effect_confirmed(selector):
+                if _effect_confirmed(selector, tier_before):
                     print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
                     return True, "escape_retry", selector
             except Exception:
@@ -1513,6 +1680,9 @@ class TransactionRunner:
             # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
             try:
                 print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
+                # Baseline deste tier ANTES do reposicionamento+clique sintético
+                # (o gesto do tier começa aqui). Isola o efeito do clique dele.
+                tier_before = _tier_baseline(selector)
                 clicked = page.evaluate(r"""(sel) => {
                     const pane = document.querySelector('.cdk-overlay-pane');
                     if (pane) {
@@ -1553,7 +1723,7 @@ class TransactionRunner:
                 }""", selector)
                 if clicked:
                     time.sleep(0.3)
-                    if _effect_confirmed(selector):
+                    if _effect_confirmed(selector, tier_before):
                         print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
                         return True, "cdk_reposition", selector
             except Exception:
@@ -1564,8 +1734,14 @@ class TransactionRunner:
         for fb_selector in fallback_selectors:
             try:
                 print(f"[AEGIS RUNNER] [FALLBACK SELECTOR] Tentando seletor alternativo gravado: '{fb_selector}'...")
+                # Baseline por fallback: `before` e `after` capturados com o
+                # MESMO seletor (o do próprio fallback) e imediatamente antes
+                # do clique dele — sem isso, este tier confirmava com churn
+                # produzido pelos tiers 2.5/2.75 que rodaram antes (assinatura
+                # exata do falso-HEALED do Fimm st_007).
+                tier_before = _tier_baseline(fb_selector)
                 page.locator(fb_selector).first.click(timeout=2000)
-                if _effect_confirmed(fb_selector):
+                if _effect_confirmed(fb_selector, tier_before):
                     return True, "fallback_selector", fb_selector
             except Exception:
                 continue
