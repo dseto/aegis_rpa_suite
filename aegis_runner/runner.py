@@ -740,7 +740,7 @@ class TransactionRunner:
         """
         if not before_snapshot:
             # Fallback pros sinais genéricos se não há baseline atual
-            return True
+            return self._verify_generic_effect(page, before_snapshot, expected_effect)
 
         try:
             after_snapshot = self._capture_click_effect_snapshot(page)
@@ -748,20 +748,20 @@ class TransactionRunner:
             # OR condition match
             url_changed = before_snapshot.get("url") != after_snapshot.get("url")
             if expected_effect.get("url_changed") and url_changed:
-                self._note_verify_rejected("post", "[AEGIS RUNNER] Efeito confirmado via expected_effect (url_changed).")
+                print("[AEGIS RUNNER] Efeito confirmado via expected_effect (url_changed).")
                 return True
 
             dom_delta_actual = after_snapshot.get("domSize", 0) - before_snapshot.get("domSize", 0)
             dom_delta_expected = expected_effect.get("dom_delta", 0)
             # Same sign
             if (dom_delta_expected > 0 and dom_delta_actual > 0) or (dom_delta_expected < 0 and dom_delta_actual < 0):
-                self._note_verify_rejected("post", "[AEGIS RUNNER] Efeito confirmado via expected_effect (dom_delta).")
+                print("[AEGIS RUNNER] Efeito confirmado via expected_effect (dom_delta).")
                 return True
 
             ov_delta_actual = after_snapshot.get("overlays", 0) - before_snapshot.get("overlays", 0)
             ov_delta_expected = expected_effect.get("overlay_delta", 0)
             if (ov_delta_expected > 0 and ov_delta_actual > 0) or (ov_delta_expected < 0 and ov_delta_actual < 0):
-                self._note_verify_rejected("post", "[AEGIS RUNNER] Efeito confirmado via expected_effect (overlay_delta).")
+                print("[AEGIS RUNNER] Efeito confirmado via expected_effect (overlay_delta).")
                 return True
 
             value_changed_expected = expected_effect.get("value_changed")
@@ -770,9 +770,13 @@ class TransactionRunner:
                 pass
 
             new_text = expected_effect.get("new_visible_text")
-            if new_text and page.get_by_text(new_text).count() > 0:
-                self._note_verify_rejected("post", "[AEGIS RUNNER] Efeito confirmado via expected_effect (new_visible_text).")
-                return True
+            if new_text:
+                try:
+                    if page.get_by_text(new_text).count() > 0:
+                        print("[AEGIS RUNNER] Efeito confirmado via expected_effect (new_visible_text).")
+                        return True
+                except Exception:
+                    pass
 
             # Nenhum sinal específico do expected_effect bateu.
             # Fallback para os sinais genéricos para não quebrar compatibilidade
@@ -785,7 +789,7 @@ class TransactionRunner:
             return False
         except Exception as e:
             print(f"[AEGIS RUNNER] Erro em _verify_recorded_expected_effect: {e}")
-            return True
+            return self._verify_generic_effect(page, before_snapshot, expected)
 
     def _poll_generic_effect_extended(self, page, before_snapshot, waits_ms=(300, 700, 1000, 1500, 2500)) -> bool:
         """Polling genérico estendido (~6s total) para efeitos com latência de
@@ -1973,7 +1977,7 @@ class TransactionRunner:
             try:
                 target_handle = self._resolve_via_anchor(page, self._current_anchor, "click", getattr(self, "_current_viewport", None))
                 if target_handle:
-                    tier_before = _tier_baseline("anchor_geometry")
+                    tier_before = _tier_baseline(self._current_anchor.get("selector") or "")
                     if hasattr(target_handle, 'click'):
                         target_handle.click(timeout=2000)
                     elif hasattr(target_handle, 'evaluate'):
@@ -3472,6 +3476,36 @@ class TransactionRunner:
                         continue
                 if fallback_resolved:
                     return True
+
+            # Nível 2.95 (Unified Target Descriptor): Âncora Geométrica
+            # Resolve por anchor e clica por coordenada se for implausível via _hit_test_plausible
+            if hasattr(self, "_current_anchor") and self._current_anchor:
+                try:
+                    target_handle = self._resolve_via_anchor(page, self._current_anchor, "fill", getattr(self, "_current_viewport", None))
+                    if target_handle:
+                        if hasattr(target_handle, 'fill'):
+                            target_handle.fill(text_val, timeout=2000)
+                        elif hasattr(target_handle, 'evaluate'):
+                            # Playwright element handle
+                            target_handle.fill(text_val, timeout=2000)
+
+                        # Update active element (React/Angular) just in case
+                        page.evaluate("() => { const active = document.activeElement; if (active) { "
+                                      "let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set; "
+                                      "let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set; "
+                                      "if (nativeInputValueSetter && active.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(active, active.value); } "
+                                      "else if (nativeTextAreaValueSetter && active.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(active, active.value); } "
+                                      "active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
+                        actual_value = page.evaluate(
+                            "() => { const active = document.activeElement; "
+                            "return active ? (active.value !== undefined ? active.value : active.textContent) : null; }"
+                        )
+                        if self._verify_action_effect(page, None, expected={"kind": "fill", "expected_value": text_val, "actual_value": actual_value}):
+                            self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="HEALED", healing_method="anchor_geometry")
+                            self._register_healing_for_review(step_id, selector, "fill", "anchor_geometry")
+                            return True
+                except Exception as e:
+                    print(f"[AEGIS RUNNER] Falha no tier de anchor_geometry: {e}")
 
             is_flaky_step = self.flaky_step_ids.get(step_id, False)
             flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
