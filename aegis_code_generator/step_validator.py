@@ -1744,13 +1744,13 @@ class _FakeRunner:
         pass
     def run(self, url=None, headless=True, slow_mo=50, channel="msedge"):
         pass
-    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False):
+    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
-    def fill_resilient(self, page, selector, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None):
+    def fill_resilient(self, page, selector, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
     def fill_human_like(self, page, selector, text_val, target_description=None, delay_ms=60, timeout=5000, step_id=None):
         return True
-    def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None):
+    def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
     def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None, strict=False):
         return True

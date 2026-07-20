@@ -1485,6 +1485,19 @@ class SanitizerService:
                     clean_fallbacks.append(fb_clean)
                 if clean_fallbacks:
                     step["fallback_selectors"] = clean_fallbacks
+            # Unified Target Descriptor (Fase A/B): propaga anchor/
+            # expected_effect/viewport do evento gravado pro step do plano.
+            # `_serialize_plan_step` já sabia incluir esses campos na saída
+            # (field_order já os listava) mas nunca chegavam a existir NESTE
+            # dict intermediário -- o schema estava pronto, só faltava a
+            # fiação do dado em si (mesma classe de bug encontrada em
+            # aegis_runner/runner.py: kwarg aceito, nunca atribuído).
+            if ev.get("anchor"):
+                step["anchor"] = ev["anchor"]
+            if ev.get("expected_effect"):
+                step["expected_effect"] = ev["expected_effect"]
+            if ev.get("viewport"):
+                step["viewport"] = ev["viewport"]
             if ev_type == "click":
                 # Usado internamente por _merge_consecutive_clicks
                 # (same_widget) pra distinguir 2 widgets físicos diferentes
