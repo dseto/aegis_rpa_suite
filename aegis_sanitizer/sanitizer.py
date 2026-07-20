@@ -1293,8 +1293,8 @@ class SanitizerService:
             "step_id", "execution_hint", "step_role", "suppression_reason",
             "superseded_by", "type", "selector", "selector_original",
             "description", "scenario", "text", "flaky", "weak_selector",
-            "fallback_selectors", "parent", "coords", "dropdown_label",
-            "option_text", "trigger_selector", "option_selector",
+            "fallback_selectors", "parent", "coords", "anchor", "expected_effect", "viewport",
+            "dropdown_label", "option_text", "trigger_selector", "option_selector",
             "coords_trigger", "coords_option", "sanitization_notes",
             "original_index", "merged_from", "source_events",
         )
