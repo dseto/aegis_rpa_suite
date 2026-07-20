@@ -153,7 +153,7 @@ JS_MINIMAL_LISTENERS = """
             if ((el.tagName === 'BUTTON' || el.tagName === 'A' || isMenuClass || isInteractiveRole) &&
                 el.innerText && el.innerText.trim().length > 0 && el.innerText.trim().length < 45) {
 
-                // Extrai primeira linha não vazia (evita :has-text colapsando \n em espaço).
+                // Extrai primeira linha nao vazia (evita :has-text colapsando quebra de linha em espaco).
                 // Playwright :has-text nunca casa texto que cruza fronteira de elemento.
                 let lines = el.innerText.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
                 if (lines.length === 0) return null;
