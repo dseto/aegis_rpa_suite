@@ -939,6 +939,7 @@ JS_MINIMAL_LISTENERS = """
     }
 
     window.__aegis_last_recorded_values__ = {};
+    window.__aegis_effect_uid_counter__ = 0;
     const EXCLUDED_INPUT_TYPES = ['checkbox', 'radio', 'submit', 'button', 'image', 'hidden', 'file'];
 
     function recordFill(target) {
@@ -988,19 +989,26 @@ JS_MINIMAL_LISTENERS = """
         fillEvent.anchor = computeGeometricAnchor(target);
         fillEvent.viewport = { width: window.innerWidth, height: window.innerHeight };
 
+        // Dispatch IMEDIATO e síncrono -- preserva ordem física de captura
+        // (original_index/numeração st_NNN dependem disso). O delta de
+        // expected_effect é assíncrono por natureza (precisa observar o
+        // depois), mas o evento em si não pode esperar por ele: navegação
+        // real destruiria o contexto JS antes do timer, perdendo o evento.
+        let effectUid = ++window.__aegis_effect_uid_counter__;
+        fillEvent._effect_uid = effectUid;
         let initialSnapshot = captureSnapshot(target);
+        window.pythonRecordAction(JSON.stringify(fillEvent));
+
         setTimeout(function() {
             let afterSnapshot = captureSnapshot(target);
             let delta = computeSnapshotDelta(initialSnapshot, afterSnapshot);
             if (delta) {
-                fillEvent.expected_effect = delta;
-                window.pythonRecordAction(JSON.stringify(fillEvent));
+                if (window.pythonUpdateExpectedEffect) window.pythonUpdateExpectedEffect(effectUid, JSON.stringify(delta));
             } else {
                 setTimeout(function() {
                     let finalSnapshot = captureSnapshot(target);
                     let finalDelta = computeSnapshotDelta(initialSnapshot, finalSnapshot);
-                    if (finalDelta) fillEvent.expected_effect = finalDelta;
-                    window.pythonRecordAction(JSON.stringify(fillEvent));
+                    if (finalDelta && window.pythonUpdateExpectedEffect) window.pythonUpdateExpectedEffect(effectUid, JSON.stringify(finalDelta));
                 }, 1200);
             }
         }, 800);
@@ -1092,19 +1100,24 @@ JS_MINIMAL_LISTENERS = """
         clickEvent.anchor = computeGeometricAnchor(e.target);
         clickEvent.viewport = { width: window.innerWidth, height: window.innerHeight };
 
+        // Dispatch IMEDIATO -- ver comentário equivalente em recordFill.
+        // Crítico aqui em particular: um clique de navegação destrói o
+        // contexto JS antes de qualquer setTimeout dessa função disparar.
+        let clickEffectUid = ++window.__aegis_effect_uid_counter__;
+        clickEvent._effect_uid = clickEffectUid;
         let initialSnapshot = captureSnapshot(e.target);
+        window.pythonRecordAction(JSON.stringify(clickEvent));
+
         setTimeout(function() {
             let afterSnapshot = captureSnapshot(e.target);
             let delta = computeSnapshotDelta(initialSnapshot, afterSnapshot);
             if (delta) {
-                clickEvent.expected_effect = delta;
-                window.pythonRecordAction(JSON.stringify(clickEvent));
+                if (window.pythonUpdateExpectedEffect) window.pythonUpdateExpectedEffect(clickEffectUid, JSON.stringify(delta));
             } else {
                 setTimeout(function() {
                     let finalSnapshot = captureSnapshot(e.target);
                     let finalDelta = computeSnapshotDelta(initialSnapshot, finalSnapshot);
-                    if (finalDelta) clickEvent.expected_effect = finalDelta;
-                    window.pythonRecordAction(JSON.stringify(clickEvent));
+                    if (finalDelta && window.pythonUpdateExpectedEffect) window.pythonUpdateExpectedEffect(clickEffectUid, JSON.stringify(finalDelta));
                 }, 1200);
             }
         }, 800);
@@ -1541,6 +1554,13 @@ class AegisRecorder:
                     cleaned_events.append(event)
             self.events_log = cleaned_events
 
+            # `_effect_uid` é bookkeeping interno de correlação (Unified
+            # Target Descriptor) entre o dispatch síncrono do evento e a
+            # atualização assíncrona tardia de `expected_effect` — não faz
+            # parte do contrato de `gravacao.json` consumido pelo Sanitizer.
+            for event in self.events_log:
+                event.pop("_effect_uid", None)
+
             # Coleta campos com keydown listeners detectados pelo interceptor JS
             anti_bot_detected = []
             if active_evaluate and not self.browser_closed and self.page:
@@ -1716,6 +1736,35 @@ class AegisRecorder:
                     print(f"[WARNING] Não foi possível atualizar project.json: {e}")
         except Exception as e:
             print(f"[WARNING] Erro ao gravar telemetria no disco: {e}")
+            sys.stdout.flush()
+
+    def update_expected_effect(self, uid, delta_json: str):
+        """
+        Callback do Unified Target Descriptor (Fase A2): recebe o delta de
+        `expected_effect` calculado de forma assíncrona (~800-2000ms depois
+        do gesto) e o funde no evento já registrado, correlacionado por
+        `_effect_uid`. O evento em si (`record_action`) é sempre despachado
+        de forma SÍNCRONA no momento do gesto -- segurar o evento inteiro
+        atrás de um setTimeout (versão anterior) fazia dois estragos:
+        (1) clique de navegação real destrói o contexto JS antes do timer
+        disparar, perdendo o evento inteiro -- e cliques de navegação são
+        exatamente os que teriam url_changed como efeito; (2) dois eventos
+        despachados em timers de duração diferente (800ms vs 2000ms
+        aninhado) chegam ao Python fora de ordem, embaralhando
+        `original_index`/numeração `st_NNN`, que o pipeline inteiro assume
+        física. Aqui só o campo `expected_effect` chega tarde -- o evento e
+        sua posição no array já estão fixados desde o dispatch original.
+        """
+        if self.recording_paused or self.session_finished:
+            return
+        try:
+            delta = json.loads(delta_json) if isinstance(delta_json, str) else delta_json
+            for ev in reversed(self.events_log):
+                if ev.get("_effect_uid") == uid:
+                    ev["expected_effect"] = delta
+                    break
+        except Exception as e:
+            print(f"[WARNING] Falha ao atualizar expected_effect (uid={uid}): {e}")
             sys.stdout.flush()
 
     def record_action(self, event_json_str: str):
@@ -2119,6 +2168,7 @@ class AegisRecorder:
             self.page.on("pageerror", on_page_error)
 
             self.page.expose_function("pythonRecordAction", self.record_action)
+            self.page.expose_function("pythonUpdateExpectedEffect", self.update_expected_effect)
             self.page.expose_function("pythonToggleVoice", self.toggle_voice_from_page)
             self.page.expose_function("pythonAddAnnotation", self.record_annotation)
 
@@ -2138,6 +2188,7 @@ class AegisRecorder:
                 sys.stdout.flush()
                 try:
                     new_page.expose_function("pythonRecordAction", self.record_action)
+                    new_page.expose_function("pythonUpdateExpectedEffect", self.update_expected_effect)
                     new_page.expose_function("pythonToggleVoice", self.toggle_voice_from_page)
                     new_page.expose_function("pythonAddAnnotation", self.record_annotation)
                     new_page.on("close", lambda _: print(f"[AEGIS] Aba fechada: {new_page.url}"))

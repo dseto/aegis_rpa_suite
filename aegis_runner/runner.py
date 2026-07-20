@@ -789,7 +789,7 @@ class TransactionRunner:
             return False
         except Exception as e:
             print(f"[AEGIS RUNNER] Erro em _verify_recorded_expected_effect: {e}")
-            return self._verify_generic_effect(page, before_snapshot, expected)
+            return self._verify_generic_effect(page, before_snapshot, expected_effect)
 
     def _poll_generic_effect_extended(self, page, before_snapshot, waits_ms=(300, 700, 1000, 1500, 2500)) -> bool:
         """Polling genérico estendido (~6s total) para efeitos com latência de
@@ -1420,6 +1420,21 @@ class TransactionRunner:
             print(f"[AEGIS_STEP] START | {step_id} | click | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
             sys.stdout.flush()
 
+        # Unified Target Descriptor: fiação dos kwargs de âncora para os
+        # atributos que o tier 2.95 (abaixo), o tier equivalente de
+        # fill_resilient e _verify_action_effect leem via getattr/hasattr.
+        # Atribuição incondicional a cada chamada (inclusive com valor None)
+        # -- não há limpeza no fim do método porque toda entrada pública que
+        # consulta estes atributos (click_resilient/fill_resilient/
+        # select_option_resilient) também os reatribui no próprio início,
+        # eliminando o risco de vazamento de estado de um passo para o
+        # próximo sem precisar de try/finally num método com múltiplos
+        # pontos de retorno e re-raise.
+        self._current_anchor = anchor
+        self._current_expected_effect = expected_effect
+        self._current_viewport = viewport
+        self._current_target_description = target_description
+
         # 1. Se o seletor for composto (encadeado com >>), faz hover sequencial nos pais para expandir menus multinível
         if " >> " in selector:
             parts = selector.split(" >> ")
@@ -1977,7 +1992,16 @@ class TransactionRunner:
             try:
                 target_handle = self._resolve_via_anchor(page, self._current_anchor, "click", getattr(self, "_current_viewport", None))
                 if target_handle:
-                    tier_before = _tier_baseline(self._current_anchor.get("selector") or "")
+                    # Baseline e confirmação usam o MESMO seletor (o da âncora
+                    # gravada) dos dois lados -- contrato "mesmo seletor antes/
+                    # depois" da Seção "Per-tier verified recovery": passar um
+                    # rótulo literal diferente ("anchor_geometry") na
+                    # confirmação faria _capture_click_effect_snapshot buscar
+                    # um seletor inexistente no "depois", zerando o
+                    # fingerprint e reabrindo a classe de bug do carimbo já
+                    # corrigida noutros tiers.
+                    anchor_selector_for_baseline = self._current_anchor.get("selector") or ""
+                    tier_before = _tier_baseline(anchor_selector_for_baseline)
                     if hasattr(target_handle, 'click'):
                         target_handle.click(timeout=2000)
                     elif hasattr(target_handle, 'evaluate'):
@@ -1987,7 +2011,7 @@ class TransactionRunner:
                         # Should be a locator if str returned, but let's be safe
                         pass
 
-                    if _effect_confirmed("anchor_geometry", tier_before):
+                    if _effect_confirmed(anchor_selector_for_baseline, tier_before):
                         # F1 is logged by the caller if we return true, but we should register healing
                         self._register_healing_for_review(step_id, selector, "click", "anchor_geometry")
                         return True, "anchor_geometry", "anchor_geometry"
@@ -2553,7 +2577,8 @@ class TransactionRunner:
     def select_option_resilient(self, page, dropdown_label, option_text,
                                 original_coords_trigger=None,
                                 original_coords_option=None,
-                                timeout=5000, step_id=None, strict: bool = False) -> bool:
+                                timeout=5000, step_id=None, strict: bool = False,
+                                anchor=None, expected_effect=None, viewport=None) -> bool:
         """
         Seleciona uma opção de um dropdown/select customizado (não-nativo).
         Abre o dropdown antes de clicar na opção desejada.
@@ -2564,6 +2589,16 @@ class TransactionRunner:
         if getattr(self, "realtime_logs", True):
             print(f"[AEGIS_STEP] START | {step_id} | select_option | {dropdown_label} -> {option_text} | Selecionar dropdown | | | {row_id}")
             sys.stdout.flush()
+
+        # Unified Target Descriptor: mesma fiação de click_resilient/
+        # fill_resilient -- alimenta o tier de âncora do trigger logo abaixo,
+        # entre a cascata de seletores conhecidos e a coordenada gravada
+        # (este é o dropdown Angular Material com flakiness real medida no
+        # gate de regressão -- st_023/st_026 do Portal Segura).
+        self._current_anchor = anchor
+        self._current_expected_effect = expected_effect
+        self._current_viewport = viewport
+        self._current_target_description = f"Abrir dropdown '{dropdown_label}'"
 
         is_flaky_step = self.flaky_step_ids.get(step_id, False)
         flaky_healing_unlocked = is_flaky_step and self.current_row_flaky_attempt >= 4
@@ -2651,6 +2686,27 @@ class TransactionRunner:
                     print(f"[AEGIS RUNNER] Seletor '{sel}' clicou mas não abriu painel de opções. Tentando próximo...")
             except Exception:
                 continue
+
+        # Nível 2.95 (Unified Target Descriptor): Âncora Geométrica para o
+        # trigger. Roda ANTES da coordenada gravada e é permitido sob
+        # strict=True (mesmo critério de fallback_selectors em click_resilient
+        # -- não é palpite, usa dado gravado e validado na captura). Só conta
+        # como sucesso se um painel de opções realmente abrir -- mesma
+        # verificação usada pelos outros tiers de trigger acima.
+        if not trigger_clicked and self._current_anchor:
+            try:
+                anchor_target = self._resolve_via_anchor(page, self._current_anchor, "select_trigger", self._current_viewport)
+                if anchor_target:
+                    anchor_target.click(timeout=1500, force=True)
+                    time.sleep(0.3)
+                    if page.locator(".cdk-overlay-pane, .mat-select-panel, [role='listbox']").count() > 0:
+                        trigger_clicked = True
+                        print(f"[AEGIS RUNNER] Dropdown '{dropdown_label}' aberto via âncora geométrica.")
+                        self._register_healing_for_review(step_id, f"anchor:{dropdown_label}", "select_option", "anchor_geometry")
+                    else:
+                        print(f"[AEGIS RUNNER] Âncora geométrica clicou mas não abriu painel de opções.")
+            except Exception as e:
+                print(f"[AEGIS RUNNER] Falha no tier de anchor_geometry para o trigger: {e}")
 
         # Fallback de coordenadas para o trigger
         # Coordenadas gravadas são frações do viewport na gravação original;
@@ -3382,7 +3438,8 @@ class TransactionRunner:
             raise e
 
     def fill_resilient(self, page, selector, text_val, target_description,
-                       strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None, strict: bool = False) -> bool:
+                       strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None, strict: bool = False,
+                       anchor=None, expected_effect=None, viewport=None) -> bool:
         """
         Preenche um campo de forma resiliente.
         - strategy="DIRECT": usa .fill() padrão (rápido, sem eventos keydown).
@@ -3395,6 +3452,14 @@ class TransactionRunner:
         if getattr(self, "realtime_logs", True):
             print(f"[AEGIS_STEP] START | {step_id} | fill | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '1')}")
             sys.stdout.flush()
+
+        # Unified Target Descriptor: mesma fiação de click_resilient -- ver
+        # comentário lá. Necessário para o tier 2.95 abaixo (já existente)
+        # ler self._current_anchor/_current_viewport de fato.
+        self._current_anchor = anchor
+        self._current_expected_effect = expected_effect
+        self._current_viewport = viewport
+        self._current_target_description = target_description
 
         # Força HUMAN_LIKE globalmente caso a variável de ambiente esteja ativa
         force_human_like = os.environ.get("AEGIS_FORCE_HUMAN_LIKE", "false").lower() in ("true", "1", "yes")
