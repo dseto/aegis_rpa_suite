@@ -90,3 +90,28 @@ Motivo: o bot exibe **não-determinismo alto no ambiente de medição** (1/3 SUC
 ### (Seção 2) Próximo passo para fechar o veredito
 
 O usuário reporta que o cenário fecha **100% de forma consistente** no uso normal dele (via Cockpit). As execuções aqui foram disparadas por subprocess direto com env explícito. Antes de qualquer conclusão sobre o F0, reconciliar essa diferença: identificar o que o Cockpit configura que o disparo direto não (geometria de janela real, `slow_mo`, ordem/estado do backend, storage). Sem essa reconciliação, este gate não é um instrumento confiável para F1/F2.
+
+---
+
+## Seção 4 — Gate pós-fixes do PR #2 (Unified Target Descriptor, fiação completa) — **APROVADO**
+
+> Nota: um gate anterior (`fix/react-spa-support`, commit `3e2f12f`, 2026-07-19) foi rodado e aprovado nesta mesma trilha, mas a seção que o registrava foi perdida por um `git checkout` de branch nesta sessão antes do commit — o arquivo é rastreado pelo git, e a edição não commitada ficou presa no working tree de `main`. Resultado preservado no comentário do PR: https://github.com/dseto/aegis_rpa_suite/pull/1#issuecomment-5018202768 (3 execuções, 1 SUCCESS + 2 FAILED em pontos de flakiness pré-existente, `needs_review` 7→7, nenhuma classe nova de erro).
+
+- **Data:** 2026-07-20. Branch: `unified-target-descriptor-6509308849546547825` (PR #2), commit `47b1208` — 5 correções de fiação sobre o trabalho do Jules (`dd8ee5a`, `1d9c213`, `ff616dc`), que tinha 2 rodadas de review REPROVADAS por a feature ficar morta em runtime (kwargs recebidos mas nunca atribuídos aos atributos que os tiers leem).
+- **Mudança sob teste:** correção da fiação (kwarg → `self._current_anchor`/`_current_expected_effect`/`_current_viewport`/`_current_target_description`) em `click_resilient`, `fill_resilient`, `select_option_resilient`; mismatch de seletor no tier `anchor_geometry` do clique; `NameError` no except de `_verify_recorded_expected_effect`; tier de âncora geométrica para o trigger de `select_option_resilient`; dispatch síncrono no recorder (era diferido via `setTimeout`, perdendo eventos de navegação e embaralhando ordem).
+- **Suítes mockadas primeiro:** `test_runner_integration.py` 118 OK, `test_cognitive_fallback.py` 7 OK, sanitizer/codegen OK, 12 testes novos do Jules + 7 testes novos de fiação (`test_unified_target_wiring.py`) — todos verdes.
+- **Config:** mesma dos gates anteriores (`channel=msedge`, headed, cognitivo ON), **bot compilado ANTES desta feature** (plano sem `anchor`/`expected_effect` — o tier novo é no-op estrutural neste bot, já que `self._current_anchor` nunca é setado por steps que não passam o kwarg). Este gate mede **retrocompatibilidade**, não a feature em si (que exige re-gravação para ser exercitada — fora de escopo aqui).
+
+### Resultado (3 execuções)
+
+| Execução | Status | Ponto de falha |
+|---|---|---|
+| 1 | FAILED | `st_026` "Uso do Veículo" (select_option — flakiness pré-existente, Seção 2) |
+| 2 | **SUCCESS** | — |
+| 3 | FAILED | `st_052` "#btn-go-to-payment" pós "Finalizar & Emitir" (flakiness pré-existente, Seção 2) |
+
+`needs_review` 7→7 estável. Nenhum crash Python, nenhuma classe nova de erro. Os dois pontos de falha são **nominalmente os mesmos** listados na Seção 2 como não-determinismo pré-existente do site/ambiente (não do framework).
+
+### Veredito
+
+**APROVADO.** 1/3 bruto replica exatamente o padrão de flakiness já documentado (mesmos passos, mesmo perfil de "clique loga efeito mas tela não transiciona"), em um bot que não exercita a feature (sem `anchor` no plano). Nenhuma evidência de regressão introduzida pelas 5 correções. Validação completa da feature em si (com re-gravação exercitando `anchor`/`expected_effect` de verdade) é tarefa separada, fora do escopo deste fix de fiação.
