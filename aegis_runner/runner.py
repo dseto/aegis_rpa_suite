@@ -1346,8 +1346,8 @@ class TransactionRunner:
                     target_norm
                     and (
                         (text_norm and (text_norm in target_norm or target_norm in text_norm))
-                        or (role_norm and role in target_norm)
-                        or (tag_norm and tag in target_norm)
+                        or (role and role in target_norm)
+                        or (tag and tag in target_norm)
                     )
                 )
 
