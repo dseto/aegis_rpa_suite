@@ -2880,6 +2880,10 @@ class TransactionRunner:
                 page.evaluate("""() => {
                     const el = document.activeElement;
                     if (el) {
+                        let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                        if (nativeInputValueSetter && el.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(el, el.value); }
+                        else if (nativeTextAreaValueSetter && el.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(el, el.value); }
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }
@@ -3034,6 +3038,10 @@ class TransactionRunner:
                 page.evaluate("""() => {
                     const el = document.activeElement;
                     if (el) {
+                        let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                        if (nativeInputValueSetter && el.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(el, el.value); }
+                        else if (nativeTextAreaValueSetter && el.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(el, el.value); }
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }
@@ -3056,6 +3064,10 @@ class TransactionRunner:
                 target.evaluate(
                     """(el, val) => {
                         el.value = val;
+                        let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                        if (nativeInputValueSetter && el.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(el, val); }
+                        else if (nativeTextAreaValueSetter && el.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(el, val); }
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }""",
@@ -3243,7 +3255,12 @@ class TransactionRunner:
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(text_val)
-                    page.evaluate("() => { const active = document.activeElement; if (active) { active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
+                    page.evaluate("() => { const active = document.activeElement; if (active) { "
+                                  "let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set; "
+                                  "let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set; "
+                                  "if (nativeInputValueSetter && active.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(active, active.value); } "
+                                  "else if (nativeTextAreaValueSetter && active.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(active, active.value); } "
+                                  "active.dispatchEvent(new Event('input', { bubbles: true })); active.dispatchEvent(new Event('change', { bubbles: true })); } }")
                     actual_value = page.evaluate(
                         "() => { const active = document.activeElement; "
                         "return active ? (active.value !== undefined ? active.value : active.textContent) : null; }"

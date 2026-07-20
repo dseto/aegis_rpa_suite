@@ -2173,7 +2173,14 @@ def run_auto_simulation(page, update_scenario, record_annotation):
         for char in text_val:
             page.keyboard.type(char)
             time.sleep(delay_ms / 1000.0)
-        element.evaluate("el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }")
+        element.evaluate("el => { "
+                         "let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set; "
+                         "let nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set; "
+                         "if (nativeInputValueSetter && el.tagName.toLowerCase() === 'input') { nativeInputValueSetter.call(el, el.value); } "
+                         "else if (nativeTextAreaValueSetter && el.tagName.toLowerCase() === 'textarea') { nativeTextAreaValueSetter.call(el, el.value); } "
+                         "el.dispatchEvent(new Event('input', { bubbles: true })); "
+                         "el.dispatchEvent(new Event('change', { bubbles: true })); "
+                         "}")
         time.sleep(0.2)
 
     def select_dropdown_local(field_selector, target_option_text=None):
