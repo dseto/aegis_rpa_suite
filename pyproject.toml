@@ -1,2 +1,7 @@
 [project.optional-dependencies]
 test = ["pytest"]
+lint = ["ruff"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
