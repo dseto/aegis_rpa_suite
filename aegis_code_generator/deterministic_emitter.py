@@ -223,6 +223,9 @@ def _emit_click(step: Dict[str, Any]) -> str:
     coords = step.get("coords")
     weak_selector = bool(step.get("weak_selector"))
     text = step.get("text")
+    anchor = step.get("anchor")
+    expected_effect = step.get("expected_effect")
+    viewport = step.get("viewport")
 
     anchor_literal = _viable_has_text_literal(text)
 
@@ -241,6 +244,12 @@ def _emit_click(step: Dict[str, Any]) -> str:
         ]
         if coords:
             lines.append(f"    original_coords={_fmt_coords(coords)},")
+        if anchor:
+            lines.append(f"    anchor={anchor!r},")
+        if expected_effect:
+            lines.append(f"    expected_effect={expected_effect!r},")
+        if viewport:
+            lines.append(f"    viewport={viewport!r},")
         lines.append(f"    step_id={_fmt_str(step_id)}")
         lines.append(")")
         return "\n".join(lines)
@@ -272,6 +281,12 @@ def _emit_click(step: Dict[str, Any]) -> str:
     ]
     if coords:
         lines.append(f"    original_coords={_fmt_coords(coords)},")
+    if anchor:
+        lines.append(f"    anchor={anchor!r},")
+    if expected_effect:
+        lines.append(f"    expected_effect={expected_effect!r},")
+    if viewport:
+        lines.append(f"    viewport={viewport!r},")
     lines.append(f"    step_id={_fmt_str(step_id)}")
     lines.append(")")
     return "\n".join(lines)
@@ -295,6 +310,9 @@ def _emit_fill(step: Dict[str, Any], field: Optional[Dict[str, Any]]) -> str:
     key = (field or {}).get("semantic_key", "")
     strategy = "HUMAN_LIKE" if (field or {}).get("fill_strategy") == "HUMAN_LIKE" else "DIRECT"
     text_val_expr = f'row.get({_fmt_str(key)}, "")'
+    anchor = step.get("anchor")
+    expected_effect = step.get("expected_effect")
+    viewport = step.get("viewport")
 
     if parent:
         lines = [
@@ -305,9 +323,15 @@ def _emit_fill(step: Dict[str, Any], field: Optional[Dict[str, Any]]) -> str:
             f"    text_val={text_val_expr},",
             f"    target_description={_fmt_str(description)},",
             f'    strategy="{strategy}",',
-            f"    step_id={_fmt_str(step_id)}",
-            ")",
         ]
+        if anchor:
+            lines.append(f"    anchor={anchor!r},")
+        if expected_effect:
+            lines.append(f"    expected_effect={expected_effect!r},")
+        if viewport:
+            lines.append(f"    viewport={viewport!r},")
+        lines.append(f"    step_id={_fmt_str(step_id)}")
+        lines.append(")")
         return "\n".join(lines)
 
     lines = [
@@ -317,9 +341,15 @@ def _emit_fill(step: Dict[str, Any], field: Optional[Dict[str, Any]]) -> str:
         f"    text_val={text_val_expr},",
         f"    target_description={_fmt_str(description)},",
         f'    strategy="{strategy}",',
-        f"    step_id={_fmt_str(step_id)}",
-        ")",
     ]
+    if anchor:
+        lines.append(f"    anchor={anchor!r},")
+    if expected_effect:
+        lines.append(f"    expected_effect={expected_effect!r},")
+    if viewport:
+        lines.append(f"    viewport={viewport!r},")
+    lines.append(f"    step_id={_fmt_str(step_id)}")
+    lines.append(")")
     return "\n".join(lines)
 
 
@@ -338,6 +368,9 @@ def _emit_select(step: Dict[str, Any], field: Optional[Dict[str, Any]]) -> str:
     option_text_expr = f'row.get({_fmt_str(key)}, "")'
     coords_trigger = step.get("coords_trigger")
     coords_option = step.get("coords_option")
+    anchor = step.get("anchor")
+    expected_effect = step.get("expected_effect")
+    viewport = step.get("viewport")
 
     lines = [
         "runner.select_option_resilient(",
@@ -349,6 +382,12 @@ def _emit_select(step: Dict[str, Any], field: Optional[Dict[str, Any]]) -> str:
         lines.append(f"    original_coords_trigger={_fmt_coords(coords_trigger)},")
     if coords_option:
         lines.append(f"    original_coords_option={_fmt_coords(coords_option)},")
+    if anchor:
+        lines.append(f"    anchor={anchor!r},")
+    if expected_effect:
+        lines.append(f"    expected_effect={expected_effect!r},")
+    if viewport:
+        lines.append(f"    viewport={viewport!r},")
     lines.append(f"    step_id={_fmt_str(step_id)}")
     lines.append(")")
     return "\n".join(lines)

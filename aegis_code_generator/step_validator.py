@@ -963,7 +963,35 @@ def validate_resilience_patterns(bot_code: str, plan_path: str, dicionario_path:
                               f"original_coords_option=({coords_option[0]}, {coords_option[1]}) "
                               f"em select_option_resilient(...) como fallback de self-healing."
                 })
+
+            # Anchor propagation enforcement
+            if "anchor" in step and not kwarg_present(step_id, "select_option_resilient", "anchor"):
+                errors.append({
+                    "type": "MISSING_ANCHOR_KWARG",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' possui 'anchor' no plano mas faltou passar anchor=... em select_option_resilient."
+                })
+            if "expected_effect" in step and not kwarg_present(step_id, "select_option_resilient", "expected_effect"):
+                errors.append({
+                    "type": "MISSING_EXPECTED_EFFECT_KWARG",
+                    "step_id": step_id,
+                    "detail": f"Passo '{step_id}' possui 'expected_effect' no plano mas faltou passar expected_effect=... em select_option_resilient."
+                })
             continue
+
+        target_method = "click_resilient" if step_type == "click" else "fill_resilient"
+        if "anchor" in step and not kwarg_present(step_id, target_method, "anchor") and not kwarg_present(step_id, "click_chained" if step_type == "click" else "fill_chained", "anchor"):
+            errors.append({
+                "type": "MISSING_ANCHOR_KWARG",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' possui 'anchor' no plano mas faltou passar anchor=... na chamada ao runner."
+            })
+        if "expected_effect" in step and not kwarg_present(step_id, target_method, "expected_effect") and not kwarg_present(step_id, "click_chained" if step_type == "click" else "fill_chained", "expected_effect"):
+            errors.append({
+                "type": "MISSING_EXPECTED_EFFECT_KWARG",
+                "step_id": step_id,
+                "detail": f"Passo '{step_id}' possui 'expected_effect' no plano mas faltou passar expected_effect=... na chamada ao runner."
+            })
 
         parent = step.get("parent")
         if parent:
@@ -1716,13 +1744,13 @@ class _FakeRunner:
         pass
     def run(self, url=None, headless=True, slow_mo=50, channel="msedge"):
         pass
-    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False):
+    def click_resilient(self, page, selector, target_description, timeout=5000, validate_navigation=False, original_coords=None, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
-    def fill_resilient(self, page, selector, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None):
+    def fill_resilient(self, page, selector, text_val, target_description, strategy="DIRECT", delay_ms=60, timeout=5000, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
     def fill_human_like(self, page, selector, text_val, target_description=None, delay_ms=60, timeout=5000, step_id=None):
         return True
-    def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None):
+    def select_option_resilient(self, page, dropdown_label, option_text, original_coords_trigger=None, original_coords_option=None, timeout=5000, step_id=None, strict=False, anchor=None, expected_effect=None, viewport=None):
         return True
     def select_option_native_resilient(self, page, selector, option_text, target_description, timeout=5000, step_id=None, strict=False):
         return True
