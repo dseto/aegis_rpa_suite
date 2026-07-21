@@ -54,7 +54,7 @@ from step_validator import (
 # Raiz do framework — precisa estar em project_root do dry_run_bot pra
 # 'import aegis_runner.runner' resolver dentro do subprocess do harness
 # (mesma convenção de aegis_code_generator/test_dryrun_multirow.py).
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GOLDEN_DIR = os.path.join(REPO_ROOT, ".specs", "golden")
 
 

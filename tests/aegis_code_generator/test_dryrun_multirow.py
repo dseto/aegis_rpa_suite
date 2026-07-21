@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Precisamos importar aegis_runner.runner dentro do subprocess do harness,
 # entao a raiz do repo (que contem o pacote aegis_runner) precisa estar no
 # path usado como project_root.
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from step_validator import dry_run_bot
 

@@ -58,8 +58,8 @@ telemetry_data/*
 !telemetry_data/.gitkeep
 
 # Exclude tests and temporary/backlog documentation
-aegis_runner/test_cognitive_fallback.py
-aegis_runner/test_runner_integration.py
+tests/aegis_runner/test_cognitive_fallback.py
+tests/aegis_runner/test_runner_integration.py
 docs/dataset_generation_backlog.md
 
 # Python/Editor temporary files

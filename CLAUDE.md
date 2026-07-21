@@ -208,17 +208,19 @@ Some clicks depend on a target that only becomes enabled after an async app-side
 
 ## Testing
 
-Tests live in `aegis_runner/test_*.py`, `aegis_sanitizer/test_*.py`, and `aegis_code_generator/test_*.py`:
-- `aegis_runner/test_runner_integration.py` — integration tests for the TransactionRunner (mocked Playwright `page`/`locator`)
-- `aegis_runner/test_cognitive_fallback.py` — tests for the CognitiveGateway
-- `aegis_sanitizer/test_sanitizer_execution_plan.py` — plan generation, `weak_selector`, `fallback_selectors` propagation
-- `aegis_code_generator/test_error_selector_config.py` — `error_message_selector` boilerplate parametrization
-- `aegis_code_generator/test_weak_selector_enforcement.py` — `WEAK_SELECTOR_WITHOUT_ANCHOR` structural check
-- `aegis_code_generator/test_dryrun_multirow.py` — multi-row dry-run harness
-- `aegis_runner/test_unified_target.py`, `aegis_runner/test_unified_target_wiring.py` — `_resolve_via_anchor`/`_verify_recorded_expected_effect` in isolation, and the full kwarg → `self._current_*` → tier-fires → F1-registered wiring chain (added after two review rounds where the feature had green mocked tests but was dead in runtime — see Unified Target Descriptor above)
-- `aegis_sanitizer/test_unified_target_sanitizer.py`, `aegis_code_generator/test_unified_target_emitter.py` — `anchor`/`expected_effect`/`viewport` propagation and emission
+Tests live in `tests/aegis_runner/test_*.py`, `tests/aegis_sanitizer/test_*.py`, and `tests/aegis_code_generator/test_*.py` (mirroring the `aegis_*` module layout; moved out of the module dirs 2026-07-21 to satisfy standard `tests/**/*.py` discovery):
+- `tests/aegis_runner/test_runner_integration.py` — integration tests for the TransactionRunner (mocked Playwright `page`/`locator`)
+- `tests/aegis_runner/test_cognitive_fallback.py` — tests for the CognitiveGateway
+- `tests/aegis_sanitizer/test_sanitizer_execution_plan.py` — plan generation, `weak_selector`, `fallback_selectors` propagation
+- `tests/aegis_code_generator/test_error_selector_config.py` — `error_message_selector` boilerplate parametrization
+- `tests/aegis_code_generator/test_weak_selector_enforcement.py` — `WEAK_SELECTOR_WITHOUT_ANCHOR` structural check
+- `tests/aegis_code_generator/test_dryrun_multirow.py` — multi-row dry-run harness
+- `tests/aegis_runner/test_unified_target.py`, `tests/aegis_runner/test_unified_target_wiring.py` — `_resolve_via_anchor`/`_verify_recorded_expected_effect` in isolation, and the full kwarg → `self._current_*` → tier-fires → F1-registered wiring chain (added after two review rounds where the feature had green mocked tests but was dead in runtime — see Unified Target Descriptor above)
+- `tests/aegis_sanitizer/test_unified_target_sanitizer.py`, `tests/aegis_code_generator/test_unified_target_emitter.py` — `anchor`/`expected_effect`/`viewport` propagation and emission
 
-Run with plain `python <test_file>.py` (from within that module's directory — `aegis_runner/test_*.py` import as `from runner import TransactionRunner`, not `aegis_runner.runner`). The project Python version requirement is `>=3.8`.
+Each `tests/aegis_*/` subdir has a `conftest.py` that inserts the corresponding `aegis_*` module dir into `sys.path`, since these tests import flat (`from runner import TransactionRunner`, not `aegis_runner.runner`) — a holdover from when the files lived inside the module dir itself. Run the whole suite with `python -m pytest tests/` from the repo root, or a single file with plain `python tests/aegis_runner/test_runner_integration.py` (works standalone too — each file inserts its own module dir onto `sys.path` at import time, independent of the conftest). The project Python version requirement is `>=3.8`.
+
+`tests/aegis_runner/test_runner_integration.py` and `tests/aegis_runner/test_cognitive_fallback.py` are gitignored (large local WIP files, not meant to be committed) — see `.gitignore`.
 
 **Known gap:** `aegis_cockpit/cockpit.py` has no test suite in the repo. It's a large HTTP handler (correction lifecycle, step marking, project CRUD) that has caused real regressions when edited without a live re-check — see "Working Agreements" below.
 
