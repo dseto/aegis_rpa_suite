@@ -2436,10 +2436,21 @@ class TransactionRunner:
             page, selector, step_id, identity_scoped=identity_scoped
         )
         if recovered:
-            if method == "fallback_selector":
+            if method in ("fallback_selector", "anchor_geometry"):
+                # `escape_retry`/`cdk_reposition` (2.5/2.75) reclicam o MESMO
+                # alvo depois de só limpar ruído de overlay -- tratados como
+                # SUCCESS (nenhuma resolução alternativa envolvida). Já
+                # `fallback_selector` e `anchor_geometry` (Unified Target
+                # Descriptor) resolvem por um seletor/estratégia DIFERENTE do
+                # originalmente pedido -- precisam fechar como HEALED pra
+                # entrar no Sensor F1 e na telemetria de resolução por tier
+                # (achado ao validar `anchor_geometry` ao vivo: caía no ramo
+                # "else" e logava SUCCESS, embora `_register_healing_for_review`
+                # já fosse chamado dentro do próprio tier -- rótulo
+                # inconsistente entre `needs_review` e `historico_passos.json`).
                 # _log_step já registra needs_review via _register_healing_for_review
                 # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
-                self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method="fallback_selector")
+                self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method=method)
             else:
                 self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
             return True
