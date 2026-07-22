@@ -1,0 +1,7 @@
+{
+  "feature_id": "T-05",
+  "verify_cmd": "pytest tests/aegis_cockpit/test_healing_review_cognitive.py -q",
+  "recorded_at": "2026-07-22T03:43:31.437078+00:00",
+  "exit_code": 0,
+  "files_hash": "sha256:adcea2431328aad01b5f2b0b5c7c11f0e7bb8aaa3160140ae822b609e63ad607"
+}
