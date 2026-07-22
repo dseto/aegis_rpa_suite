@@ -1918,7 +1918,11 @@ class TransactionRunner:
         Tenta, em sequência, as camadas determinísticas de recuperação de
         clique: Nível 2.5 (Escape + retry no próprio seletor), Nível 2.75
         (reposicionar `.cdk-overlay-pane` no viewport + clique sintético via
-        JS) e Nível 2.9 (`fallback_selectors` gravados na captura, um a um).
+        JS), Nível 2.85 (E3 -- dismiss de overlay NÃO MAPEADO: Escape +
+        botão de fechar canônico, só quando um overlay a mais que o
+        baseline do attempt é confirmado e o expected_effect gravado do
+        passo não previa abrir overlay) e Nível 2.9 (`fallback_selectors`
+        gravados na captura, um a um).
 
         Compartilhado entre _handle_click_failure (recuperação de falha por
         EXCEÇÃO do Playwright) e _finalize_click_success (recuperação de
@@ -2071,6 +2075,61 @@ class TransactionRunner:
                         return True, "cdk_reposition", selector
             except Exception:
                 pass
+
+            # Nível 2.85 (E3 -- .specs/backlog-evolucao-agentica-design-time.md):
+            # overlay NÃO MAPEADO (pop-up/banner injetado que não fazia parte
+            # do fluxo gravado). Diferente de 2.5 (que só tenta Escape+retry
+            # incondicionalmente), este nível: (1) só age quando confirma que
+            # HÁ um overlay a mais desde o baseline do attempt (prova que é
+            # ruído, não o efeito esperado do próprio clique); (2) escalona
+            # para um botão de fechar canônico quando Escape sozinho não
+            # basta (banners de cookie/promo que não respondem a teclado).
+            # Discriminador de segurança: nunca dispara se o expected_effect
+            # GRAVADO do passo prevê abrir overlay (overlay_delta > 0) -- aí
+            # o overlay É o efeito esperado do próprio clique, não ruído.
+            # Requer before_snapshot real (baseline por-ATTEMPT de
+            # _finalize_click_success) -- sem baseline (caminho por exceção
+            # de _handle_click_failure, before_snapshot=None) não há como
+            # provar "overlay a mais", então este nível não roda ali.
+            current_expected_effect = getattr(self, "_current_expected_effect", None)
+            expects_overlay = bool(current_expected_effect and (current_expected_effect.get("overlay_delta") or 0) > 0)
+            if not expects_overlay and before_snapshot is not None:
+                try:
+                    baseline_overlays = int((before_snapshot or {}).get("overlays", 0) or 0)
+                    probe_snapshot = self._capture_click_effect_snapshot(page, selector)
+                    probe_overlays = int((probe_snapshot or {}).get("overlays", 0) or 0)
+                    if probe_overlays > baseline_overlays:
+                        print(f"[AEGIS RUNNER] Overlay não mapeado detectado (baseline={baseline_overlays}, atual={probe_overlays}). Tentando dismiss padrão...")
+                        try:
+                            page.keyboard.press("Escape")
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
+                        post_escape_snapshot = self._capture_click_effect_snapshot(page, selector)
+                        post_escape_overlays = int((post_escape_snapshot or {}).get("overlays", 0) or 0)
+                        dismissed = post_escape_overlays <= baseline_overlays
+                        if not dismissed:
+                            for close_selector in ("[aria-label*='close' i]", ".close", "text=×", "button:has-text('×')"):
+                                try:
+                                    close_loc = page.locator(close_selector).first
+                                    if close_loc.is_visible(timeout=300):
+                                        close_loc.click(timeout=1000)
+                                        dismissed = True
+                                        break
+                                except Exception:
+                                    continue
+                        if dismissed:
+                            # Baseline FRESCO pós-dismiss (mesma disciplina de
+                            # _tier_baseline acima) -- nunca o delta que o
+                            # próprio dismiss fabricou aprova o retry abaixo.
+                            tier_before = _tier_baseline(selector)
+                            page.locator(selector).first.click(timeout=3000)
+                            if _effect_confirmed(selector, tier_before):
+                                print(f"[AEGIS RUNNER] Clique resolvido após dismiss de overlay não mapeado!")
+                                self._register_healing_for_review(step_id, selector, "click", "unmapped_overlay_dismissed")
+                                return True, "unmapped_overlay_dismissed", selector
+                except Exception:
+                    pass
 
         # Nível 2.9 (M5): Fallback de seletores determinísticos gravados na captura.
         fallback_selectors = self.fallback_selectors_by_step.get(step_id, []) if hasattr(self, "fallback_selectors_by_step") else []

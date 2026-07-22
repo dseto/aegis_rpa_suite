@@ -27,7 +27,7 @@
         "T-01"
       ],
       "cwd": null,
-      "passes": false
+      "passes": true
     },
     {
       "id": "T-03",
