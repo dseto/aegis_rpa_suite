@@ -18,6 +18,7 @@ if PROJECT_ROOT not in sys.path:
 
 from aegis_cockpit.project_manager import ProjectManager
 from aegis_cockpit.process_manager import ProcessManager
+from aegis_cockpit.healing_review import enrich_needs_review, approve_proposal
 
 # Instanciação dos managers de negócio (Injeção de dependências via construtores e callbacks)
 project_manager = ProjectManager(PROJECT_ROOT)
@@ -716,6 +717,42 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 'success': True,
                 'correcoes': corrections
             })
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/healing-review'):
+            # E2 (.specs/backlog-evolucao-agentica-design-time.md): lista as
+            # propostas de correção prontas para revisão humana -- gera via
+            # healing_review.enrich_needs_review (lógica testada em
+            # tests/aegis_cockpit/test_healing_review*.py), handler aqui só
+            # resolve slug/test_dir e devolve o resultado. Nunca escreve nada
+            # em correcoes_acumuladas.json (isso só acontece no POST de
+            # aprovação, /healing-review/<id>/approve, abaixo).
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+
+            gateway = None
+            try:
+                from aegis_runner.cognitive_fallback import CognitiveGateway
+                gateway = CognitiveGateway(project_dir=test_dir)
+            except Exception:
+                gateway = None
+
+            try:
+                result = enrich_needs_review(test_dir, gateway=gateway)
+                self._json({
+                    'success': True,
+                    'proposals': result['proposals'],
+                    'skipped_unresolved': result['skipped_unresolved']
+                })
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao gerar propostas de correção: {e}'}, 500)
 
         elif path.startswith('/api/projects/') and '/tests/' in path and path.endswith('/versions-evolution'):
             parts = path.split('/')
@@ -1580,6 +1617,37 @@ class AegisHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._json({'success': True, 'message': f'Status da correção {corr_id} atualizado para {new_status}{insight_note}.'})
             except Exception as e:
                 self._json({'success': False, 'message': f'Erro ao atualizar status: {e}'}, 500)
+
+        elif path.startswith('/api/projects/') and '/tests/' in path and '/healing-review/' in path and path.endswith('/approve'):
+            # E2: gate humano -- só este endpoint converte uma proposta
+            # (gerada pelo GET /healing-review acima) em correção
+            # status="pending", reutilizando o schema que o fluxo surgical
+            # existente (_surgical_correct) já consome. Corpo esperado: a
+            # própria proposta devolvida pelo GET (root_cause/proposed_fix/
+            # kind/healing_method), ecoada pelo cliente após revisão humana
+            # -- mesmo modelo de confiança que o endpoint de status acima já
+            # usa para proposed_fix/qa_insight submetidos pelo QA.
+            parts = path.split('/')
+            slug = urllib.parse.unquote(parts[3])
+            test_slug = urllib.parse.unquote(parts[5])
+            correction_id = urllib.parse.unquote(parts[7])
+
+            proj_dir = project_manager.get_project_dir(slug)
+            test_dir = os.path.join(proj_dir, "tests", test_slug)
+
+            if not os.path.exists(test_dir):
+                self._json({'success': False, 'message': 'Cenário não encontrado.'}, 404)
+                return
+
+            try:
+                approved = approve_proposal(test_dir, correction_id, body)
+                if not approved:
+                    self._json({'success': False, 'message': f'Proposta {correction_id} não encontrada.'}, 404)
+                    return
+                project_manager.update_project_activity(slug)
+                self._json({'success': True, 'message': f'Proposta {correction_id} aprovada e movida para pending.'})
+            except Exception as e:
+                self._json({'success': False, 'message': f'Erro ao aprovar proposta: {e}'}, 500)
 
         elif path.startswith('/api/projects/') and '/tests/' in path and '/steps/' in path and path.endswith('/flaky'):
             parts = path.split('/')
