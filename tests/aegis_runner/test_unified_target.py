@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from aegis_runner.runner import TransactionRunner
+from runner import TransactionRunner
 
 class DummyLocator:
     def __init__(self, elements=None, text=""):

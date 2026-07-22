@@ -1,0 +1,7 @@
+{
+  "feature_id": "T-03",
+  "verify_cmd": "pytest tests/aegis_runner -q",
+  "recorded_at": "2026-07-22T03:38:44.543654+00:00",
+  "exit_code": 0,
+  "files_hash": "sha256:da32f5c6751df53b9e6f948ed924c2cb03ffbde1a9f516483cb521ce994f1471"
+}

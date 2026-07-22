@@ -1,6 +1,6 @@
 {
   "contract": "backlog-agentico-design-time",
-  "compiled_at": "2026-07-22T03:07:20.650555+00:00",
+  "compiled_at": "2026-07-22T03:29:05.297422+00:00",
   "compiled_with_version": "0.17.2",
   "features": [
     {
@@ -33,14 +33,15 @@
       "id": "T-03",
       "desc": "Regressão do runner: suíte completa de aegis_runner verde após T-01+T-02 (inclui test_runner_integration, test_unified_target, test_unified_target_wiring)",
       "files": [
-        "aegis_runner/runner.py"
+        "aegis_runner/runner.py",
+        "tests/aegis_runner/test_unified_target.py"
       ],
       "verify_cmd": "pytest tests/aegis_runner -q",
       "depends": [
         "T-02"
       ],
       "cwd": null,
-      "passes": false
+      "passes": true
     },
     {
       "id": "T-04",
