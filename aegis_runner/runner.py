@@ -2125,7 +2125,7 @@ class TransactionRunner:
                             tier_before = _tier_baseline(selector)
                             page.locator(selector).first.click(timeout=3000)
                             if _effect_confirmed(selector, tier_before):
-                                print(f"[AEGIS RUNNER] Clique resolvido após dismiss de overlay não mapeado!")
+                                print("[AEGIS RUNNER] Clique resolvido após dismiss de overlay não mapeado!")
                                 self._register_healing_for_review(step_id, selector, "click", "unmapped_overlay_dismissed")
                                 return True, "unmapped_overlay_dismissed", selector
                 except Exception:

@@ -1,6 +1,6 @@
 {
   "contract": "backlog-agentico-design-time",
-  "compiled_at": "2026-07-22T03:29:05.297422+00:00",
+  "compiled_at": "2026-07-22T10:07:05.957323+00:00",
   "compiled_with_version": "0.17.2",
   "features": [
     {
@@ -87,7 +87,7 @@
     },
     {
       "id": "T-07",
-      "desc": "Fechamento: suíte completa do repo verde + lint (regressão zero sobre sanitizer/codegen/UTD)",
+      "desc": "Fechamento: suíte completa do repo verde (`pytest tests -q`) — regressão zero sobre runner/cockpit/sanitizer/codegen/UTD. A \"trava em ~47%\" investigada durante a implementação foi DESCARTADA como causa de código: é lentidão real (~350s a suíte de aegis_runner, ~3s/teste em caminhos de polling não-mockados) que, sob `-q` (saída bufferizada em pipe) + carga alta da máquina, cruzava timeouts e era morta via TaskStop — kill que no Windows órfã os netos e cria contenção na execução seguinte (bola de neve). pytest roda serial (sem xdist), então o deadlock de `msvcrt.locking`/dir fixo só ocorria ENTRE um órfão e a execução nova, nunca dentro de uma execução limpa. Prova: `test_runner_integration.py -v` = 118 passed / 344s, exit 0, sem trava (o teste temido passou em 48%); `pytest tests/aegis_runner -q` = 153/153 em ~351s, três vezes (T-03).",
       "files": [
         "aegis_runner/runner.py",
         "aegis_cockpit/healing_review.py"
@@ -98,7 +98,7 @@
         "T-06"
       ],
       "cwd": null,
-      "passes": false
+      "passes": true
     },
     {
       "id": "T-08",
