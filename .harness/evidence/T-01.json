@@ -1,0 +1,7 @@
+{
+  "feature_id": "T-01",
+  "verify_cmd": "pytest tests/aegis_runner/test_expected_effect_audit.py -q",
+  "recorded_at": "2026-07-22T03:21:27.959167+00:00",
+  "exit_code": 0,
+  "files_hash": "sha256:e8173cf10e8ef1e4f127d63044eef3b60c05f15d9a50f7f5acfad3b18ec52a2e"
+}

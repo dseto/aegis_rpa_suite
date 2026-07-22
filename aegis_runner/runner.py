@@ -791,6 +791,70 @@ class TransactionRunner:
             print(f"[AEGIS RUNNER] Erro em _verify_recorded_expected_effect: {e}")
             return self._verify_generic_effect(page, before_snapshot, expected_effect)
 
+    def _expected_effect_specific_status(self, page, before_snapshot):
+        """
+        E1.1 (auditoria B1 -- .specs/backlog-evolucao-agentica-design-time.md):
+        dado o `expected_effect` gravado do passo atual
+        (`self._current_expected_effect`), determina SE O SINAL ESPECÍFICO
+        gravado bateu -- sem o fallback genérico que `_verify_recorded_
+        expected_effect` já aplica para decidir a aprovação real do passo.
+
+        Chamado SEMPRE depois que o passo já foi aprovado por outro critério
+        (tier de healing ou identity) -- o resultado aqui NUNCA influencia
+        SUCCESS/HEALED/FAILED, só decide se o chamador estampa
+        `verify_result="generic_only_expected_missing"` em `_log_step` e
+        registra `needs_review` (Sensor F1) quando a aprovação real veio só
+        do sinal genérico. Fecha o gap estrutural do B1 (`.specs/backlog-
+        achados-falso-sucesso.pending.md`): sinal genérico prova "sem
+        evidência de não-efeito", nunca "minha ação causou o efeito" --
+        aceitar-mas-marcar, nunca re-verificar nem rejeitar.
+
+        Retorna:
+          None  -- nenhum `expected_effect` gravado para este passo
+                  (retrocompat: bots sem a feature Unified Target Descriptor,
+                  ou passos cuja gravação não capturou o dado, nunca marcam
+                  nada -- comportamento byte-idêntico ao anterior a esta
+                  auditoria).
+          True  -- o sinal específico gravado bateu (aprovação legítima e
+                  verificada contra o efeito real que o humano produziu).
+          False -- `expected_effect` gravado, mas nenhum sinal específico
+                  bateu (a aprovação, se houve, veio só do genérico -- é o
+                  caso que o chamador deve marcar).
+
+        Non-fatal: qualquer erro aqui retorna True (nunca marca por falha do
+        próprio checker, mesma convenção conservadora do resto do sensor).
+        """
+        expected_effect = getattr(self, "_current_expected_effect", None)
+        if not expected_effect or not before_snapshot:
+            return None
+        try:
+            after_snapshot = self._capture_click_effect_snapshot(page)
+
+            if expected_effect.get("url_changed") and before_snapshot.get("url") != after_snapshot.get("url"):
+                return True
+
+            dom_delta_actual = after_snapshot.get("domSize", 0) - before_snapshot.get("domSize", 0)
+            dom_delta_expected = expected_effect.get("dom_delta", 0)
+            if (dom_delta_expected > 0 and dom_delta_actual > 0) or (dom_delta_expected < 0 and dom_delta_actual < 0):
+                return True
+
+            ov_delta_actual = after_snapshot.get("overlays", 0) - before_snapshot.get("overlays", 0)
+            ov_delta_expected = expected_effect.get("overlay_delta", 0)
+            if (ov_delta_expected > 0 and ov_delta_actual > 0) or (ov_delta_expected < 0 and ov_delta_actual < 0):
+                return True
+
+            new_text = expected_effect.get("new_visible_text")
+            if new_text:
+                try:
+                    if page.get_by_text(new_text).count() > 0:
+                        return True
+                except Exception:
+                    pass
+
+            return False
+        except Exception:
+            return True
+
     def _poll_generic_effect_extended(self, page, before_snapshot, waits_ms=(300, 700, 1000, 1500, 2500)) -> bool:
         """Polling genérico estendido (~6s total) para efeitos com latência de
         segundos entre o gesto e o reflexo em light DOM -- caso confirmado ao
@@ -1601,6 +1665,7 @@ class TransactionRunner:
                 # (identity tier), sem custo extra de verificação de efeito.
                 real_ambiguity = len(candidate_locators) > 1
                 ambiguous_candidate_verified = False
+                ambiguous_candidate_verify_result = None
 
                 for idx, loc in enumerate(candidate_locators):
                     try:
@@ -1655,6 +1720,14 @@ class TransactionRunner:
                             # escolher entre elementos ambíguos.
                             if self._verify_action_effect(page, candidate_before_snapshot):
                                 ambiguous_candidate_verified = True
+                                # E1.1 (auditoria B1): mesma disciplina do
+                                # resto do sensor — checagem side-effect only,
+                                # nunca influencia a decisão já fechada acima.
+                                ambiguous_candidate_verify_result = (
+                                    "generic_only_expected_missing"
+                                    if self._expected_effect_specific_status(page, candidate_before_snapshot) is False
+                                    else None
+                                )
                                 break
                             self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique no candidato ambíguo {idx+1}/{len(candidate_locators)} de '{selector}' não confirmado por efeito real. Tentando próximo candidato...")
                             clicked = False
@@ -1692,7 +1765,7 @@ class TransactionRunner:
                             # snapshot genérico capturado ANTES do loop de
                             # candidatos, não o do candidato que de fato foi
                             # clicado).
-                            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
+                            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified", verify_result=ambiguous_candidate_verify_result)
                             return True
                         try:
                             finalize_result = self._finalize_click_success(
@@ -1802,7 +1875,19 @@ class TransactionRunner:
 
         effect_confirmed = self._detect_click_no_effect(page, click_effect_before_snapshot, selector, step_id)
         if effect_confirmed:
-            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+            # E1.1 (auditoria B1): caminho identity — `_detect_click_no_effect`
+            # só avalia sinais genéricos, nunca o `expected_effect` gravado do
+            # passo. Quando o passo TEM `expected_effect` gravado, checa aqui
+            # (side-effect only, resultado NUNCA usado para gatear o retorno
+            # já decidido acima) se o sinal específico bateria — se não bateu,
+            # marca a auditoria e registra Sensor F1 explicitamente (SUCCESS
+            # não passa pelo auto-registro de `_log_step`, que só dispara em
+            # HEALED).
+            generic_only = self._expected_effect_specific_status(page, click_effect_before_snapshot) is False
+            verify_result = "generic_only_expected_missing" if generic_only else None
+            self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS", verify_result=verify_result)
+            if generic_only:
+                self._register_healing_for_review(step_id, selector, "click", healing_method="generic_only_expected_missing")
             return True
 
         recovered, _method, resolved_selector = self._attempt_deterministic_click_recovery(
@@ -1810,7 +1895,8 @@ class TransactionRunner:
         )
         if recovered:
             print(f"[AEGIS RUNNER] Clique sem efeito real recuperado via camada determinística ({_method}) em '{resolved_selector}'.")
-            self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method="click_no_effect_recovered")
+            verify_result = "generic_only_expected_missing" if getattr(self, "_last_resolution_generic_only_expected_missing", False) else None
+            self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method="click_no_effect_recovered", verify_result=verify_result)
             return True
 
         synthetic_exc = RuntimeError(
@@ -1898,7 +1984,23 @@ class TransactionRunner:
                     expected["panel_closed_confirmed"] = True
             except Exception:
                 pass
-            return self._verify_action_effect(page, tier_before, expected=expected)
+            confirmed = self._verify_action_effect(page, tier_before, expected=expected)
+            if confirmed:
+                # E1.1 (auditoria B1): os 4 tiers que passam por aqui
+                # (escape_retry/cdk_reposition/fallback_selector/
+                # anchor_geometry) SEMPRE aprovam pelo `expected` acima
+                # ({"after_snapshot":...}/"panel_closed_confirmed"), nunca
+                # pelo `expected_effect` GRAVADO do passo (`kind` ausente,
+                # sem "dom_delta"/"url_changed" -- nunca roteia para
+                # `_verify_recorded_expected_effect`). Quando o passo TEM
+                # `expected_effect` gravado, a aprovação aqui é
+                # estruturalmente "só genérico" por construção -- não muda
+                # `confirmed` (decisão já fechada), só estampa a auditoria
+                # no atributo que os 2 chamadores leem antes de `_log_step`.
+                self._last_resolution_generic_only_expected_missing = (
+                    self._expected_effect_specific_status(page, tier_before) is False
+                )
+            return confirmed
 
         if not identity_scoped:
             # Nível 2.5: Auto-Healing de UI Reativo (Se ainda não foi limpo, limpa de novo e retenta)
@@ -2422,7 +2524,14 @@ class TransactionRunner:
                     t2_before_snapshot = self._capture_click_effect_snapshot(page, selector)
                     page.locator(selector).first.click(timeout=timeout)
                     if self._verify_action_effect(page, t2_before_snapshot):
-                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified")
+                        # E1.1 (auditoria B1): checagem side-effect only, nunca
+                        # influencia a decisão já fechada pela linha acima.
+                        verify_result = (
+                            "generic_only_expected_missing"
+                            if self._expected_effect_specific_status(page, t2_before_snapshot) is False
+                            else None
+                        )
+                        self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="HEALED", healing_method="ambiguous_candidate_verified", verify_result=verify_result)
                         return True
                     self._note_verify_rejected("post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Clique em fallback '.first' de '{selector}' não confirmado por efeito real. Prosseguindo para a cadeia de recuperação existente...")
                 except Exception as inner_e:
@@ -2450,9 +2559,19 @@ class TransactionRunner:
                 # inconsistente entre `needs_review` e `historico_passos.json`).
                 # _log_step já registra needs_review via _register_healing_for_review
                 # quando status="HEALED" (Sensor F1) — não duplica a chamada aqui.
-                self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method=method)
+                verify_result = "generic_only_expected_missing" if getattr(self, "_last_resolution_generic_only_expected_missing", False) else None
+                self._log_step(step_id=step_id, action="click", selector=resolved_selector, target_description=target_description, status="HEALED", healing_method=method, verify_result=verify_result)
             else:
-                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS")
+                # E1.1 (auditoria B1): escape_retry/cdk_reposition fecham como
+                # SUCCESS (reclique do MESMO alvo) — `_log_step` não
+                # auto-registra Sensor F1 para status != "HEALED", então a
+                # marca exige o registro explícito abaixo (mesma disciplina
+                # do caminho identity em `_finalize_click_success`).
+                generic_only = getattr(self, "_last_resolution_generic_only_expected_missing", False)
+                verify_result = "generic_only_expected_missing" if generic_only else None
+                self._log_step(step_id=step_id, action="click", selector=selector, target_description=target_description, status="SUCCESS", verify_result=verify_result)
+                if generic_only:
+                    self._register_healing_for_review(step_id, selector, "click", healing_method="generic_only_expected_missing")
             return True
 
         # Nível 3/4: Self-Healing Cognitivo e Fallback por Coordenadas — pulados em modo
