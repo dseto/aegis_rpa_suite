@@ -142,3 +142,30 @@ O usuário reporta que o cenário fecha **100% de forma consistente** no uso nor
 ### Veredito
 
 **APROVADO — baseline capturado.** Sinal limpo e 100% reprodutível nas 3 execuções: mesma contagem de passos, mesmo único `HEALED` (`st_054`), mesma zona de retry sem healing (`st_018`), zero `verify_rejected`, `correcoes_acumuladas` estável, durações dentro de variância normal (78-84s). **Esta Seção é a referência que a Tarefa T-08 do contrato do harness (`backlog-agentico-design-time`) deve igualar ou superar** após E1.1 (marca de auditoria) e E3 (handler de overlay não mapeado) alterarem `runner.py`: 3/3 SUCCESS mantido, `st_054` continua fechando via coordenada/Shadow DOM (E1.1/E3 não devem alterar esse caminho), `st_018` não deve virar alvo do handler de overlay novo do E3 (não há overlay não-mapeado ali — é retry de clique físico puro, não `CLICK_NO_EFFECT` por overlay), e nenhuma marca `generic_only_expected_missing` deveria aparecer neste bot específico já que ele não tem `expected_effect` gravado em nenhum passo (E1.1 é no-op estrutural aqui, mesma lógica de retrocompatibilidade da Seção 4).
+
+---
+
+## Seção 6 — Gate pós-backlog E1.1 + E3 (marca de auditoria + handler de overlay não mapeado) — **APROVADO**
+
+- **Data:** 2026-07-22. Branch: `unified-target-descriptor-6509308849546547825`, commit `2f5401a` (T-07). Mesmo bot 66-passos da Seção 5, rodado **sem regeneração**.
+- **Mudança sob teste:** contrato do harness `backlog-agentico-design-time` — **E1.1** (marca de auditoria `generic_only_expected_missing` no runner, commit `79bfec0`) + **E3** (handler determinístico de overlay não mapeado na cadeia de recovery de clique, commit `8929028`). Ambos aditivos. É o "depois" da Seção 5 (o "antes").
+- **Config:** mesma dos gates anteriores (`channel=msedge`, headed, `AEGIS_COGNITIVE_ENABLED=true`, provider `openrouter`). Nota: o `.env` atual aponta `AEGIS_COGNITIVE_MODEL=google/gemini-3.5-flash-lite` (Seção 5 usou `2.5-flash`) — irrelevante para o caminho determinístico (`st_054` resolve por coordenada/Shadow DOM, não por `visual_ai`).
+- **Execução:** via `harness verify T-08` (cadeia `python bot && python bot && python bot` em um único subprocess `capture_output`). Isolamento por-execução (`AEGIS_EXECUTION_DIR` distinto) **não está disponível sob o `boundary_guard`** do contrato — status por-run extraído do stdout combinado; `correcoes_acumuladas.json`/telemetria acumulam no `project_dir`.
+
+### Resultado (3 execuções)
+
+| Execução | Status | `HEALED` | Ponto de falha |
+|---|---|---|---|
+| 1 | **SUCCESS** | 1 (`st_054`, coord/Shadow DOM) | — |
+| 2 | **SUCCESS** | 1 (`st_054`, coord/Shadow DOM) | — |
+| 3 | FAILED | 0 (falhou antes de `st_054`) | `st_026` "Uso do Veículo" (`select_option` — dropdown clicou mas não abriu o painel; cascata de seletores + coord de fallback + cognitivo, todos falharam; `TIMEOUT_SELECTOR`) |
+
+**2/3 SUCCESS.** `correcoes_acumuladas.json` estável **24→24** (nenhuma entrada nova). `needs_review` estável **8→8**. `st_054` bumped `occurrences` 3→5 (dedup por `(action, failed_selector)` correto — não duplicou). Nenhum crash Python / traceback / ImportError. **Nenhuma marca `generic_only_expected_missing`** apareceu (E1.1 é no-op estrutural neste bot, exatamente como a Seção 5 previu — plano sem `expected_effect`). E3 disparou **uma vez** (execução 1, `st_018`, `baseline=0/atual=7`) e **se comportou**: não deu false-HEALED, o passo resolveu no retry 2 físico (`SUCCESS` identity, não `HEALED`) — idêntico ao padrão da Seção 5.
+
+### Exoneração decisiva do código novo
+
+A execução 3 falhou em `st_026` **sem que E1.1 ou E3 tivessem executado antes na transação**: o `st_018` da execução 3 rodou limpo (linha `SUCCESS` direta, sem `CLICK_NO_EFFECT` → E3 nunca disparou naquela transação), e E1.1 não dispara em nenhum passo deste bot. Ou seja, nenhum dos dois caminhos de código novo estava no fluxo antes do ponto de falha — **é mecanicamente impossível que E1.1/E3 tenham causado a falha de `st_026`**.
+
+### Veredito
+
+**APROVADO.** A falha única em `st_026` é a **flakiness pré-existente já documentada** (Seção 2, "st_026 select uso_veiculo"; Seção 4, execução 1 — mesmo ponto, mesmo perfil "dropdown clica mas não abre painel"), não uma classe nova de erro. 2/3 iguala ou supera o padrão histórico de não-determinismo do site (Seções 2 e 4 tiveram 1/3 bruto e foram APROVADAS pela mesma lógica). `st_054` (coord/Shadow DOM) e `st_018` (retry sem healing) idênticos ao baseline da Seção 5. `correcoes`/`needs_review` estáveis. Zero regressão atribuível a E1.1/E3.
