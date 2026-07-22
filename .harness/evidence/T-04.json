@@ -1,0 +1,7 @@
+{
+  "feature_id": "T-04",
+  "verify_cmd": "pytest tests/aegis_cockpit/test_healing_review.py -q",
+  "recorded_at": "2026-07-22T03:42:51.786957+00:00",
+  "exit_code": 0,
+  "files_hash": "sha256:a469d707cf2664bfca4e5bc6b367e3398e353d8bd0ca723710c27fdf4b548fef"
+}

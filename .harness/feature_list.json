@@ -54,7 +54,7 @@
       "verify_cmd": "pytest tests/aegis_cockpit/test_healing_review.py -q",
       "depends": [],
       "cwd": null,
-      "passes": false
+      "passes": true
     },
     {
       "id": "T-05",
