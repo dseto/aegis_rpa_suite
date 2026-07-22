@@ -1,0 +1,19 @@
+feat(cockpit): E2 rota cognitiva - healing_review.build_cognitive_proposal (T-05)
+
+Casos sem resolucao estrutural (healing_method fora de
+DETERMINISTIC_HEALING_METHODS) usam gateway._call_llm_api diretamente --
+nao gateway.diagnose_failure, que exige page Playwright AO VIVO
+(page.screenshot) indisponivel numa revisao pos-hoc no Cockpit sem
+browser aberto. screenshot_path aponta pro arquivo ja salvo pela
+execucao quando existir.
+
+Fallback conservador: gateway None/inativo ou erro na chamada LLM
+sempre degrada pra "revisao manual necessaria" (nunca lanca, nunca
+bloqueia o resto do enrich_needs_review).
+
+5 testes novos em tests/aegis_cockpit/test_healing_review_cognitive.py,
+incluindo verificacao de que enrich_needs_review roteia corretamente
+(zero chamada LLM para entradas deterministicas mesmo com gateway ativo
+fornecido).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

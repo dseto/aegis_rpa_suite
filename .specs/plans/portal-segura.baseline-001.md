@@ -115,3 +115,30 @@ O usuário reporta que o cenário fecha **100% de forma consistente** no uso nor
 ### Veredito
 
 **APROVADO.** 1/3 bruto replica exatamente o padrão de flakiness já documentado (mesmos passos, mesmo perfil de "clique loga efeito mas tela não transiciona"), em um bot que não exercita a feature (sem `anchor` no plano). Nenhuma evidência de regressão introduzida pelas 5 correções. Validação completa da feature em si (com re-gravação exercitando `anchor`/`expected_effect` de verdade) é tarefa separada, fora do escopo deste fix de fiação.
+
+---
+
+## Seção 5 — Baseline novo: bot 66-passos (pré-implementação backlog E1.1/E3/E2) — **APROVADO**
+
+- **Data:** 2026-07-21/22. Branch: `unified-target-descriptor-6509308849546547825`, commit `40eb8ea`.
+- **Motivação:** `project.json` do cenário mudou de `status: "executed"` para `status: "generated"` entre as Seções 2-4 e agora — o bot foi **regravado/recompilado** (57 → 66 passos: novos campos de PCD, isenção fiscal ICMS, blindagem/nível de blindagem/empresa blindadora, e-mail/celular de contato). Nenhuma Seção anterior cobre este bot. Este é o baseline "antes" formal, capturado **antes** de iniciar a implementação do backlog `.specs/backlog-evolucao-agentica-design-time.md` (itens E1.1, E3, E2 — contrato do harness em `.harness/work/backlog-agentico-design-time/`), que vai alterar `aegis_runner/runner.py`.
+- **Config:** mesma dos gates anteriores (`channel=msedge`, headed, `AEGIS_COGNITIVE_ENABLED=true`, provider `openrouter`/`google/gemini-2.5-flash`). Bot rodado **tal como compilado**, sem regeneração entre as 3 execuções.
+- **Achado relevante:** apesar de recompilado após o merge do PR #2 (Unified Target Descriptor), o `plano_execucao.json` deste bot **não tem `anchor`/`expected_effect` em nenhum passo** (verificado: 0/66) — a gravação de origem é anterior à ativação do UTD no recorder, ou não o exercitou. Mesmo caveat da Seção 4: este gate mede retrocompatibilidade estrutural do runner, não a feature UTD em si (E1.2 do backlog, pendente, cobre esse gap separadamente).
+
+### Resultado (3 execuções)
+
+| Execução | Status | `HEALED` | Tier | Duração |
+|---|---|---|---|---|
+| 1 (via Cockpit, `run_20260721_235033`) | **SUCCESS** | 1 (`st_054`, shadow DOM) | identity 51/52 (98,08%), coordinate 1/52 (1,92%) | 84,04s |
+| 2 (CLI direta) | **SUCCESS** | 1 (`st_054`) | identity 51/52, coordinate 1/52 | 78,07s |
+| 3 (CLI direta) | **SUCCESS** | 1 (`st_054`) | identity 51/52, coordinate 1/52 | 83,43s |
+
+**3/3 SUCCESS, determinístico.** `verify_rejected` = 0/0 nas 3 execuções (pré-click e pós-click). `correcoes_acumuladas.json` estável em 24 entradas nas 3 execuções (`resolved`=15, `needs_review`=8, `applied`=1 — nenhuma entrada nova). Duração média ≈ 81,8s.
+
+**Padrão de recuperação observado (para diff futuro):**
+- `st_018` (`input[placeholder='Pesquisar Modelo...']`): `CLICK_NO_EFFECT` na tentativa 1 → cadeia determinística (Escape+retry, reposição CDK, `fallback_selectors`) não resolve → tentativa 2 (Escape + re-clique físico) resolve → fecha `SUCCESS` puro (identity), **não** `HEALED`. Presente nas 3 execuções, idêntico.
+- `st_054` (`#shadow-dom-host`, Shadow DOM fechado): `CLICK_NO_EFFECT` nas tentativas 1 e 2 → tier de coordenada histórica → `SHADOW-SNAP` corrige o host → `SHADOW-PROBE` varre bandas (77%: sem efeito → 87,5%: efeito confirmado em light DOM) → fecha `HEALED`, `healing_method` associado a coordenada/shadow. Presente nas 3 execuções, idêntico (mesmas coordenadas, mesma banda resolvida).
+
+### Veredito
+
+**APROVADO — baseline capturado.** Sinal limpo e 100% reprodutível nas 3 execuções: mesma contagem de passos, mesmo único `HEALED` (`st_054`), mesma zona de retry sem healing (`st_018`), zero `verify_rejected`, `correcoes_acumuladas` estável, durações dentro de variância normal (78-84s). **Esta Seção é a referência que a Tarefa T-08 do contrato do harness (`backlog-agentico-design-time`) deve igualar ou superar** após E1.1 (marca de auditoria) e E3 (handler de overlay não mapeado) alterarem `runner.py`: 3/3 SUCCESS mantido, `st_054` continua fechando via coordenada/Shadow DOM (E1.1/E3 não devem alterar esse caminho), `st_018` não deve virar alvo do handler de overlay novo do E3 (não há overlay não-mapeado ali — é retry de clique físico puro, não `CLICK_NO_EFFECT` por overlay), e nenhuma marca `generic_only_expected_missing` deveria aparecer neste bot específico já que ele não tem `expected_effect` gravado em nenhum passo (E1.1 é no-op estrutural aqui, mesma lógica de retrocompatibilidade da Seção 4).

@@ -1,0 +1,15 @@
+fix(tests): corrige import quebrado em test_unified_target.py (T-03)
+
+`from aegis_runner.runner import TransactionRunner` nao resolvia -- o
+conftest.py deste diretorio so poe aegis_runner/ (a pasta) no sys.path,
+habilitando `from runner import ...`, convencao que todos os outros
+arquivos de teste ja usam. Bug pre-existente (da migracao pra tests/,
+commit 6f1e777), nao introduzido por T-01/T-02, bloqueava a coleta de
+toda a suite tests/aegis_runner -q (e por extensao T-07/pytest tests -q).
+
+Escopo de T-03 expandido (usuario aprovado) para incluir este arquivo,
+Plans.md/spec.md atualizados com o adendo.
+
+153 testes de tests/aegis_runner passam (regressao zero apos T-01+T-02).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

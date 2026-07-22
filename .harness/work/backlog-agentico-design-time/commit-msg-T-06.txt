@@ -1,0 +1,24 @@
+feat(cockpit): E2 fiacao - endpoint GET/POST healing-review (T-06)
+
+Handler HTTP fino em cockpit.py, logica real em healing_review.py
+(T-04/T-05):
+
+- GET /api/projects/<slug>/tests/<test_slug>/healing-review: lista
+  propostas prontas para revisao humana (enrich_needs_review), nunca
+  escreve em correcoes_acumuladas.json.
+- POST /api/projects/<slug>/tests/<test_slug>/healing-review/<id>/approve:
+  unico ponto que converte uma proposta aprovada em correcao
+  status="pending" (approve_proposal) -- gate humano explicito, mesmo
+  modelo de confianca do endpoint generico de status ja existente
+  (/correcoes/<id>/status, que ja aceita qa_insight/proposed_fix
+  submetidos pelo QA).
+
+CognitiveGateway instanciado lazy dentro do GET, mesmo padrao ja usado
+em outros pontos de cockpit.py (linha ~1125).
+
+4 testes novos em tests/aegis_cockpit/test_healing_review_endpoint.py,
+exercitando do_GET/do_POST via dispatch real (handler instanciado sem
+socket real, ProjectManager real apontando pra dir temporario) -- prova
+a fiacao de ponta a ponta, sem mockar healing_review.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

@@ -1,0 +1,1545 @@
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:215:27
+    |
+213 |         return None
+214 |     return _read_repo_root_from_state(state_path)
+215 | def _parse_iso8601(value: Any) -> datetime | None:
+    |                           ^^^
+216 |     if not isinstance(value, str):
+217 |         return None
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:222:31
+    |
+220 |     except (ValueError, TypeError):
+221 |         return None
+222 | def _feature_passes_map(data: Any) -> dict[Any, bool]:
+    |                               ^^^
+223 |     result: dict[Any, bool] = {}
+224 |     if not isinstance(data, dict):
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:222:44
+    |
+220 |     except (ValueError, TypeError):
+221 |         return None
+222 | def _feature_passes_map(data: Any) -> dict[Any, bool]:
+    |                                            ^^^
+223 |     result: dict[Any, bool] = {}
+224 |     if not isinstance(data, dict):
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:223:18
+    |
+221 |         return None
+222 | def _feature_passes_map(data: Any) -> dict[Any, bool]:
+223 |     result: dict[Any, bool] = {}
+    |                  ^^^
+224 |     if not isinstance(data, dict):
+225 |         return result
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:233:36
+    |
+231 |             result[fid] = feat.get("passes") is True
+232 |     return result
+233 | def _transitions_to_true(old_data: Any, new_data: Any) -> list[Any]:
+    |                                    ^^^
+234 |     old_map = _feature_passes_map(old_data)
+235 |     new_map = _feature_passes_map(new_data)
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:233:51
+    |
+231 |             result[fid] = feat.get("passes") is True
+232 |     return result
+233 | def _transitions_to_true(old_data: Any, new_data: Any) -> list[Any]:
+    |                                                   ^^^
+234 |     old_map = _feature_passes_map(old_data)
+235 |     new_map = _feature_passes_map(new_data)
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:233:64
+    |
+231 |             result[fid] = feat.get("passes") is True
+232 |     return result
+233 | def _transitions_to_true(old_data: Any, new_data: Any) -> list[Any]:
+    |                                                                ^^^
+234 |     old_map = _feature_passes_map(old_data)
+235 |     new_map = _feature_passes_map(new_data)
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:256:41
+    |
+254 |     return output or None
+255 | def _evidence_freshness_problem(
+256 |     cwd: Path | str | None, feature_id: Any, commit_ts: str | None
+    |                                         ^^^
+257 | ) -> tuple[str | None, dict[str, Any] | None]:
+258 |     """`(None, evidence)` se a evidência de `feature_id` existe, é válida e
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:257:34
+    |
+255 | def _evidence_freshness_problem(
+256 |     cwd: Path | str | None, feature_id: Any, commit_ts: str | None
+257 | ) -> tuple[str | None, dict[str, Any] | None]:
+    |                                  ^^^
+258 |     """`(None, evidence)` se a evidência de `feature_id` existe, é válida e
+259 |     (quando `commit_ts` fornecido) mais nova que ele; senão, `(problema,
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:284:62
+    |
+282 |             ), None
+283 |     return None, evidence
+284 | def _read_team_manifest(cwd: Path | str | None) -> dict[str, Any] | None:
+    |                                                              ^^^
+285 |     """Lê `.harness/team/manifest.json`; devolve o dict só se o arquivo
+286 |     existir e for JSON válido representando um objeto — ausência ou JSON
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:301:51
+    |
+299 |         return None
+300 |     return data
+301 | def _manifest_requires_review(manifest: dict[str, Any] | None) -> bool:
+    |                                                   ^^^
+302 |     """`True` só quando o manifesto declara AMBOS os papéis `producer` e
+303 |     `reviewer` — decisão do planejador: revisão obrigatória é por PROJETO,
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:312:26
+    |
+310 |     role_set = {r for r in roles if isinstance(r, str)}
+311 |     return "producer" in role_set and "reviewer" in role_set
+312 | def _feature_by_id(data: Any, feature_id: Any) -> dict[str, Any] | None:
+    |                          ^^^
+313 |     if not isinstance(data, dict):
+314 |         return None
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:312:43
+    |
+310 |     role_set = {r for r in roles if isinstance(r, str)}
+311 |     return "producer" in role_set and "reviewer" in role_set
+312 | def _feature_by_id(data: Any, feature_id: Any) -> dict[str, Any] | None:
+    |                                           ^^^
+313 |     if not isinstance(data, dict):
+314 |         return None
+    |
+
+F821 Undefined name `Any`
+   --> .harness\hooks\boundary_guard.py:312:61
+    |
+310 |     role_set = {r for r in roles if isinstance(r, str)}
+311 |     return "producer" in role_set and "reviewer" in role_set
+312 | def _feature_by_id(data: Any, feature_id: Any) -> dict[str, Any] | None:
+    |                                                             ^^^
+313 |     if not isinstance(data, dict):
+314 |         return None
+    |
+
+F841 Local variable `path_str` is assigned to but never used
+   --> .harness\hooks\boundary_guard.py:446:5
+    |
+444 | def _load_json(cwd, relative):
+445 |     base = cwd or "."
+446 |     path_str = relative
+    |     ^^^^^^^^
+447 |     try:
+448 |         import os
+    |
+help: Remove assignment to unused variable `path_str`
+
+E713 [*] Test for membership should be `not in`
+    --> aegis_blackbox\recorder.py:1324:71
+     |
+1322 |         return 100, "data-testid"
+1323 |         
+1324 |     if "#" in selector and not re.search(r"\d{4,}", selector) and not "mat-input-" in selector and not "mat-select-" in selector:
+     |                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^
+1325 |         return 90, "id"
+     |
+help: Convert to `not in`
+
+E713 [*] Test for membership should be `not in`
+    --> aegis_blackbox\recorder.py:1324:104
+     |
+1322 |         return 100, "data-testid"
+1323 |         
+1324 |     if "#" in selector and not re.search(r"\d{4,}", selector) and not "mat-input-" in selector and not "mat-select-" in selector:
+     |                                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+1325 |         return 90, "id"
+     |
+help: Convert to `not in`
+
+E402 Module level import not at top of file
+  --> aegis_cockpit\cockpit.py:19:1
+   |
+17 |     sys.path.insert(0, PROJECT_ROOT)
+18 |
+19 | from aegis_cockpit.project_manager import ProjectManager
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+20 | from aegis_cockpit.process_manager import ProcessManager
+21 | from aegis_cockpit.healing_review import enrich_needs_review, approve_proposal
+   |
+
+E402 Module level import not at top of file
+  --> aegis_cockpit\cockpit.py:20:1
+   |
+19 | from aegis_cockpit.project_manager import ProjectManager
+20 | from aegis_cockpit.process_manager import ProcessManager
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+21 | from aegis_cockpit.healing_review import enrich_needs_review, approve_proposal
+   |
+
+E402 Module level import not at top of file
+  --> aegis_cockpit\cockpit.py:21:1
+   |
+19 | from aegis_cockpit.project_manager import ProjectManager
+20 | from aegis_cockpit.process_manager import ProcessManager
+21 | from aegis_cockpit.healing_review import enrich_needs_review, approve_proposal
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22 |
+23 | # Instanciação dos managers de negócio (Injeção de dependências via construtores e callbacks)
+   |
+
+F541 [*] f-string without any placeholders
+  --> aegis_cockpit\cockpit.py:66:21
+   |
+65 |     markdown = []
+66 |     markdown.append(f"# Relatorio de Telemetria Aegis RPA Suite V2")
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+67 |     markdown.append(f"\n* **URL Alvo:** {initial_url}")
+68 |     markdown.append(f"* **Total de Acoes Gravadas:** {len(events)}")
+   |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+   --> aegis_cockpit\cockpit.py:102:21
+    |
+100 |     markdown.append("\n" + "-" * 60)
+101 |     markdown.append("\n## Fluxo de Passos e Bifurcacoes por Cenario")
+102 |     markdown.append(f"\n### Cenario Logico: `DEFAULT`")
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+103 |     markdown.append(f"\nTotal de acoes neste caminho: {len(events)}\n")
+104 |     markdown.append("| Passo | Tipo | Elemento | Seletor Resiliente Sugerido | Valor / Acao |")
+    |
+help: Remove extraneous `f` prefix
+
+F841 [*] Local variable `e` is assigned to but never used
+   --> aegis_cockpit\cockpit.py:178:29
+    |
+176 |             self.end_headers()
+177 |             self.wfile.write(body)
+178 |         except Exception as e:
+    |                             ^
+179 |             # Não falha o servidor se a conexão for abortada pelo cliente
+180 |             pass
+    |
+help: Remove assignment to unused variable `e`
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:387:17
+    |
+385 |                     with open(log_path, "r", encoding="utf-8") as f:
+386 |                         log_content = f.read()
+387 |                 except:
+    |                 ^^^^^^
+388 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:395:17
+    |
+393 |                     with open(steps_path, "r", encoding="utf-8") as f:
+394 |                         steps_data = json.load(f)
+395 |                 except:
+    |                 ^^^^^^
+396 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:405:17
+    |
+403 |                         reader = csv.DictReader(f)
+404 |                         report_rows = list(reader)
+405 |                 except:
+    |                 ^^^^^^
+406 |                     pass
+    |
+
+F841 [*] Local variable `e` is assigned to but never used
+   --> aegis_cockpit\cockpit.py:456:37
+    |
+454 |                     self.end_headers()
+455 |                     self.wfile.write(content)
+456 |                 except Exception as e:
+    |                                     ^
+457 |                     self.send_response(500)
+458 |                     self.end_headers()
+    |
+help: Remove assignment to unused variable `e`
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:523:17
+    |
+521 |                     with open(steps_json, "r", encoding="utf-8") as f:
+522 |                         steps_history = json.load(f)
+523 |                 except:
+    |                 ^^^^^^
+524 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:683:17
+    |
+681 |                     resolved_count = len([c for c in corrections if c.get("status") == "resolved"])
+682 |                     needs_review_count = len([c for c in corrections if c.get("status") == "needs_review"])
+683 |                 except:
+    |                 ^^^^^^
+684 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:714:17
+    |
+712 |                     with open(corr_file, "r", encoding="utf-8") as f:
+713 |                         corrections = json.load(f)
+714 |                 except:
+    |                 ^^^^^^
+715 |                     pass
+716 |             self._json({
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\cockpit.py:835:21
+    |
+833 |                                 elif status == "FAILED":
+834 |                                     failed_steps += 1
+835 |                     except:
+    |                     ^^^^^^
+836 |                         pass
+    |
+
+F541 [*] f-string without any placeholders
+    --> aegis_cockpit\cockpit.py:1041:43
+     |
+1039 | …                     try:
+1040 | …                         _regenerate_report_safe(proj_dir, gravacao_data)
+1041 | …                         print(f"[STEPS-HISTORY] relatorio.md regenerado")
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1042 | …                     except Exception as san_err:
+1043 | …                         print(f"[WARNING] Falha ao regenerar relatorio.md: {san_err}")
+     |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\cockpit.py:1506:17
+     |
+1504 |                     with open(corr_file, "r", encoding="utf-8") as f:
+1505 |                         existing_corrections = json.load(f)
+1506 |                 except:
+     |                 ^^^^^^
+1507 |                     pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\cockpit.py:1855:9
+     |
+1853 |                 if "port" in cfg:
+1854 |                     return int(cfg["port"])
+1855 |         except:
+     |         ^^^^^^
+1856 |             pass
+1857 |     return int(os.getenv('AEGIS_COCKPIT_PORT', '8080'))
+     |
+
+F401 [*] `sys` imported but unused
+ --> aegis_cockpit\process_manager.py:2:8
+  |
+1 | import os
+2 | import sys
+  |        ^^^
+3 | import json
+4 | import subprocess
+  |
+help: Remove unused import: `sys`
+
+F401 [*] `uuid` imported but unused
+  --> aegis_cockpit\project_manager.py:8:8
+   |
+ 6 | import unicodedata
+ 7 | from datetime import datetime
+ 8 | import uuid
+   |        ^^^^
+ 9 |
+10 | class ProjectManager:
+   |
+help: Remove unused import: `uuid`
+
+E722 Do not use bare `except`
+  --> aegis_cockpit\project_manager.py:34:13
+   |
+32 |                 with open(self.config_file, "r", encoding="utf-8") as f:
+33 |                     return json.load(f)
+34 |             except:
+   |             ^^^^^^
+35 |                 pass
+36 |         return {
+   |
+
+E722 Do not use bare `except`
+  --> aegis_cockpit\project_manager.py:49:17
+   |
+47 |                     with open(self.config_file, "r", encoding="utf-8") as f:
+48 |                         current_cfg = json.load(f)
+49 |                 except:
+   |                 ^^^^^^
+50 |                     pass
+51 |             current_cfg.update(cfg)
+   |
+
+E722 Do not use bare `except`
+  --> aegis_cockpit\project_manager.py:72:13
+   |
+70 |                 with open(self.workspace_file, "r", encoding="utf-8") as f:
+71 |                     return json.load(f)
+72 |             except:
+   |             ^^^^^^
+73 |                 pass
+74 |         return {"projects": {}}
+   |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:114:17
+    |
+112 |                     elif isinstance(p_id, str) and p_id.isdigit():
+113 |                         max_id = max(max_id, int(p_id))
+114 |                 except:
+    |                 ^^^^^^
+115 |                     pass
+116 |         if os.path.isdir(self.projects_dir):
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:128:21
+    |
+126 |                         elif isinstance(p_id, str) and p_id.isdigit():
+127 |                             max_id = max(max_id, int(p_id))
+128 |                     except:
+    |                     ^^^^^^
+129 |                         pass
+130 |         return max_id + 1
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:149:21
+    |
+147 |                         elif isinstance(t_id, str) and t_id.isdigit():
+148 |                             max_id = max(max_id, int(t_id))
+149 |                     except:
+    |                     ^^^^^^
+150 |                         pass
+151 |         return max_id + 1
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:259:13
+    |
+257 |                 with open(prompt_file, "r", encoding="utf-8") as f:
+258 |                     prompt_content = f.read()
+259 |             except:
+    |             ^^^^^^
+260 |                 pass
+261 |         if not prompt_content:
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:287:13
+    |
+285 |                 with open(guide_template_file, "r", encoding="utf-8") as f:
+286 |                     guide_content = f.read()
+287 |             except:
+    |             ^^^^^^
+288 |                 pass
+289 |         if not guide_content:
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:354:9
+    |
+352 |             os.chmod(path, stat.S_IWRITE)
+353 |             func(path)
+354 |         except:
+    |         ^^^^^^
+355 |             pass
+    |
+
+E701 Multiple statements on one line (colon)
+   --> aegis_cockpit\project_manager.py:433:52
+    |
+431 |                     shutil.copy2(src, dest)
+432 |                     copied_dests.add(dest_name)
+433 |                     if dest_name == "gravacao.json": status = "recorded"
+    |                                                    ^
+434 |                     if dest_name == "relatorio.md": status = "sanitized"
+435 |                     if dest_name == "relatorio_validacao.json": status = "validated"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> aegis_cockpit\project_manager.py:434:51
+    |
+432 |                     copied_dests.add(dest_name)
+433 |                     if dest_name == "gravacao.json": status = "recorded"
+434 |                     if dest_name == "relatorio.md": status = "sanitized"
+    |                                                   ^
+435 |                     if dest_name == "relatorio_validacao.json": status = "validated"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> aegis_cockpit\project_manager.py:435:63
+    |
+433 |                     if dest_name == "gravacao.json": status = "recorded"
+434 |                     if dest_name == "relatorio.md": status = "sanitized"
+435 |                     if dest_name == "relatorio_validacao.json": status = "validated"
+    |                                                               ^
+436 |
+437 |             now = datetime.now().isoformat(timespec="seconds")
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:485:13
+    |
+483 |                 proj_created = meta.get("created_at", proj_created)
+484 |                 proj_last = meta.get("last_activity", proj_last)
+485 |             except:
+    |             ^^^^^^
+486 |                 pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:557:13
+    |
+555 |                 with open(proj_json_path, "w", encoding="utf-8") as f:
+556 |                     json.dump(meta, f, indent=4, ensure_ascii=False)
+557 |             except:
+    |             ^^^^^^
+558 |                 pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:595:21
+    |
+594 |                         tests.append(meta)
+595 |                     except:
+    |                     ^^^^^^
+596 |                         pass
+597 |         return tests
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:674:13
+    |
+672 |                 with open(proj_json, "w", encoding="utf-8") as f:
+673 |                     json.dump(meta, f, indent=4, ensure_ascii=False)
+674 |             except:
+    |             ^^^^^^
+675 |                 pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:696:21
+    |
+694 |                             meta = json.load(f)
+695 |                         skills.append(meta)
+696 |                     except:
+    |                     ^^^^^^
+697 |                         pass
+698 |         return skills
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:774:13
+    |
+772 |                 with open(versions_json_path, "r", encoding="utf-8") as f:
+773 |                     return json.load(f)
+774 |             except:
+    |             ^^^^^^
+775 |                 pass
+776 |         return []
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:807:17
+    |
+805 |                         meta = json.load(f)
+806 |                     test_id = meta.get("test_id") or meta.get("id") or next_num
+807 |                 except:
+    |                 ^^^^^^
+808 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:864:17
+    |
+862 |                     with open(test_json, "r", encoding="utf-8") as f:
+863 |                         status = json.load(f).get("status", "empty")
+864 |                 except:
+    |                 ^^^^^^
+865 |                     pass
+    |
+
+E722 Do not use bare `except`
+   --> aegis_cockpit\project_manager.py:945:9
+    |
+943 |                 meta = json.load(f)
+944 |             active_version = meta.get("active_version", "draft")
+945 |         except:
+    |         ^^^^^^
+946 |             active_version = "draft"
+    |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1035:17
+     |
+1033 |                 try:
+1034 |                     os.remove(p)
+1035 |                 except:
+     |                 ^^^^^^
+1036 |                     pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1046:21
+     |
+1044 |                     try:
+1045 |                         os.remove(os.path.join(root, file))
+1046 |                     except:
+     |                     ^^^^^^
+1047 |                         pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1076:13
+     |
+1074 |                 with open(test_json, "w", encoding="utf-8") as f:
+1075 |                     json.dump(t_meta, f, indent=4, ensure_ascii=False)
+1076 |             except:
+     |             ^^^^^^
+1077 |                 pass
+     |
+
+F541 [*] f-string without any placeholders
+    --> aegis_cockpit\project_manager.py:1087:23
+     |
+1085 |         next_num = len(versions) + 1
+1086 |         name = f"Gravação Auto v{next_num}"
+1087 |         description = f"Criada automaticamente após finalizar a gravação do fluxo"
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1088 |         return self.create_version(project_slug, test_slug, name, description)
+     |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1098:13
+     |
+1096 |                 with open(executions_json_path, "r", encoding="utf-8") as f:
+1097 |                     return json.load(f)
+1098 |             except:
+     |             ^^^^^^
+1099 |                 pass
+1100 |         return []
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1140:13
+     |
+1138 |                 with open(test_json, "r", encoding="utf-8") as f:
+1139 |                     active_version = json.load(f).get("active_version")
+1140 |             except:
+     |             ^^^^^^
+1141 |                 pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1267:13
+     |
+1265 |                 with open(test_json, "w", encoding="utf-8") as f:
+1266 |                     json.dump(meta, f, indent=4, ensure_ascii=False)
+1267 |             except:
+     |             ^^^^^^
+1268 |                 pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1308:13
+     |
+1306 |                 with open(proj_json, "w", encoding="utf-8") as f:
+1307 |                     json.dump(meta, f, indent=4, ensure_ascii=False)
+1308 |             except:
+     |             ^^^^^^
+1309 |                 pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_cockpit\project_manager.py:1375:13
+     |
+1373 |                 with open(config_path, "r", encoding="utf-8") as f:
+1374 |                     return json.load(f)
+1375 |             except:
+     |             ^^^^^^
+1376 |                 pass
+1377 |         return {}
+     |
+
+E402 Module level import not at top of file
+  --> aegis_code_generator\code_generator.py:19:1
+   |
+17 |     sys.path.insert(0, PROJECT_ROOT)
+18 |
+19 | from aegis_runner.cognitive_fallback import CognitiveGateway
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+20 | from aegis_code_generator.step_validator import (
+21 |     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
+   |
+
+E402 Module level import not at top of file
+  --> aegis_code_generator\code_generator.py:20:1
+   |
+19 |   from aegis_runner.cognitive_fallback import CognitiveGateway
+20 | / from aegis_code_generator.step_validator import (
+21 | |     validate_bot_against_plan, validate_bot_structure, dry_run_bot, reorder_steps_to_match_plan,
+22 | |     validate_dataset_field_names, validate_resilience_patterns, validate_required_wait_patterns,
+23 | |     validate_required_reopen_patterns, validate_required_method_patterns, RUNNER_METHODS
+24 | | )
+   | |_^
+25 |   # Política anti-drift do Ralph Loop + ciclo de vida do manifest (H5 do plano
+26 |   # híbrido, .specs/plano-codegen-hibrido-deterministico.md, Seções 2.4/5.2).
+   |
+
+E402 Module level import not at top of file
+  --> aegis_code_generator\code_generator.py:37:1
+   |
+35 |   # placeholders cognitivos parseáveis. Usado só por `_generate_new_code`
+36 |   # (rota híbrida, atrás de `AEGIS_CODEGEN_HYBRID`).
+37 | / from aegis_code_generator.deterministic_emitter import (
+38 | |     emit_step_block as _emit_deterministic_step_block,
+39 | |     _plan_checksum as _deterministic_plan_checksum,
+40 | |     _STEP_ANCHOR_RENUMBER_RE as _DETERMINISTIC_ANCHOR_RENUMBER_RE,
+41 | |     build_skeleton as _build_hybrid_skeleton,
+42 | |     _indent_block as _indent_lines,
+43 | | )
+   | |_^
+   |
+
+F821 Undefined name `gateway`
+   --> aegis_code_generator\code_generator.py:554:32
+    |
+552 | """
+553 |                 try:
+554 |                     response = gateway._call_llm_api(skill_prompt, force_json=False)
+    |                                ^^^^^^^
+555 |                     # Extrai o código da resposta
+556 |                     sc_code = ""
+    |
+
+F541 [*] f-string without any placeholders
+   --> aegis_code_generator\code_generator.py:878:35
+    |
+876 |                         retry_result = validate_bot_against_plan(reordered_code, self.plan_path, pending_corrections)
+877 |                         if retry_result["status"] == "PASS":
+878 |                             print(f"[AEGIS CODEGEN] 🔧 Ordem dos passos corrigida automaticamente (sem gastar tentativa de LLM).")
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+879 |                             bot_code = reordered_code
+880 |                             plan_result = retry_result
+    |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+   --> aegis_code_generator\code_generator.py:986:23
+    |
+984 |                 print("-" * 60)
+985 |                 print("✅ CÓDIGO DA AUTOMAÇÃO RPA GERADO COM SUCESSO!")
+986 |                 print(f"O robô resiliente está salvo e pronto para a Fase 5 (Execução).")
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+987 |                 print("=" * 60 + "\n")
+988 |                 return True
+    |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_code_generator\code_generator.py:2995:19
+     |
+2993 |         except (SyntaxError, ValueError) as syntax_err:
+2994 |             print("\n" + "=" * 60)
+2995 |             print(f"[ERRO CRÍTICO] O código gerado pela IA é inválido!")
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2996 |             if hasattr(syntax_err, 'lineno') and syntax_err.lineno:
+2997 |                 print(f"Linha {syntax_err.lineno}: {syntax_err.text.strip() if syntax_err.text else ''}")
+     |
+help: Remove extraneous `f` prefix
+
+F401 `.publisher.AzureDevOpsPublisher` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+ --> aegis_devops\__init__.py:1:24
+  |
+1 | from .publisher import AzureDevOpsPublisher
+  |                        ^^^^^^^^^^^^^^^^^^^^
+  |
+help: Use an explicit re-export: `AzureDevOpsPublisher as AzureDevOpsPublisher`
+
+F401 [*] `datetime.datetime` imported but unused
+ --> aegis_devops\publish_pipeline.py:7:22
+  |
+5 | import urllib.parse
+6 | import requests
+7 | from datetime import datetime
+  |                      ^^^^^^^^
+8 |
+9 | # Garante que o diretório raiz esteja no PYTHONPATH para importar os módulos
+  |
+help: Remove unused import: `datetime.datetime`
+
+E402 Module level import not at top of file
+  --> aegis_devops\publish_pipeline.py:14:1
+   |
+12 |     sys.path.insert(0, PROJECT_ROOT)
+13 |
+14 | from aegis_cockpit.project_manager import ProjectManager
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+15 | from aegis_devops.publisher import AzureDevOpsPublisher
+   |
+
+E402 Module level import not at top of file
+  --> aegis_devops\publish_pipeline.py:15:1
+   |
+14 | from aegis_cockpit.project_manager import ProjectManager
+15 | from aegis_devops.publisher import AzureDevOpsPublisher
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16 |
+17 | def main():
+   |
+
+E722 Do not use bare `except`
+   --> aegis_devops\publish_pipeline.py:211:9
+    |
+209 |             with open(proj_json_path, "r", encoding="utf-8") as f:
+210 |                 proj_business_desc = json.load(f).get("business_description", "")
+211 |         except:
+    |         ^^^^^^
+212 |             pass
+    |
+
+F401 [*] `json` imported but unused
+ --> aegis_devops\publisher.py:2:8
+  |
+1 | import os
+2 | import json
+  |        ^^^^
+3 | import base64
+4 | import urllib.parse
+  |
+help: Remove unused import: `json`
+
+F401 [*] `sys` imported but unused
+ --> aegis_runner\bot_producao_template.py:2:8
+  |
+1 | import os
+2 | import sys
+  |        ^^^
+3 | import time
+4 | from aegis_runner.runner import TransactionRunner
+  |
+help: Remove unused import: `sys`
+
+F401 [*] `time` imported but unused
+ --> aegis_runner\bot_producao_template.py:3:8
+  |
+1 | import os
+2 | import sys
+3 | import time
+  |        ^^^^
+4 | from aegis_runner.runner import TransactionRunner
+  |
+help: Remove unused import: `time`
+
+E722 Do not use bare `except`
+  --> aegis_runner\runner.py:76:17
+   |
+74 |                         meta = json.load(f)
+75 |                         self.initial_url = meta.get("url")
+76 |                 except:
+   |                 ^^^^^^
+77 |                     pass
+   |
+
+F841 [*] Local variable `e` is assigned to but never used
+   --> aegis_runner\runner.py:172:33
+    |
+170 |                     self.page.screenshot(path=path)
+171 |                 print(f"[AEGIS RUNNER] Screenshot do passo {self.step_counter} salvo em: {path}")
+172 |             except Exception as e:
+    |                                 ^
+173 |                 try:
+174 |                     # Tenta usar 'page' do escopo local se disponível (métodos de ação)
+    |
+help: Remove assignment to unused variable `e`
+
+E722 Do not use bare `except`
+   --> aegis_runner\runner.py:251:13
+    |
+249 |                 with open(root_steps_path, "w", encoding="utf-8") as sf:
+250 |                     json.dump(self.steps_history, sf, indent=4, ensure_ascii=False)
+251 |             except:
+    |             ^^^^^^
+252 |                 pass
+253 |         except Exception:
+    |
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1373:23
+     |
+1371 |             bbox = anchor_locator.bounding_box()
+1372 |             if not bbox:
+1373 |                 print(f"[AEGIS RUNNER] [_resolve_via_anchor] Âncora resolvida, mas invisível (sem bounding_box).")
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1374 |                 return None
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1447:31
+     |
+1446 |                     if nearest:
+1447 |                         print(f"[AEGIS RUNNER] [_resolve_via_anchor] Elemento próximo achado.")
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1448 |                         if isinstance(nearest, str):
+1449 |                             return page.locator(nearest).first
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1458:31
+     |
+1456 |                             return page.evaluate_handle("([x, y]) => document.elementFromPoint(x, y)", [bbox_x, bbox_y])
+1457 |                     else:
+1458 |                         print(f"[AEGIS RUNNER] [_resolve_via_anchor] Nenhum elemento próximo (80px) interativo.")
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1459 |                         return None
+1460 |                 else:
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1461:27
+     |
+1459 |                         return None
+1460 |                 else:
+1461 |                     print(f"[AEGIS RUNNER] [_resolve_via_anchor] Ponto alvo plausível, retornando Handle")
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1462 |                     return page.evaluate_handle("([x, y]) => document.elementFromPoint(x, y)", [target_x, target_y])
+1463 |             else:
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1482:30
+     |
+1480 | …     """
+1481 | …     if not step_id:
+1482 | …         raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1483 | …     if getattr(self, "realtime_logs", True):
+1484 | …         print(f"[AEGIS_STEP] START | {step_id} | click | {selector} | {target_description} | | | {getattr(self, 'current_row_id', …
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1553:27
+     |
+1551 |                 # Nível 2: Auto-Healing de UI - Tenta limpar overlays ativos na segunda tentativa
+1552 |                 if attempt == 2:
+1553 |                     print(f"[AEGIS RUNNER] [RETRY 2] Limpando possíveis overlays pendentes via Escape...")
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1554 |                     page.keyboard.press("Escape")
+1555 |                     time.sleep(0.3)
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:1739:35
+     |
+1737 |                         # Nível 1: Elemento desprendido (Stale/Detached)
+1738 |                         if "attached" in str(e) or "stale" in str(e).lower() or "detached" in str(e).lower():
+1739 |                             print(f"[AEGIS RUNNER] Elemento desprendido do DOM (Stale/Detached). Aguardando estabilização...")
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1740 |                             time.sleep(0.2)
+1741 |                             try:
+     |
+help: Remove extraneous `f` prefix
+
+F841 Local variable `last_exception` is assigned to but never used
+    --> aegis_runner\runner.py:1824:17
+     |
+1822 |                 raise terminal.original
+1823 |             except Exception as e:
+1824 |                 last_exception = e
+     |                 ^^^^^^^^^^^^^^
+1825 |                 print(f"[AEGIS RUNNER] Tentativa {attempt} de clique falhou para '{selector}': {e}")
+1826 |                 if attempt == 2:
+     |
+help: Remove assignment to unused variable `last_exception`
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2022:27
+     |
+2020 |                 page.locator(selector).first.click(timeout=3000)
+2021 |                 if _effect_confirmed(selector, tier_before):
+2022 |                     print(f"[AEGIS RUNNER] Clique resolvido reativamente após limpeza de overlays!")
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2023 |                     return True, "escape_retry", selector
+2024 |             except Exception:
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2029:23
+     |
+2027 |             # Nível 2.75: Reposiciona CDK overlay no viewport + clique direto via JS
+2028 |             try:
+2029 |                 print(f"[AEGIS RUNNER] Reposicionando CDK overlay no viewport...")
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2030 |                 # Baseline deste tier ANTES do reposicionamento+clique sintético
+2031 |                 # (o gesto do tier começa aqui). Isola o efeito do clique dele.
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2074:31
+     |
+2072 |                     time.sleep(0.3)
+2073 |                     if _effect_confirmed(selector, tier_before):
+2074 |                         print(f"[AEGIS RUNNER] Clique resolvido apos reposicionar overlay!")
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2075 |                         return True, "cdk_reposition", selector
+2076 |             except Exception:
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2128:39
+     |
+2126 | …                     page.locator(selector).first.click(timeout=3000)
+2127 | …                     if _effect_confirmed(selector, tier_before):
+2128 | …                         print(f"[AEGIS RUNNER] Clique resolvido após dismiss de overlay não mapeado!")
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2129 | …                         self._register_healing_for_review(step_id, selector, "click", "unmapped_overlay_dismissed")
+2130 | …                         return True, "unmapped_overlay_dismissed", selector
+     |
+help: Remove extraneous `f` prefix
+
+F841 Local variable `healed_by_ia` is assigned to but never used
+    --> aegis_runner\runner.py:2243:9
+     |
+2241 |         # tem prioridade sempre que há `live_text` disponível; qualquer
+2242 |         # exceção aqui cai para o Nível 4, nunca propaga.
+2243 |         healed_by_ia = False
+     |         ^^^^^^^^^^^^
+2244 |         if live_text:
+2245 |             try:
+     |
+help: Remove assignment to unused variable `healed_by_ia`
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2550:30
+     |
+2548 |         """
+2549 |         if not step_id:
+2550 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2551 |         if not original_coords or len(original_coords) != 2:
+2552 |             raise ValueError(f"original_coords é obrigatório para click_by_coordinates (step_id={step_id}).")
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2582:27
+     |
+2580 |             if "strict mode violation" in str(e) or "resolved to" in str(e):
+2581 |                 try:
+2582 |                     print(f"[AEGIS RUNNER] Múltiplos elementos em fallback. Clicando no primeiro deles...")
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2583 |                     t2_before_snapshot = self._capture_click_effect_snapshot(page, selector)
+2584 |                     page.locator(selector).first.click(timeout=timeout)
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2776:30
+     |
+2774 |         """
+2775 |         if not step_id:
+2776 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2777 |         row_id = getattr(self, "current_row_id", "1")
+2778 |         if getattr(self, "realtime_logs", True):
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2896:31
+     |
+2894 |                         self._register_healing_for_review(step_id, f"anchor:{dropdown_label}", "select_option", "anchor_geometry")
+2895 |                     else:
+2896 |                         print(f"[AEGIS RUNNER] Âncora geométrica clicou mas não abriu painel de opções.")
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2897 |             except Exception as e:
+2898 |                 print(f"[AEGIS RUNNER] Falha no tier de anchor_geometry para o trigger: {e}")
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:2956:19
+     |
+2954 | …# antes de chegar no self-healing. Pula direto pros fallbacks que
+2955 | …# não dependem do painel: geometria ao vivo, coords gravadas, IA.
+2956 | …print(f"[AEGIS RUNNER] Painel de opções não abriu — pulando cascata de seletores de opção, indo direto aos fallbacks finais.")
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2957 | …
+2958 | …llback por geometria DOM ao vivo: busca o elemento de opção pelo
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3003:19
+     |
+3001 | …         print(f"[AEGIS RUNNER] [STRICT] Falha definitiva ao selecionar '{option_text}' em '{dropdown_label}' (self-healing desativ…
+3002 | …     elif not option_clicked and self.cognitive.is_active():
+3003 | …         print(f"[AEGIS RUNNER] Falha nas tentativas normais. Acionando Self-Healing Cognitivo para a opção...")
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3004 | …         option_target_description = f"Opção {option_text} do dropdown {dropdown_label}"
+3005 | …         option_selector_desc = f"[role='option']:has-text('{option_text}')"
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3062:30
+     |
+3060 |         """
+3061 |         if not step_id:
+3062 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3063 |         row_id = getattr(self, "current_row_id", "1")
+3064 |         if getattr(self, "realtime_logs", True):
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3414:30
+     |
+3412 |         """
+3413 |         if not step_id:
+3414 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3415 |         parent_repr = f"{parent.get('selector')}[{parent.get('has_text','')}]"
+3416 |         child_sel_clean = self._get_relative_child_selector(parent.get('selector',''), child.get('selector',''))
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3437:27
+     |
+3435 |             try:
+3436 |                 if attempt == 2:
+3437 |                     print(f"[AEGIS RUNNER] [RETRY 2] Limpando possíveis overlays via Escape...")
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3438 |                     page.keyboard.press("Escape")
+3439 |                     time.sleep(0.3)
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3506:30
+     |
+3504 |         """
+3505 |         if not step_id:
+3506 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3507 |         parent_repr = f"{parent.get('selector')}[{parent.get('has_text','')}]"
+3508 |         child_sel_clean = self._get_relative_child_selector(parent.get('selector',''), child.get('selector',''))
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3597:23
+     |
+3595 | …         print(f"[AEGIS RUNNER] [STRICT] Falha definitiva em '{selector_full}' (self-healing desativado para este passo, pai é iden…
+3596 | …     elif self.cognitive.is_active():
+3597 | …         print(f"[AEGIS RUNNER] Acionando self-healing cognitivo para fill_chained...")
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3598 | …         # fill usa `propose_fill_target` (método análogo de fill, não
+3599 | …         # o de clique) — contrato proposto→verificado: propõe, gate
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3623:56
+     |
+3621 | …tep_id, action="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="HEALE…
+3622 | …
+3623 | …post", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em fill_chained não confirmado pelo valor lido do campo.")
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3624 | …
+3625 | …pre", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento (fill_chained) rejeitada pelo gate de plausibilidade (…
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3625:55
+     |
+3623 | …ost", f"[AEGIS RUNNER] [VERIFY_REJECTED] Preenchimento cognitivo em fill_chained não confirmado pelo valor lido do campo.")
+3624 | …
+3625 | …re", f"[AEGIS RUNNER] [VERIFY_REJECTED] Proposta cognitiva de preenchimento (fill_chained) rejeitada pelo gate de plausibilidade (pré-clique).")
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3626 | …n="fill_chained", selector=f"{parent_repr} >> {child_sel_clean}", target_description=target_description, status="FAILED", error_msg=str(e))
+3627 | …
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3640:30
+     |
+3638 | …     """
+3639 | …     if not step_id:
+3640 | …         raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3641 | …     if getattr(self, "realtime_logs", True):
+3642 | …         print(f"[AEGIS_STEP] START | {step_id} | fill | {selector} | {target_description} | | | {getattr(self, 'current_row_id', '…
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3708:23
+     |
+3706 | …         page.locator(selector).first.fill(text_val, timeout=3000)
+3707 | …         self._log_step(step_id=step_id, action="fill", selector=selector, target_description=target_description, status="SUCCESS")
+3708 | …         print(f"[AEGIS RUNNER] Preenchimento resolvido reativamente após limpeza de overlays!")
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3709 | …         return True
+3710 | …     except Exception:
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:3818:30
+     |
+3816 |         """
+3817 |         if not step_id:
+3818 |             raise ValueError(f"step_id é obrigatório. Consulte plano_execucao.json.")
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3819 |         if target_description is None:
+3820 |             target_description = selector
+     |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:4062:19
+     |
+4060 |         else:
+4061 |             self.execution_plan = None
+4062 |             print(f"[AEGIS RUNNER] Nenhum plano_execucao.json encontrado. Operando em modo legado (append de steps).")
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4063 |
+4064 |         # Mapa step_id -> flaky derivado do plano de execução (default False se ausente)
+     |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4115:25
+     |
+4113 |                         try:
+4114 |                             page.close()
+4115 |                         except:
+     |                         ^^^^^^
+4116 |                             pass
+     |
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4128:25
+     |
+4126 |                             page = context.new_page()
+4127 |                             page.on("dialog", lambda d: d.dismiss())
+4128 |                         except:
+     |                         ^^^^^^
+4129 |                             break
+     |
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4166:29
+     |
+4164 | …                             meta = json.load(f)
+4165 | …                             target_url = meta.get("url")
+4166 | …                     except:
+     |                       ^^^^^^
+4167 | …                         pass
+     |
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:4213:35
+     |
+4211 |                         if expected == "BUSINESS_BLOCKED":
+4212 |                             # Deu sucesso, mas a regra esperava erro de negócio!
+4213 |                             print(f"[🚨 ALERTA] Concluído com sucesso, mas esperava bloqueio de negócio!")
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4214 |                             reports.append({
+4215 |                                 "id": row_id,
+     |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4299:25
+     |
+4297 |                                 is_business_error = True
+4298 |                                 error_text = error_locator.inner_text().strip()
+4299 |                         except:
+     |                         ^^^^^^
+4300 |                             pass
+     |
+
+F541 [*] f-string without any placeholders
+    --> aegis_runner\runner.py:4342:43
+     |
+4340 | …                     if self.cognitive.is_active():
+4341 | …                         try:
+4342 | …                             print(f"[AEGIS RUNNER] Acionando diagnóstico de falha via IA...")
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4343 | …                             diag = self.cognitive.diagnose_failure(page, str(e), steps_history=self.steps_history)
+4344 | …                             if diag and isinstance(diag, dict):
+     |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4358:29
+     |
+4356 | …         page.screenshot(path=screenshot_path)
+4357 | …         print(f"[❌ FALHA] Transação {row_id} quebrou por erro sistêmico. Screenshot salvo em: {screenshot_path}")
+4358 | …     except:
+     |       ^^^^^^
+4359 | …         pass
+     |
+
+invalid-syntax: Cannot use an escape sequence (backslash) in f-strings on Python 3.8 (syntax was added in Python 3.12)
+    --> aegis_runner\runner.py:4365:69
+     |
+4363 | …                     "aegis_scenario": scenario,
+4364 | …                     "status": "SYSTEM_FAILED",
+4365 | …                     "error_message": f"{str(e).replace('\n', ' ')} {diagnose_info}".strip(),
+     |                                                           ^
+4366 | …                     "failed_field": failed_field,
+4367 | …                     "extracted_value": "None",
+     |
+
+invalid-syntax: Cannot use an escape sequence (backslash) in f-strings on Python 3.8 (syntax was added in Python 3.12)
+    --> aegis_runner\runner.py:4376:184
+     |
+4374 | … na execução: {str(e)}"
+4375 | …).lower() or "type" in str(e).lower() else "action")
+4376 | …cription=err_desc, status="FAILED", error_msg=f"{str(e).replace('\n', ' ')} {diagnose_info}".strip())
+     |                                                                   ^
+4377 | …
+4378 | …
+     |
+
+E722 Do not use bare `except`
+    --> aegis_runner\runner.py:4413:17
+     |
+4411 |                 try:
+4412 |                     page.close()
+4413 |                 except:
+     |                 ^^^^^^
+4414 |                     pass
+4415 |             browser.close()
+     |
+
+F541 [*] f-string without any placeholders
+  --> aegis_runner\verify_visual.py:29:15
+   |
+27 |     path_recorder = os.path.join(project_dir, "screenshot_recorder.png")
+28 |     if not os.path.exists(path_recorder):
+29 |         print(f"[❌ FALHA] Screenshot de gravação manual (screenshot_recorder.png) não encontrado na pasta do projeto.")
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+30 |         sys.exit(1)
+   |
+help: Remove extraneous `f` prefix
+
+E722 Do not use bare `except`
+   --> aegis_runner\verify_visual.py:187:13
+    |
+185 |                 with open(index_path, "r", encoding="utf-8") as f:
+186 |                     index_data = json.load(f)
+187 |             except:
+    |             ^^^^^^
+188 |                 pass
+    |
+
+F541 [*] f-string without any placeholders
+   --> aegis_sanitizer\dataset_validator.py:249:15
+    |
+247 | …     print(f"    - Erros Críticos de Fila: {failures_count}")
+248 | …     print(f"    - Avisos de Validação nos Campos: {warnings_count}")
+249 | …     print(f"    - Status Geral: " + ("✅ DATASET PRONTO PARA CARGA (ACEITÁVEL)" if sys_ok else "❌ DATASET CONTÉM INCONSISTÊNCIAS CR …
+    |             ^^^^^^^^^^^^^^^^^^^^^^^
+250 | …     print(f"Relatório detalhado salvo em: {self.report_file}")
+251 | …     print("=" * 60 + "\n")
+    |
+help: Remove extraneous `f` prefix
+
+E713 [*] Test for membership should be `not in`
+  --> aegis_sanitizer\sanitizer.py:34:71
+   |
+32 |         return 100, "data-testid"
+33 |         
+34 |     if "#" in selector and not re.search(r"\d{4,}", selector) and not "mat-input-" in selector and not "mat-select-" in selector:
+   |                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^
+35 |         return 90, "id"
+   |
+help: Convert to `not in`
+
+E713 [*] Test for membership should be `not in`
+  --> aegis_sanitizer\sanitizer.py:34:104
+   |
+32 |         return 100, "data-testid"
+33 |         
+34 |     if "#" in selector and not re.search(r"\d{4,}", selector) and not "mat-input-" in selector and not "mat-select-" in selector:
+   |                                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+35 |         return 90, "id"
+   |
+help: Convert to `not in`
+
+E402 Module level import not at top of file
+  --> aegis_sanitizer\sanitizer.py:49:1
+   |
+48 | # Importa expressões regulares necessárias
+49 | import re
+   | ^^^^^^^^^
+   |
+
+E722 Do not use bare `except`
+   --> aegis_sanitizer\sanitizer.py:197:13
+    |
+195 |                     business_desc = proj_meta.get("business_description", "")
+196 |                     expected_outcome = proj_meta.get("expected_business_outcome", "")
+197 |             except:
+    |             ^^^^^^
+198 |                 pass
+    |
+
+F541 [*] f-string without any placeholders
+   --> aegis_sanitizer\sanitizer.py:320:25
+    |
+319 |         markdown = []
+320 |         markdown.append(f"# 🛡️ Relatório de Telemetria Aegis RPA Suite V2")
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+321 |         markdown.append(f"\n* **URL Alvo:** {initial_url}")
+322 |         emittable_events_count = sum(1 for ev in events if ev.get("sanitizer_class", {}).get("keep", True))
+    |
+help: Remove extraneous `f` prefix
+
+E701 Multiple statements on one line (colon)
+   --> aegis_sanitizer\sanitizer.py:504:58
+    |
+502 | …                     else:
+503 | …                         s_tag = sev.get("tag", "").lower()
+504 | …                         if sev.get("is_date"): s_tag = "input (data)"
+    |                                                ^
+505 | …                         s_sel = sev.get("selector", "")
+506 | …                         # Parent context (chained locator)
+    |
+
+E722 Do not use bare `except`
+  --> test_execution.py:31:13
+   |
+29 |                             print(f"[MONITOR] Reg {row_id}: Passo #{s.get('index')} - {status} - {desc}")
+30 |                         last_count = len(steps)
+31 |             except:
+   |             ^^^^^^
+32 |                 pass
+33 |         time.sleep(interval)
+   |
+
+F541 [*] f-string without any placeholders
+   --> test_execution.py:103:19
+    |
+101 |                 by_row[rid].append(s)
+102 |
+103 |             print(f"🔍 Transações (row_ids):")
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+104 |             for rid in sorted(by_row.keys()):
+105 |                 count = len(by_row[rid])
+    |
+help: Remove extraneous `f` prefix
+
+E402 Module level import not at top of file
+  --> tests\aegis_code_generator\test_dryrun_multirow.py:14:1
+   |
+12 | REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+13 |
+14 | from step_validator import dry_run_bot
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+F401 [*] `aegis_code_generator.step_validator.validate_bot_structure` imported but unused
+  --> tests\aegis_code_generator\test_signature_autofix_and_orphan_scope.py:32:5
+   |
+30 | from aegis_code_generator.code_generator import CodeGeneratorService
+31 | from aegis_code_generator.step_validator import (
+32 |     validate_bot_structure,
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+33 |     _validate_scenario_function_signature,
+34 | )
+   |
+help: Remove unused import: `aegis_code_generator.step_validator.validate_bot_structure`
+
+F401 [*] `pytest` imported but unused
+ --> tests\aegis_code_generator\test_unified_target_emitter.py:1:8
+  |
+1 | import pytest
+  |        ^^^^^^
+2 | from aegis_code_generator.deterministic_emitter import emit_step_block
+  |
+help: Remove unused import: `pytest`
+
+F401 [*] `pytest` imported but unused
+ --> tests\aegis_runner\test_unified_target.py:1:8
+  |
+1 | import pytest
+  |        ^^^^^^
+2 | from unittest.mock import MagicMock, patch
+3 | from runner import TransactionRunner
+  |
+help: Remove unused import: `pytest`
+
+F401 [*] `pytest` imported but unused
+ --> tests\aegis_sanitizer\test_unified_target_sanitizer.py:1:8
+  |
+1 | import pytest
+  |        ^^^^^^
+2 | from aegis_sanitizer.sanitizer import SanitizerService
+  |
+help: Remove unused import: `pytest`
+
+Found 140 errors.
+[*] 58 fixable with the `--fix` option (3 hidden fixes can be enabled with the `--unsafe-fixes` option).

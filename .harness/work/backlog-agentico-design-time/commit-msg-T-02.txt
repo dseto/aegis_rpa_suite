@@ -1,0 +1,21 @@
+feat(runner): E3 - handler deterministico de overlay nao mapeado (T-02)
+
+Nivel 2.85 de _attempt_deterministic_click_recovery, entre cdk_reposition
+(2.75) e fallback_selectors (2.9). Cobre o caso motivador da proposta APA
+("popup nao mapeado apareceu") sem precisar de agente: quando um overlay
+a mais que o baseline do attempt e confirmado, tenta Escape e, se nao
+bastar, um botao de fechar canonico ([aria-label*=close], .close, X) antes
+de reconfirmar o clique original com baseline fresco pos-dismiss.
+
+Discriminador de seguranca: nunca dispara se o expected_effect GRAVADO do
+passo previr abrir overlay (overlay_delta > 0) - nesse caso o overlay E o
+efeito esperado, nao ruido. Nunca roda no caminho identity nem sem
+baseline real (before_snapshot=None, caminho por excecao).
+
+Fecha HEALED com healing_method="unmapped_overlay_dismissed" + needs_review
+via Sensor F1 (registro explicito, mesmo padrao ja usado por anchor_geometry
+neste mesmo metodo).
+
+5 testes novos em tests/aegis_runner/test_unmapped_overlay_handler.py.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

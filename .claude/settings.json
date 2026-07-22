@@ -1,7 +1,69 @@
 {
   "permissions": {
     "allow": [
-      "mcp__codegraph__*"
+      "mcp__codegraph__*",
+      "Edit(aegis_runner/runner.py)",
+      "Write(aegis_runner/runner.py)",
+      "Edit(tests/aegis_runner/test_expected_effect_audit.py)",
+      "Write(tests/aegis_runner/test_expected_effect_audit.py)",
+      "Edit(tests/aegis_runner/test_unmapped_overlay_handler.py)",
+      "Write(tests/aegis_runner/test_unmapped_overlay_handler.py)",
+      "Edit(tests/aegis_runner/test_unified_target.py)",
+      "Write(tests/aegis_runner/test_unified_target.py)",
+      "Edit(aegis_cockpit/healing_review.py)",
+      "Write(aegis_cockpit/healing_review.py)",
+      "Edit(tests/aegis_cockpit/conftest.py)",
+      "Write(tests/aegis_cockpit/conftest.py)",
+      "Edit(tests/aegis_cockpit/test_healing_review.py)",
+      "Write(tests/aegis_cockpit/test_healing_review.py)",
+      "Edit(tests/aegis_cockpit/test_healing_review_cognitive.py)",
+      "Write(tests/aegis_cockpit/test_healing_review_cognitive.py)",
+      "Edit(aegis_cockpit/cockpit.py)",
+      "Write(aegis_cockpit/cockpit.py)",
+      "Edit(tests/aegis_cockpit/test_healing_review_endpoint.py)",
+      "Write(tests/aegis_cockpit/test_healing_review_endpoint.py)",
+      "Edit(C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py)",
+      "Write(C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py)",
+      "Edit(C:/Projetos/TestePortalSegura/tests/cenario_principal/dataset_inicial.json)",
+      "Write(C:/Projetos/TestePortalSegura/tests/cenario_principal/dataset_inicial.json)",
+      "Bash(pytest tests/aegis_runner/test_expected_effect_audit.py -q)",
+      "Bash(pytest tests/aegis_runner/test_unmapped_overlay_handler.py -q)",
+      "Bash(pytest tests/aegis_runner -q)",
+      "Bash(pytest tests/aegis_cockpit/test_healing_review.py -q)",
+      "Bash(pytest tests/aegis_cockpit/test_healing_review_cognitive.py -q)",
+      "Bash(pytest tests/aegis_cockpit/test_healing_review_endpoint.py -q)",
+      "Bash(pytest tests -q)",
+      "Bash(python \"C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py\" && python \"C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py\" && python \"C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py\")",
+      "Bash(ruff check .)",
+      "Bash(git status)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(harness compile*)",
+      "Bash(harness audit*)",
+      "Bash(harness audit-runtime*)",
+      "Bash(harness analyze*)",
+      "Bash(harness preflight*)",
+      "Bash(harness compile-contract*)",
+      "Bash(harness compile-session*)",
+      "Bash(harness verify*)",
+      "Bash(harness team*)",
+      "Bash(harness review*)",
+      "Bash(harness supervise*)",
+      "Bash(harness audit-team*)",
+      "Bash(python -m harness.cli compile*)",
+      "Bash(python -m harness.cli audit*)",
+      "Bash(python -m harness.cli audit-runtime*)",
+      "Bash(python -m harness.cli analyze*)",
+      "Bash(python -m harness.cli preflight*)",
+      "Bash(python -m harness.cli compile-contract*)",
+      "Bash(python -m harness.cli compile-session*)",
+      "Bash(python -m harness.cli verify*)",
+      "Bash(python -m harness.cli team*)",
+      "Bash(python -m harness.cli review*)",
+      "Bash(python -m harness.cli supervise*)",
+      "Bash(python -m harness.cli audit-team*)"
     ]
   },
   "hooks": {
@@ -11,6 +73,38 @@
           {
             "type": "command",
             "command": "codegraph prompt-hook"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:\\Projetos\\aegis_rpa_suite\\.harness\\hooks\\boundary_guard.py\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:\\Projetos\\aegis_rpa_suite\\.harness\\hooks\\session_start.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:\\Projetos\\aegis_rpa_suite\\.harness\\hooks\\stop_hook.py\""
           }
         ]
       }

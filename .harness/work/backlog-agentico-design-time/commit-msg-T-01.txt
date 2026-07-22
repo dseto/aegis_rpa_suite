@@ -1,0 +1,22 @@
+feat(runner): E1.1 - marca auditoria generic_only_expected_missing (T-01)
+
+Fecha o residual do B1 (.specs/backlog-achados-falso-sucesso.pending.md):
+quando um passo tem expected_effect gravado (Unified Target Descriptor) e a
+aprovacao real veio so dos sinais genericos - o efeito especifico gravado
+nao bateu -, estampa verify_result="generic_only_expected_missing" em
+historico_passos.json e registra needs_review via Sensor F1.
+
+Aditivo por construcao: _expected_effect_specific_status roda sempre DEPOIS
+da decisao SUCCESS/HEALED ja fechada, nunca influencia o retorno. Cobre:
+- Identity path (_finalize_click_success, via _detect_click_no_effect)
+- Os 4 tiers de _attempt_deterministic_click_recovery (escape_retry,
+  cdk_reposition, fallback_selector, anchor_geometry), via _effect_confirmed
+- Ambiguous candidate (A3, dentro de click_resilient e do fallback '.first'
+  de _handle_click_failure)
+
+Retrocompat: sem expected_effect gravado (caso do bot Portal Segura atual,
+0/66 passos), comportamento byte-identico ao anterior.
+
+11 testes novos em tests/aegis_runner/test_expected_effect_audit.py.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

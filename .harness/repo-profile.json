@@ -1,0 +1,42 @@
+{
+  "languages": [
+    {
+      "value": "python",
+      "evidence": "pyproject.toml",
+      "confidence": 1.0
+    }
+  ],
+  "package_manager": null,
+  "test_command": {
+    "value": "pytest",
+    "evidence": "pyproject.toml",
+    "confidence": 1.0
+  },
+  "test_glob": {
+    "value": "tests/**/*.py",
+    "evidence": "tests/aegis_code_generator/conftest.py",
+    "confidence": 1.0
+  },
+  "extras": {
+    "lint_command": {
+      "value": "ruff check .",
+      "evidence": "pyproject.toml",
+      "confidence": 1.0
+    },
+    "docs": {
+      "value": [
+        "README.md",
+        "CLAUDE.md"
+      ],
+      "evidence": "README.md",
+      "confidence": 1.0
+    }
+  },
+  "unknowns": [
+    "package_manager: nenhum lockfile detectado"
+  ],
+  "analyzed_at": "2026-07-22T02:20:38.355784+00:00",
+  "manifest_snapshot": {
+    "pyproject.toml": "b1e1f94ab329e636cf3cc972f6a3e68e9721cc69140f1e9753c28f638969b21d"
+  }
+}

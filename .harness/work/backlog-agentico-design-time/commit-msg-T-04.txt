@@ -1,0 +1,26 @@
+feat(cockpit): E2 nucleo - aegis_cockpit/healing_review.py (T-04)
+
+Modulo novo, testavel fora do handler HTTP do cockpit.py (gap conhecido:
+cockpit.py nao tem suite de testes, ja causou regressao real quando
+editado sem re-check live).
+
+Fecha o loop Sensor F1 -> correcao cirurgica: scan_needs_review varre
+correcoes_acumuladas.json agrupando por (action, failed_selector);
+resolve_step_id aplica a Regra 5 dos Working Agreements (CLAUDE.md) --
+entrada sem step_id resolvido (ou com marcador sintetico "auto_N") e
+estruturalmente invisivel ao scoped-edit do code_generator, entao fica
+pendente ao inves de disparar correcao as cegas.
+
+build_deterministic_proposal cobre os healing_method estruturais
+(anchor_geometry, fallback_selector, parent_has_text_reduced) SEM
+chamada de LLM -- promove o seletor/ancora ja gravado no plano na
+captura. enrich_needs_review orquestra tudo e devolve propostas prontas
+para aprovacao humana, sem alterar correcoes_acumuladas.json.
+approve_proposal e o unico ponto que converte proposta aprovada em
+correcao "pending", no formato que o fluxo surgical existente
+(_surgical_correct) ja consome.
+
+12 testes novos em tests/aegis_cockpit/test_healing_review.py + conftest
+novo (sys.path da pasta aegis_cockpit, mesmo padrao de tests/aegis_runner).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

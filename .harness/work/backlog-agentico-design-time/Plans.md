@@ -1,0 +1,39 @@
+# Plans — backlog-agentico-design-time
+
+## [T-01] E1.1: marca de auditoria `generic_only_expected_missing` no runner (tiers de healing + identity), aditiva, sem mudança de control-flow, com registro Sensor F1
+- files: `aegis_runner/runner.py`, `tests/aegis_runner/test_expected_effect_audit.py`
+- verify: `pytest tests/aegis_runner/test_expected_effect_audit.py -q`
+
+## [T-02] E3: handler determinístico de overlay não mapeado na cadeia de recovery (dismiss Escape/botão canônico, discriminador expected_effect, disciplina _tier_baseline, HEALED + Sensor F1)
+- files: `aegis_runner/runner.py`, `tests/aegis_runner/test_unmapped_overlay_handler.py`
+- verify: `pytest tests/aegis_runner/test_unmapped_overlay_handler.py -q`
+- depends: T-01
+
+## [T-03] Regressão do runner: suíte completa de aegis_runner verde após T-01+T-02 (inclui test_runner_integration, test_unified_target, test_unified_target_wiring)
+- files: `aegis_runner/runner.py`, `tests/aegis_runner/test_unified_target.py`
+- verify: `pytest tests/aegis_runner -q`
+- depends: T-02
+
+## [T-04] E2 núcleo: módulo testável `aegis_cockpit/healing_review.py` — varredura de needs_review, agrupamento por (action, failed_selector), resolução obrigatória de step_id, proposta determinística de promoção de seletor (anchor_geometry/fallback_selectors/parent_has_text_reduced, zero LLM)
+- files: `aegis_cockpit/healing_review.py`, `tests/aegis_cockpit/conftest.py`, `tests/aegis_cockpit/test_healing_review.py`
+- verify: `pytest tests/aegis_cockpit/test_healing_review.py -q`
+
+## [T-05] E2 rota cognitiva: casos sem resolução estrutural → contexto (screenshot, healing_method, seletor falho/resolvido) → diagnose_failure do CognitiveGateway (mockado nos testes) → proposta estruturada de correção
+- files: `aegis_cockpit/healing_review.py`, `tests/aegis_cockpit/test_healing_review_cognitive.py`
+- verify: `pytest tests/aegis_cockpit/test_healing_review_cognitive.py -q`
+- depends: T-04
+
+## [T-06] E2 fiação: endpoint no cockpit.py expondo o fluxo (listar propostas, entregar diff, aprovar → correção pending no formato do fluxo surgical existente), lógica mantida em healing_review.py, handler HTTP fino
+- files: `aegis_cockpit/cockpit.py`, `aegis_cockpit/healing_review.py`, `tests/aegis_cockpit/test_healing_review_endpoint.py`
+- verify: `pytest tests/aegis_cockpit/test_healing_review_endpoint.py -q`
+- depends: T-05
+
+## [T-07] Fechamento: suíte completa do repo verde (`pytest tests -q`) — regressão zero sobre runner/cockpit/sanitizer/codegen/UTD. A "trava em ~47%" investigada durante a implementação foi DESCARTADA como causa de código: é lentidão real (~350s a suíte de aegis_runner, ~3s/teste em caminhos de polling não-mockados) que, sob `-q` (saída bufferizada em pipe) + carga alta da máquina, cruzava timeouts e era morta via TaskStop — kill que no Windows órfã os netos e cria contenção na execução seguinte (bola de neve). pytest roda serial (sem xdist), então o deadlock de `msvcrt.locking`/dir fixo só ocorria ENTRE um órfão e a execução nova, nunca dentro de uma execução limpa. Prova: `test_runner_integration.py -v` = 118 passed / 344s, exit 0, sem trava (o teste temido passou em 48%); `pytest tests/aegis_runner -q` = 153/153 em ~351s, três vezes (T-03).
+- files: `aegis_runner/runner.py`, `aegis_cockpit/healing_review.py`
+- verify: `pytest tests -q`
+- depends: T-03, T-06
+
+## [T-08] Execução real (3x) do bot de referência Portal Segura (007-Portal Segura / 001-Cenário Principal, compilado, sem regeneração) contra site localhost:5173 — smoke live de que o runner alterado (T-01/T-02) não crasha em execução real headed. Exit 0 confirma só que as 3 execuções completaram sem exceção; comparação de métricas contra `.specs/plans/portal-segura.baseline-001.md` (taxa de sucesso, novo tipo de falha, needs_review, tempo) e veredito APROVADO/REPROVADO exigem leitura humana pós-execução via skill `aegis-regression-gate` — não é decidido por este verify_cmd.
+- files: `C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py`, `C:/Projetos/TestePortalSegura/tests/cenario_principal/dataset_inicial.json`
+- verify: `python "C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py" && python "C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py" && python "C:/Projetos/TestePortalSegura/tests/cenario_principal/code/bot_producao.py"`
+- depends: T-07

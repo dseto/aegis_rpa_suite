@@ -1,0 +1,23 @@
+fix(runner): lint cosmetico + fechamento suite completa verde (T-07)
+
+Remove prefixo f de print sem placeholder (unmapped_overlay_dismissed).
+
+Fechamento do contrato backlog-agentico-design-time: suite completa do
+repo verde via `pytest tests -q` = 360 passed / 6 subtests / 369s, exit 0.
+Regressao zero sobre runner/cockpit/sanitizer/codegen/UTD apos T-01..T-06.
+
+A "trava em ~47%" investigada durante a implementacao foi DESCARTADA como
+causa de codigo. Causa raiz: lentidao real (~350s a suite de aegis_runner,
+~3s/teste em caminhos de polling nao-mockados) que, sob `-q` (saida
+bufferizada em pipe) + carga alta da maquina, cruzava timeouts e era morta
+via TaskStop — kill que no Windows orfa os netos e cria contencao na
+execucao seguinte (bola de neve). pytest roda serial (sem xdist), entao o
+deadlock de msvcrt.locking/dir fixo so ocorria ENTRE um orfao e a execucao
+nova, nunca dentro de uma execucao limpa. Prova: test_runner_integration.py
+-v = 118 passed / 344s, exit 0 (o teste temido passou em 48%);
+tests/aegis_runner -q = 153/153 em ~351s, tres vezes.
+
+Paliativo removido: verify_cmd de T-07 restaurado ao closer honesto
+`pytest tests -q` (nao mais reduzido aos 2 arquivos novos).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
